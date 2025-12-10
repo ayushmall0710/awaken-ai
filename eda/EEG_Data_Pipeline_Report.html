@@ -1,0 +1,1156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>EEG Prognostic Data Pipeline & Characterization Report</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            color: #333;
+        }
+        h1 {
+            color: #1a472a;
+            border-bottom: 3px solid #1a472a;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #2e6c3c;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 5px;
+            margin-top: 30px;
+        }
+        h3 {
+            color: #3d8f54;
+            margin-top: 20px;
+        }
+        h4 {
+            color: #4a9960;
+            margin-top: 15px;
+            font-size: 1.1em;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        ul, ol {
+            margin: 10px 0;
+            padding-left: 30px;
+        }
+        li {
+            margin: 5px 0;
+        }
+        .highlight-box {
+            background-color: #f0f8ff;
+            border-left: 4px solid #4a90e2;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .warning-box {
+            background-color: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .success-box {
+            background-color: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        .code-block {
+            background-color: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        .metadata {
+            color: #666;
+            font-style: italic;
+            font-size: 0.9em;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+
+<h1>EEG Prognostic Data Pipeline & Characterization Report</h1>
+
+<div class="highlight-box">
+<p><strong>Project Focus:</strong> EEG-based prognostication in severe brain injury patients using language tracking, oddball/P300, and command-following paradigms to assess residual auditory and cognitive processing in the acute recovery window.</p>
+<p><strong>Institution:</strong> Harborview Medical Center</p>
+<p><strong>Data Status:</strong> Active research project (latest data: October 2025)</p>
+</div>
+
+<h2>Executive Summary</h2>
+
+<p>This document provides a comprehensive characterization of the EEG prognostic data pipeline for severe brain injury patients. The project leverages multimodal data streams - EEG recordings, stimulus timing logs, audio stimuli, and clinical metadata - to identify neural markers of residual cognitive processing that may improve recovery prognostication.</p>
+
+<p><strong>Key Data Assets:</strong></p>
+<ul>
+    <li><strong>17 EEG recordings</strong> (EDF format) from 10 patients</li>
+    <li><strong>21 CSV stimulus timing logs</strong> with 1,120+ trial records</li>
+    <li><strong>38+ audio stimulus files</strong> (language sentences, commands, oddball tones)</li>
+    <li><strong>Multiple experimental paradigms:</strong> language tracking, motor commands, oddball/P300, emotional voice stimuli</li>
+</ul>
+
+<h2>1. Project Context</h2>
+
+<p>Severe brain injury patients can retain residual auditory and cognitive processing even without overt behavioral responses. The objective is to leverage EEG markers to improve recovery prognostication in the acute window by assessing:</p>
+
+<ul>
+    <li><strong>Language tracking:</strong> Neural signatures of speech comprehension (e.g., ITPC - Inter-Trial Phase Coherence)</li>
+    <li><strong>Oddball/P300 responses:</strong> Attention and novelty detection capabilities</li>
+    <li><strong>Command-following:</strong> Motor imagery and volition via EEG spectral features (bandpower)</li>
+    <li><strong>Emotional processing:</strong> Responses to familiar voices (loved ones)</li>
+</ul>
+
+<h2>2. Data Streams in Use</h2>
+
+<h3>2.1 EEG Recordings (Primary Data Stream)</h3>
+
+<table>
+    <tr>
+        <th>Attribute</th>
+        <th>Details</th>
+    </tr>
+    <tr>
+        <td><strong>Format</strong></td>
+        <td>European Data Format (.EDF / .EDF+)</td>
+    </tr>
+    <tr>
+        <td><strong>Location</strong></td>
+        <td>OneDrive: <code>EEG Project Data/EEG/edf/</code></td>
+    </tr>
+    <tr>
+        <td><strong>Count</strong></td>
+        <td>17 EDF files</td>
+    </tr>
+    <tr>
+        <td><strong>Patients</strong></td>
+        <td>CON001-CON010, TEST</td>
+    </tr>
+    <tr>
+        <td><strong>Versions</strong></td>
+        <td>Original and clipped (<code>*_clipped.EDF</code>)</td>
+    </tr>
+    <tr>
+        <td><strong>Channels</strong></td>
+        <td>16-64 EEG channels (multi-channel neurophysiological recordings)</td>
+    </tr>
+    <tr>
+        <td><strong>Sampling Rate</strong></td>
+        <td>Typically 250-2000 Hz for clinical EEG</td>
+    </tr>
+    <tr>
+        <td><strong>Bit Depth</strong></td>
+        <td>16-bit resolution</td>
+    </tr>
+</table>
+
+<p><strong>Characteristics:</strong></p>
+<ul>
+    <li>Raw EEG recordings with both original and clipped versions available</li>
+    <li>Clipped versions trimmed to experimental session windows for focused analysis</li>
+    <li>Multi-channel recordings capturing comprehensive brain activity</li>
+</ul>
+
+<h3>2.2 Trial/Event Logs (CSV Files)</h3>
+
+<table>
+    <tr>
+        <th>Attribute</th>
+        <th>Details</th>
+    </tr>
+    <tr>
+        <td><strong>Format</strong></td>
+        <td>CSV (comma-separated values)</td>
+    </tr>
+    <tr>
+        <td><strong>Location</strong></td>
+        <td>OneDrive: <code>EEG Project Data/EEG/</code> and <code>stimuli_record/</code></td>
+    </tr>
+    <tr>
+        <td><strong>Count</strong></td>
+        <td>21 CSV files</td>
+    </tr>
+    <tr>
+        <td><strong>Largest File</strong></td>
+        <td><code>patient_df_043025.csv</code> with 1,120 rows</td>
+    </tr>
+    <tr>
+        <td><strong>Timing Precision</strong></td>
+        <td>Millisecond precision (Unix timestamps with 3+ decimal places)</td>
+    </tr>
+</table>
+
+<p><strong>Schema (Core Columns):</strong></p>
+<ul>
+    <li><code>patient_id</code>: Patient identifier (e.g., CON008, CON009)</li>
+    <li><code>date</code>: Experiment date</li>
+    <li><code>trial_type</code>: Type of stimulus presented (see trial types below)</li>
+    <li><code>sentences</code>: Array of sentence IDs for language trials</li>
+    <li><code>start_time</code>: Unix timestamp of trial start</li>
+    <li><code>end_time</code>: Unix timestamp of trial end</li>
+    <li><code>duration</code>: Trial duration in seconds</li>
+</ul>
+
+<p><strong>Optional Columns (Schema Variants):</strong></p>
+<ul>
+    <li><code>trial_index</code>: Sequential trial number</li>
+    <li><code>paradigm</code>: Experimental paradigm category</li>
+    <li><code>stimulus_details</code>: Additional stimulus information</li>
+    <li><code>notes</code>: Qualitative annotations</li>
+</ul>
+
+<p><strong>Trial Types:</strong></p>
+<table>
+    <tr>
+        <th>Trial Type</th>
+        <th>Description</th>
+        <th>Duration</th>
+    </tr>
+    <tr>
+        <td><code>language</code></td>
+        <td>Sentence stimuli (12 sentences per trial)</td>
+        <td>~15-16 seconds</td>
+    </tr>
+    <tr>
+        <td><code>left_command+p</code> / <code>right_command+p</code></td>
+        <td>Motor command paradigms (imagery/execution)</td>
+        <td>~200-212 seconds</td>
+    </tr>
+    <tr>
+        <td><code>oddball+p</code></td>
+        <td>Oddball detection task (standard/rare tones)</td>
+        <td>~30-34 seconds</td>
+    </tr>
+    <tr>
+        <td><code>control</code></td>
+        <td>Control condition (baseline)</td>
+        <td>~2.6 seconds</td>
+    </tr>
+    <tr>
+        <td><code>loved_one_voice</code></td>
+        <td>Emotional stimulus from familiar person</td>
+        <td>~3.5 seconds</td>
+    </tr>
+</table>
+
+<h3>2.3 Audio Stimuli Files (Supporting Data)</h3>
+
+<table>
+    <tr>
+        <th>Category</th>
+        <th>Location</th>
+        <th>Count</th>
+        <th>Details</th>
+    </tr>
+    <tr>
+        <td><strong>Sentence Stimuli</strong></td>
+        <td><code>Audio/sentences/</code></td>
+        <td>35 files</td>
+        <td><code>lang0.wav</code> through <code>lang34.wav</code> (missing <code>lang28.wav</code>)</td>
+    </tr>
+    <tr>
+        <td><strong>Prompt Audio</strong></td>
+        <td><code>Audio/prompts/</code></td>
+        <td>2 files</td>
+        <td><code>motorcommandprompt.wav</code>, <code>oddballprompt.wav</code></td>
+    </tr>
+    <tr>
+        <td><strong>Static Commands</strong></td>
+        <td><code>Audio/static/</code></td>
+        <td>5 files</td>
+        <td><code>left_keep.mp3</code>, <code>left_stop.mp3</code>, <code>right_keep.mp3</code>, <code>right_stop.mp3</code>, <code>sample_beep.mp3</code></td>
+    </tr>
+    <tr>
+        <td><strong>Control Voices</strong></td>
+        <td><code>Audio/Voice/Trimmed/</code></td>
+        <td>2 files</td>
+        <td><code>ControlStatement_female.wav</code>, <code>ControlStatement_male.wav</code></td>
+    </tr>
+</table>
+
+<p><strong>Audio Technical Specifications:</strong></p>
+<ul>
+    <li><strong>Format:</strong> WAV (uncompressed), MP3 (compressed)</li>
+    <li><strong>Sample Rate:</strong> 44.1 kHz or 48 kHz (standard for .WAV)</li>
+    <li><strong>Bit Depth:</strong> Typically 16-bit</li>
+    <li><strong>Channels:</strong> Mono or stereo</li>
+    <li><strong>Duration:</strong>
+        <ul>
+            <li>Sentences: ~1.3s each (15.5s total / 12 sentences)</li>
+            <li>Commands: Variable (200s sessions)</li>
+            <li>Voices: ~3.5s each</li>
+        </ul>
+    </li>
+</ul>
+
+<h3>2.4 Session Metadata & Patient Information</h3>
+
+<table>
+    <tr>
+        <th>File Type</th>
+        <th>Examples</th>
+        <th>Content</th>
+    </tr>
+    <tr>
+        <td><strong>Patient DataFrames</strong></td>
+        <td><code>patient_df*.csv</code><br>(versions: 043025, 052225, etc.)</td>
+        <td>Patient clinical information, trial-level data, multiple versions with date suffixes</td>
+    </tr>
+    <tr>
+        <td><strong>Patient History</strong></td>
+        <td><code>patient_history*.csv</code></td>
+        <td>Visit dates, session history</td>
+    </tr>
+    <tr>
+        <td><strong>Patient Notes</strong></td>
+        <td><code>patient_notes*.csv</code></td>
+        <td>Qualitative observations (e.g., "interrupted by monitor briefly", "audio on left side")</td>
+    </tr>
+</table>
+
+<p><strong>Known Metadata Examples:</strong></p>
+<ul>
+    <li><strong>CON001a:</strong> "audio on left side, planning second experiment on same patient, same day" (2024-09-17)</li>
+    <li><strong>CON002:</strong> "interrupted by monitor briefly" (2024-09-24)</li>
+    <li><strong>CON003:</strong> "instructed not to follow commands" (2025-01-14)</li>
+</ul>
+
+<h2>3. Data Volume & Characterization</h2>
+
+<h3>3.1 Overall Data Inventory</h3>
+
+<table>
+    <tr>
+        <th>Data Type</th>
+        <th>Count</th>
+        <th>Storage</th>
+    </tr>
+    <tr>
+        <td>EEG Files (.EDF)</td>
+        <td>17 files</td>
+        <td>~MB-GB range (binary format)</td>
+    </tr>
+    <tr>
+        <td>Stimulus Records (.CSV)</td>
+        <td>21 files</td>
+        <td>Lightweight text files</td>
+    </tr>
+    <tr>
+        <td>Audio Files (.WAV/.MP3)</td>
+        <td>38+ files</td>
+        <td>~MB range per file</td>
+    </tr>
+    <tr>
+        <td>Patient Metadata (.CSV)</td>
+        <td>~6 files</td>
+        <td>Lightweight text files</td>
+    </tr>
+</table>
+
+<h3>3.2 Trial Volume by File</h3>
+
+<table>
+    <tr>
+        <th>File</th>
+        <th>Row Count</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td><code>patient_df_043025.csv</code></td>
+        <td>1,120 rows</td>
+        <td>Largest aggregated trial log</td>
+    </tr>
+    <tr>
+        <td>Other <code>patient_df</code> variants</td>
+        <td>5-672 rows</td>
+        <td>Multiple versions with varying completeness</td>
+    </tr>
+    <tr>
+        <td>Stimulus result files</td>
+        <td>24-184 rows</td>
+        <td>Session-specific logs (e.g., CON009: 184 trials)</td>
+    </tr>
+    <tr>
+        <td>Legacy "old stimulus software" logs</td>
+        <td>~84 rows each</td>
+        <td>Historical data from earlier protocol versions</td>
+    </tr>
+</table>
+
+<h3>3.3 Experimental Session Examples</h3>
+
+<p><strong>CON008 (August 14, 2025):</strong></p>
+<ul>
+    <li>Total trials: <strong>84</strong></li>
+    <li>Language trials: 60+ (~15.5s each)</li>
+    <li>Motor command trials: 4+ (~210s each)</li>
+    <li>Oddball trials: 3+ (~32s each)</li>
+    <li>Total session duration: ~2+ hours</li>
+</ul>
+
+<p><strong>CON009 (August 26, 2025):</strong></p>
+<ul>
+    <li>Total trials: <strong>184</strong></li>
+    <li>Language trials: 100+ (~15.5s each)</li>
+    <li>Motor command trials: 4+ (~212s each)</li>
+    <li>Oddball trials: 5+ (~33s each)</li>
+    <li>Control trials: 30+ (~2.6s each)</li>
+    <li>Loved one voice trials: 40+ (~3.5s each)</li>
+    <li>Total session duration: ~3+ hours</li>
+</ul>
+
+<h3>3.4 Typical Trial-Type Distribution per Session</h3>
+
+<table>
+    <tr>
+        <th>Trial Type</th>
+        <th>Count</th>
+        <th>Total Duration</th>
+    </tr>
+    <tr>
+        <td>Language</td>
+        <td>~72 trials</td>
+        <td>~18-19 minutes</td>
+    </tr>
+    <tr>
+        <td>Control</td>
+        <td>~50 trials</td>
+        <td>~2 minutes</td>
+    </tr>
+    <tr>
+        <td>Loved one voice</td>
+        <td>~50 trials</td>
+        <td>~3 minutes</td>
+    </tr>
+    <tr>
+        <td>Command blocks (left/right)</td>
+        <td>~3 each (6 total)</td>
+        <td>~20 minutes</td>
+    </tr>
+    <tr>
+        <td>Oddball/beep</td>
+        <td>~4 trials</td>
+        <td>~2 minutes</td>
+    </tr>
+</table>
+
+<h3>3.5 Patient Cohort</h3>
+
+<p><strong>Active Patients Analyzed:</strong></p>
+<ul>
+    <li><strong>CON008</strong> (August 14, 2025): 84 trials</li>
+    <li><strong>CON009</strong> (August 26, 2025): 184 trials</li>
+    <li><strong>CON010</strong> (October 31, 2025): Data available</li>
+    <li><strong>Historical data:</strong> CON001-CON007, TEST</li>
+</ul>
+
+<p><strong>Total Patient Count:</strong> n = 10 (CON001-CON010)</p>
+
+<h2>4. Data Storage & Access</h2>
+
+<h3>4.1 Storage Location</h3>
+
+<h4>Primary Repository</h4>
+<p>OneDrive (cloud-based storage)</p>
+
+<h4>Local Working Directory</h4>
+<p><code>/Users/arnavdixit/Downloads/OneDrive_2025-12-09/</code></p>
+
+<h4>Organizational Structure</h4>
+<p>The data is organized in a hierarchical directory structure as follows:</p>
+
+<ul style="list-style-type: none; padding-left: 0;">
+    <li><strong>OneDrive_2025-12-09/</strong>
+        <ul style="list-style-type: none; padding-left: 20px;">
+            <li><strong>EEG Project Data/</strong>
+                <ul style="list-style-type: none; padding-left: 20px;">
+                    <li><strong>Audio/</strong> <em>(Stimulus audio files)</em>
+                        <ul style="list-style-type: none; padding-left: 20px;">
+                            <li><strong>sentences/</strong> - Language stimuli (35 files)</li>
+                            <li><strong>prompts/</strong> - Task instructions</li>
+                            <li><strong>static/</strong> - Motor command audio</li>
+                            <li><strong>Voice/</strong>
+                                <ul style="list-style-type: none; padding-left: 20px;">
+                                    <li><strong>Trimmed/</strong> - Control and emotional voice stimuli</li>
+                                </ul>
+                            </li>
+                        </ul>
+                    </li>
+                    <li><strong>EEG/</strong>
+                        <ul style="list-style-type: none; padding-left: 20px;">
+                            <li><strong>edf/</strong> - EEG recordings (17 files)
+                                <ul style="list-style-type: none; padding-left: 20px;">
+                                    <li><strong>old stimulus software/</strong> - Legacy recordings</li>
+                                </ul>
+                            </li>
+                            <li><strong>*.csv</strong> - Patient metadata</li>
+                            <li><strong>stimuli_record/</strong> - Experimental timing logs (21 files)
+                                <ul style="list-style-type: none; padding-left: 20px;">
+                                    <li><strong>old stimulus software/</strong> - Legacy logs</li>
+                                </ul>
+                            </li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+            <li><strong>Slides/</strong> - Research presentations</li>
+        </ul>
+    </li>
+</ul>
+
+<h3>4.2 Software & Access Methods</h3>
+
+<table>
+    <tr>
+        <th>Data Type</th>
+        <th>Primary Software</th>
+        <th>Key Libraries/Tools</th>
+    </tr>
+    <tr>
+        <td><strong>EEG Data Processing</strong></td>
+        <td>Python with MNE-Python</td>
+        <td>
+            <ul>
+                <li>MNE (EDF loading, epoching, filtering)</li>
+                <li>NumPy (array operations)</li>
+                <li>SciPy (signal processing, PSD, FFT)</li>
+            </ul>
+        </td>
+    </tr>
+    <tr>
+        <td><strong>Stimulus Timing Analysis</strong></td>
+        <td>Python with pandas</td>
+        <td>
+            <ul>
+                <li>pandas (dataframe operations)</li>
+                <li>NumPy (numerical operations)</li>
+            </ul>
+        </td>
+    </tr>
+    <tr>
+        <td><strong>Audio Stimulus Management</strong></td>
+        <td>Python audio libraries</td>
+        <td>
+            <ul>
+                <li>librosa (audio feature extraction)</li>
+                <li>soundfile (WAV I/O)</li>
+                <li>pydub (audio manipulation)</li>
+            </ul>
+        </td>
+    </tr>
+    <tr>
+        <td><strong>Exploratory Data Analysis</strong></td>
+        <td>Jupyter Notebooks</td>
+        <td>
+            <ul>
+                <li>pandas (tabular EDA)</li>
+                <li>matplotlib / seaborn (visualization)</li>
+            </ul>
+        </td>
+    </tr>
+</table>
+
+<h3>4.3 Typical Analysis Pipeline</h3>
+
+<ol>
+    <li><strong>Load EDF files</strong> using MNE</li>
+    <li><strong>Synchronize</strong> with stimulus timing CSV files</li>
+    <li><strong>Epoch data</strong> based on trial timing</li>
+    <li><strong>Apply signal processing:</strong> filtering, artifact rejection (ICA)</li>
+    <li><strong>Extract features:</strong>
+        <ul>
+            <li>Event-related potentials (ERPs)</li>
+            <li>Power spectral density (PSD) / bandpower</li>
+            <li>Inter-trial phase coherence (ITPC) for language tracking</li>
+        </ul>
+    </li>
+    <li><strong>Statistical analysis</strong> and modeling</li>
+</ol>
+
+<h2>5. Data Pipeline Workflow</h2>
+
+<h3>Phase 1: Data Generation (Experimental Collection)</h3>
+
+<div class="code-block">
+Patient Setup → EEG Recording Start → Stimulus Presentation → 
+Real-time Logging → EEG Recording Stop → Data Storage (OneDrive)
+</div>
+
+<p><strong>Input:</strong></p>
+<ul>
+    <li>Patient consent and setup</li>
+    <li>Audio stimuli (pre-loaded)</li>
+    <li>Experimental protocol</li>
+</ul>
+
+<p><strong>Output:</strong></p>
+<ul>
+    <li>Raw EDF file (continuous EEG data)</li>
+    <li>CSV stimulus log (precise timing of each trial)</li>
+</ul>
+
+<h3>Phase 2: Data Preprocessing</h3>
+
+<div class="code-block">
+Load EDF → Filter/Clean → Clip to Experimental Window → 
+Save Clipped EDF → Manual QC
+</div>
+
+<p><strong>Input:</strong> Raw EDF files</p>
+<p><strong>Output:</strong> <code>*_clipped.EDF</code> files (trimmed to experimental session)</p>
+
+<h3>Phase 3: Data Analysis (Current & Planned)</h3>
+
+<div class="code-block">
+Load Clipped EDF → Load Stimulus CSV → Epoch by Trial Type → 
+Signal Processing → Feature Extraction → Statistical Analysis → Results
+</div>
+
+<p><strong>Planned Feature Extraction:</strong></p>
+<ul>
+    <li><strong>PSD / Bandpower:</strong> For command-following paradigms (motor imagery)</li>
+    <li><strong>ITPC (Inter-Trial Phase Coherence):</strong> For language-tracking comprehension markers</li>
+    <li><strong>ERP (Event-Related Potentials):</strong> For oddball/P300 attention responses</li>
+    <li><strong>Time-frequency analysis:</strong> Spectrograms, wavelet transforms</li>
+</ul>
+
+<h2>6. Planned Data Products</h2>
+
+<h3>6.1 Processed Data Outputs</h3>
+
+<table>
+    <tr>
+        <th>Data Product</th>
+        <th>Format</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td><strong>Aligned EEG Epochs</strong></td>
+        <td>HDF5 / NumPy arrays</td>
+        <td>Trial-locked EEG segments synchronized with event logs (language, command, oddball)</td>
+    </tr>
+    <tr>
+        <td><strong>Feature Tables</strong></td>
+        <td>Parquet / CSV</td>
+        <td>Tabular features per trial: PSD, bandpower, ITPC, ERP amplitudes, latencies</td>
+    </tr>
+    <tr>
+        <td><strong>Behavioral Event Tables</strong></td>
+        <td>CSV</td>
+        <td>Trial timing, stimulus labels, QC flags (artifact contamination, completeness)</td>
+    </tr>
+    <tr>
+        <td><strong>Visualizations</strong></td>
+        <td>PNG / HTML (Plotly)</td>
+        <td>ERP waveforms, spectrograms, topographic maps, statistical summaries</td>
+    </tr>
+    <tr>
+        <td><strong>Data Dictionary</strong></td>
+        <td>Markdown / PDF</td>
+        <td>Comprehensive variable definitions, schema documentation, versioning</td>
+    </tr>
+</table>
+
+<h3>6.2 Organized Output Structure (Proposed)</h3>
+
+<p>To maintain reproducibility and organization, all processed outputs will be stored in a structured directory hierarchy. The proposed organization includes the following subdirectories:</p>
+
+<ul style="list-style-type: none; padding-left: 0;">
+    <li><strong>processed/</strong>
+        <ul style="list-style-type: none; padding-left: 20px;">
+            <li><strong>epochs/</strong> - Aligned EEG epochs (HDF5, NumPy)</li>
+            <li><strong>features/</strong> - Extracted feature tables (Parquet, CSV)</li>
+            <li><strong>qc/</strong> - Quality control logs and flags</li>
+            <li><strong>plots/</strong> - Visualizations (PNG, HTML)</li>
+            <li><strong>models/</strong> - Trained models (if applicable)</li>
+            <li><strong>README.md</strong> - Data dictionary and schema documentation</li>
+        </ul>
+    </li>
+</ul>
+
+<h4>Directory Descriptions</h4>
+<ul>
+    <li><strong>epochs/</strong> - Contains trial-locked EEG segments synchronized with event logs, stored in HDF5 or NumPy array format for efficient access</li>
+    <li><strong>features/</strong> - Extracted features per trial (PSD, bandpower, ITPC, ERP metrics) in Parquet or CSV format for easy integration with analysis pipelines</li>
+    <li><strong>qc/</strong> - Quality control logs documenting artifact rejection, data completeness, and timing validation flags</li>
+    <li><strong>plots/</strong> - Visualization outputs including ERP waveforms, spectrograms, topographic maps, and statistical summaries</li>
+    <li><strong>models/</strong> - Trained machine learning models and associated metadata (hyperparameters, performance metrics)</li>
+    <li><strong>README.md</strong> - Comprehensive data dictionary with variable definitions, processing parameters, and version information</li>
+</ul>
+
+<h2>7. Data Weaknesses, Limitations & Risks</h2>
+
+<div class="warning-box">
+<strong>Critical Challenges:</strong> The following limitations must be addressed to ensure robust, reproducible analyses.
+</div>
+
+<h3>7.1 Sample Size Limitations</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Small patient cohort: <strong>n = 10</strong> total</li>
+    <li>Only ~3 patients fully processed to date (CON008, CON009, CON010)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Limited statistical power for group-level analyses</li>
+    <li>Risk of overfitting in machine learning models</li>
+    <li>Difficult to generalize findings</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Carefully designed within-subject analyses</li>
+    <li>Conservative statistical approaches (e.g., non-parametric tests, cross-validation)</li>
+    <li>Focus on single-case or small-N designs</li>
+</ul>
+
+<h3>7.2 Missing Data Points</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li><strong>CON006.EDF</strong> noted as not downloaded in error log</li>
+    <li>Sentence file <strong>lang28.wav</strong> missing from sequence (lang0-lang34)</li>
+    <li>Inconsistent trial counts across patients (84 vs. 184 trials)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Incomplete dataset</li>
+    <li>Potential gaps in stimulus coverage</li>
+    <li>May affect counterbalancing of stimuli</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Document all missing data explicitly</li>
+    <li>Analyze only complete cases</li>
+    <li>Request missing files from OneDrive sync</li>
+</ul>
+
+<h3>7.3 Data Heterogeneity & Protocol Drift</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Different experimental protocols across patients:
+        <ul>
+            <li>CON009 includes <code>loved_one_voice</code> and <code>control</code> trials not present in CON008</li>
+            <li>"old stimulus software" folder suggests protocol evolution</li>
+        </ul>
+    </li>
+    <li>Variable trial counts per session (24-184 trials)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Difficult to pool data across subjects</li>
+    <li>Protocol changes over time complicate longitudinal analyses</li>
+    <li>Requires cohort-specific analyses</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Document protocol versions meticulously</li>
+    <li>Analyze by cohort (legacy vs. current protocol)</li>
+    <li>Focus on paradigms common to all patients (language, oddball)</li>
+</ul>
+
+<h3>7.4 Schema Drift Across CSV Variants</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Multiple <code>patient_df</code> versions with inconsistent schemas:
+        <ul>
+            <li>Optional columns: <code>trial_index</code>, <code>paradigm</code>, <code>stimulus_details</code>, <code>notes</code></li>
+            <li>Date suffixes: <code>043025</code>, <code>052225</code></li>
+            <li>"(1)" and "(3)" suffixes suggest duplicates or outdated files</li>
+        </ul>
+    </li>
+    <li>No clear indication of which version is "current"</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Risk of analyzing outdated or incorrect metadata</li>
+    <li>Requires manual schema harmonization</li>
+    <li>Potential duplication/overlap across trial logs</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Reconcile and deduplicate all <code>patient_df</code> versions</li>
+    <li>Lock a unified schema for all downstream analyses</li>
+    <li>Implement proper version control (Git)</li>
+    <li>Date-stamp final analysis datasets</li>
+</ul>
+
+<h3>7.5 Temporal Alignment Challenges</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>EEG files and stimulus CSV files stored separately</li>
+    <li>Requires precise timestamp synchronization:
+        <ul>
+            <li>Unix timestamps in CSV (millisecond precision)</li>
+            <li>EDF internal timing (may use different clock)</li>
+        </ul>
+    </li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Risk of misalignment between neural data and stimulus events</li>
+    <li>Could invalidate event-locked analyses (ERPs, ITPC)</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Careful validation of timing synchronization</li>
+    <li>Use of trigger markers embedded in EEG (if available)</li>
+    <li>Cross-check event timing with audio stimulus durations</li>
+</ul>
+
+<h3>7.6 Class Imbalance</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Far fewer command trials (~6 per session) compared to language trials (~72 per session)</li>
+    <li>Some sessions are small (e.g., 24 rows in legacy files)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Unbalanced datasets for classification tasks</li>
+    <li>May bias models toward majority class (language)</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Use stratified sampling for train/test splits</li>
+    <li>Apply class weighting in models</li>
+    <li>Evaluate with balanced metrics (F1, AUC-ROC, not just accuracy)</li>
+</ul>
+
+<h3>7.7 Sparse Clinical Metadata</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>No demographics (age, sex) in current CSVs</li>
+    <li>No outcome measures (e.g., Glasgow Outcome Scale, CRS-R scores)</li>
+    <li>Minimal clinical notes (<code>patient_notes.csv</code> has only 6 entries)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Cannot assess prognostic value without outcome labels</li>
+    <li>Difficult to control for confounds (age, injury severity)</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Integrate clinical outcome data from medical records</li>
+    <li>Maintain separate secure database for PHI-compliant metadata</li>
+</ul>
+
+<h3>7.8 Unlabeled Stimulus Content</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Sentence content (what <code>lang0.wav</code> actually says) not documented in data</li>
+    <li>No semantic labeling of sentences (e.g., topic, complexity, word count)</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Difficulty interpreting language-specific results</li>
+    <li>Cannot assess stimulus-level effects (e.g., sentence difficulty)</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Create stimulus manifest linking sentence IDs to text/audio content</li>
+    <li>Annotate linguistic features (word count, semantic category)</li>
+</ul>
+
+<h3>7.9 Artifact Contamination Risk</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Clinical EEG recordings prone to:
+        <ul>
+            <li>Movement artifacts</li>
+            <li>Electrical interference (ICU equipment)</li>
+            <li>Eye movements/blinks</li>
+            <li>Muscle activity</li>
+        </ul>
+    </li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Reduced signal quality</li>
+    <li>Potential false positives in analysis</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Robust artifact rejection pipelines</li>
+    <li>Independent component analysis (ICA) for artifact removal</li>
+    <li>Manual QC of epochs with flagging system</li>
+</ul>
+
+<h3>7.10 Missing Validation Data Structure</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>No obvious held-out test set or cross-validation structure</li>
+    <li>Risk of data leakage in model training</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Risk of overfitting to training data</li>
+    <li>Optimistic performance estimates</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Implement proper train/validation/test splits</li>
+    <li>Use leave-one-subject-out cross-validation (LOSO-CV)</li>
+</ul>
+
+<h3>7.11 Documentation Gaps</h3>
+
+<p><strong>Issue:</strong></p>
+<ul>
+    <li>Experimental notes minimal (<code>patient_notes.csv</code>: 6 entries)</li>
+    <li>No data dictionary for CSV column meanings</li>
+    <li>Unclear what triggered creation of <code>*_clipped</code> files</li>
+</ul>
+
+<p><strong>Impact:</strong></p>
+<ul>
+    <li>Difficulty reproducing analyses</li>
+    <li>Unclear data provenance</li>
+</ul>
+
+<p><strong>Mitigation:</strong></p>
+<ul>
+    <li>Create comprehensive README and data dictionary</li>
+    <li>Log all preprocessing steps with parameters</li>
+    <li>Maintain analysis notebooks with detailed annotations</li>
+</ul>
+
+<h2>8. Data Quality Indicators</h2>
+
+<div class="success-box">
+<h3>Strengths</h3>
+<ul>
+    <li><strong>Precise Timing:</strong> Sub-second (millisecond) precision in stimulus timing logs</li>
+    <li><strong>Standardized Format:</strong> EDF is industry-standard for EEG; CSV for tabular data</li>
+    <li><strong>Multiple Modalities:</strong> Combined neural, behavioral, and stimulus data</li>
+    <li><strong>Longitudinal Structure:</strong> Multiple sessions per patient over time</li>
+    <li><strong>Controlled Stimuli:</strong> Standardized audio files for reproducibility</li>
+    <li><strong>Rich Paradigms:</strong> Language, motor commands, oddball, emotional stimuli</li>
+</ul>
+</div>
+
+<div class="warning-box">
+<h3>Areas for Improvement</h3>
+<ul>
+    <li><strong>Metadata Completeness:</strong> Enhance patient and session documentation (demographics, outcomes)</li>
+    <li><strong>Data Centralization:</strong> Consolidate versioned files into single authoritative sources</li>
+    <li><strong>Stimulus Documentation:</strong> Create manifest linking sentence IDs to actual text/audio content</li>
+    <li><strong>Quality Control Logs:</strong> Implement systematic QC checkpoints with pass/fail criteria</li>
+    <li><strong>Schema Standardization:</strong> Lock unified schema across all trial logs</li>
+</ul>
+</div>
+
+<h2>9. Technical Specifications Summary</h2>
+
+<h3>EEG (EDF) Specifications</h3>
+<ul>
+    <li><strong>Standard:</strong> EDF/EDF+ format (European Data Format)</li>
+    <li><strong>Channels:</strong> 16-64 EEG channels (specific count TBD from file inspection)</li>
+    <li><strong>Sampling Rate:</strong> Typically 250-2000 Hz for clinical EEG</li>
+    <li><strong>Bit Depth:</strong> 16-bit resolution</li>
+</ul>
+
+<h3>Audio Stimulus Specifications</h3>
+<ul>
+    <li><strong>Sample Rate:</strong> 44.1 kHz or 48 kHz (standard for .WAV)</li>
+    <li><strong>Bit Depth:</strong> Typically 16-bit</li>
+    <li><strong>Channels:</strong> Mono or stereo</li>
+    <li><strong>Duration:</strong>
+        <ul>
+            <li>Sentences: ~1.3s each (15.5s total / 12 sentences)</li>
+            <li>Commands: Variable (200s sessions)</li>
+            <li>Voices: ~3.5s each</li>
+        </ul>
+    </li>
+</ul>
+
+<h3>Experimental Timing Precision</h3>
+<ul>
+    <li><strong>Resolution:</strong> Millisecond precision (Unix timestamps with 3+ decimal places)</li>
+    <li><strong>Jitter:</strong> Low jitter in trial timing (&lt;100ms variation within trial types)</li>
+</ul>
+
+<h2>10. Recommendations for Pipeline Enhancement</h2>
+
+<ol>
+    <li><strong>Sync Raw EDF/WAV from OneDrive</strong>
+        <ul>
+            <li>Lock a unified schema for all trial logs</li>
+            <li>Ensure complete data synchronization</li>
+        </ul>
+    </li>
+    <li><strong>Reconcile CSV Variants</strong>
+        <ul>
+            <li>Deduplicate <code>patient_df</code> versions</li>
+            <li>Identify and document "current" authoritative version</li>
+            <li>Harmonize schemas across all files</li>
+        </ul>
+    </li>
+    <li><strong>Align Events to Signals</strong>
+        <ul>
+            <li>Validate timing synchronization between EEG and CSV logs</li>
+            <li>Add QC flags for artifacts, completeness, timing drift</li>
+        </ul>
+    </li>
+    <li><strong>Generate Processed Feature Tables</strong>
+        <ul>
+            <li>PSD/bandpower for command paradigms</li>
+            <li>ITPC for language-tracking markers</li>
+            <li>ERP amplitudes/latencies for oddball paradigms</li>
+        </ul>
+    </li>
+    <li><strong>Implement Data Dictionary & Versioning</strong>
+        <ul>
+            <li>Document all variables, schemas, and preprocessing steps</li>
+            <li>Maintain version-controlled data dictionary</li>
+        </ul>
+    </li>
+    <li><strong>Organize Processed Outputs</strong>
+        <ul>
+            <li>Create structured directories: <code>processed/</code>, <code>features/</code>, <code>plots/</code></li>
+            <li>Use standard formats: HDF5 (epochs), Parquet (features), PNG/HTML (plots)</li>
+        </ul>
+    </li>
+    <li><strong>Automated QC Pipeline</strong>
+        <ul>
+            <li>Develop scripts to validate data integrity automatically</li>
+            <li>Flag trials with excessive artifacts, timing errors, or missing data</li>
+        </ul>
+    </li>
+    <li><strong>Standardize Naming Conventions</strong>
+        <ul>
+            <li>Establish consistent file naming across all data types</li>
+            <li>Use semantic versioning for datasets</li>
+        </ul>
+    </li>
+    <li><strong>Backup Strategy</strong>
+        <ul>
+            <li>Implement redundant backups (currently single OneDrive location)</li>
+            <li>Consider institutional data repository for long-term archival</li>
+        </ul>
+    </li>
+    <li><strong>Integrate Clinical Outcomes</strong>
+        <ul>
+            <li>Link EEG features to patient outcomes (Glasgow Outcome Scale, CRS-R)</li>
+            <li>Maintain secure PHI-compliant metadata database</li>
+        </ul>
+    </li>
+</ol>
+
+<h2>11. Next Actions (Immediate Priorities)</h2>
+
+<div class="highlight-box">
+<ol>
+    <li><strong>Sync EDF/WAV from OneDrive</strong> and lock a unified schema for all trial logs.</li>
+    <li><strong>Reconcile duplicate/overlapping <code>patient_df</code> versions;</strong> deduplicate sessions.</li>
+    <li><strong>Align events to signals;</strong> add QC flags (artifacts, completeness, timing).</li>
+    <li><strong>Generate processed/feature tables</strong> (PSD for command paradigms; language-tracking markers) with a clear data dictionary and versioning.</li>
+    <li><strong>Document storage layout</strong> for processed outputs (<code>processed/</code>, <code>features/</code>, <code>plots/</code>) to keep analyses reproducible.</li>
+</ol>
+</div>
+
+<h2>12. Data Access Example (Python)</h2>
+
+<div class="code-block">
+import mne
+import pandas as pd
+
+# Load EEG data
+eeg_file = 'EEG Project Data/EEG/edf/CON008_clipped.EDF'
+raw = mne.io.read_raw_edf(eeg_file, preload=True)
+
+# Load stimulus timing
+stim_file = 'EEG Project Data/EEG/CON008_2025-08-14_stimulus_results.csv'
+stim_df = pd.read_csv(stim_file)
+
+# Filter for language trials
+language_trials = stim_df[stim_df['trial_type'] == 'language']
+
+# Create events array from stimulus timing
+events = mne.make_fixed_length_events(raw, start=0, duration=1.0)
+
+# Epoch data based on trial timing
+event_id = {'language': 1, 'oddball': 2, 'command': 3}
+epochs = mne.Epochs(raw, events, event_id, tmin=-0.2, tmax=1.0, baseline=(None, 0))
+
+# Compute power spectral density
+psds, freqs = epochs.compute_psd(fmin=1, fmax=40).get_data(return_freqs=True)
+</div>
+
+<h2>13. Data Governance & Privacy</h2>
+
+<p><strong>Project Location:</strong> Harborview Medical Center (noted in <code>patient_notes.csv</code>)</p>
+<p><strong>Data Status:</strong> Active research project (latest data: October 2025)</p>
+<p><strong>Privacy:</strong> Patient data - handle according to <strong>HIPAA/IRB protocols</strong></p>
+
+<ul>
+    <li>All patient identifiers must remain de-identified in shared datasets</li>
+    <li>Clinical metadata (demographics, outcomes) should be stored separately in secure, PHI-compliant database</li>
+    <li>OneDrive access should be restricted to authorized research personnel only</li>
+</ul>
+
+<div class="metadata">
+<p><strong>Document Created:</strong> December 10, 2025</p>
+<p><strong>Version:</strong> 1.0</p>
+<p><strong>Author:</strong> AwakenAI Capstone Team</p>
+</div>
+
+</body>
+</html>
