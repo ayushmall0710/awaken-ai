@@ -2,7 +2,7 @@
 
 **Project Duration:** January 10, 2026 – March 15, 2026 (9 Weeks)  
 **Methodology:** Agile / GitHub Projects (2-week Sprints)  
-**Team Size:** 4 Members (Member A, B, C, D)
+**Team Size:** 5 Members (Member A, B, C, D, + Alex Diamond)
 
 ---
 
@@ -24,12 +24,13 @@
 
 | ID | Task Name | Assignee | Due Date | Dep | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **INF-01** | **Repo Init & Environment** | Member A | Jan 12 | - | Git setup, `requirements.txt` (MNE, Pandas), `.gitignore` for data, pre-commit hooks. |
+| **INF-01** | **Repo Init & Environment** | Member A | Jan 12 | - | Git setup, send GitHub usernames to Peter for write access. Setup Teams channel (invite Peter & Alex Diamond). Assess AWS compute needs. |
 | **DAT-01** | **Inventory & Sync Script** | Member A | Jan 15 | INF-01 | Script to verify local OneDrive files against master list. Log missing files (e.g., `lang28.wav`). |
 | **DAT-02** | **Stimulus Manifest** | Member B | Jan 17 | - | Create `stimulus_manifest.csv` mapping audio filenames to transcript/duration. |
 | **DAT-03** | **CSV Schema Unification** | Member B | Jan 20 | DAT-02 | **CRITICAL.** Script to merge `patient_df*.csv` variants. Standardize column names (`trial_type`, `start_time`). |
 | **ENG-01** | **Base Data Loader** | Member C | Jan 22 | DAT-03 | Python class `EEGDataLoader` that reads specific EDFs and links them to the harmonized CSV. |
-| **ENG-02** | **Timestamp Alignment** | Member C | Jan 24 | ENG-01 | Logic to sync CSV Unix timestamps with EDF internal clocks. Fix clock drift issues. |
+| **ENG-02** | **Timestamp Alignment** | Member C | Jan 24 | ENG-01 | Logic to sync CSV Unix timestamps with EDF internal clocks using the **DC audio input channel** for precise alignment. |
+| **ENG-02b** | **ERP/Oddball Pipeline** | Member C | Jan 30 | ENG-02 | Construct pipeline to identify "deviant" beeps, extract 500-700ms epochs, and average segments to reveal P300 ERP. |
 | **DAT-04** | **Clinical Metadata Ingest** | Member D | Jan 24 | - | Digitize `patient_notes.csv` and `history` into a structured JSON/Pandas format. |
 
 ---
@@ -43,7 +44,7 @@
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **ENG-03** | **Artifact Rejection (ICA)** | Member D | Feb 01 | ENG-02 | Implement MNE ICA to remove eye blinks/muscle noise. Automated rejection thresholds. |
 | **ENG-04** | **Command Epoching** | Member A | Feb 04 | ENG-02 | Slicing logic for Motor Command blocks (200s duration). Bandpass filtering (8-30Hz). |
-| **ENG-05** | **Language/P300 Epoching** | Member B | Feb 04 | ENG-02 | Slicing logic for rapid stimuli (-200ms to 1000ms). Baseline correction. |
+| **ENG-05** | **Language Optimization** | Member B | Feb 04 | ENG-02 | Isolate language trial segments. Analyze neural activity at sentence frequency. optimize for ~20 electrode setup (focus on left-hemisphere). |
 | **ENG-06** | **QC Report Generation** | Member D | Feb 08 | ENG-03 | Script generating HTML table: Dropped epochs count, SNR metrics per file. |
 | **VIS-01** | **Validation Plotting** | Member C | Feb 10 | ENG-05 | Generate ERP waveforms (Grand Average) for P300 validation. |
 | **MST-01** | **Milestone Review** | **ALL** | **Feb 13** | **ALL** | **Code freeze.** Run full pipeline on CON008/CON009. Verify outputs match Success Criteria. |
@@ -94,5 +95,6 @@
 
 *   **Member A (Team Lead):** Architecture, Integration, Risk Management.
 *   **Member B (Data Engineer):** Wrangling CSVs, Spectral Analysis.
-*   **Member C (Signal Processing):** Time-domain analysis (ERPs), Synchronization logic.
-*   **Member D (QC & Vis):** Artifact Rejection, QC Reports, Final Visualizations.
+*   **Member C (Signal Processing):** ERP Pipeline (P300), Synchronization logic (DC channel alignment).
+*   **Member D (QC & Vis):** Artifact Rejection, QC Reports, Language Optimization.
+*   **Alex Diamond (Clinical Lead):** Clinical relevance, validation of results against clinical expectations.
