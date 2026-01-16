@@ -1,7 +1,10 @@
 pandas>=2.2
 numpy>=1.26
+scipy>=1.11
 matplotlib>=3.8
 seaborn>=0.13
 jupyterlab>=4.2
 ipykernel>=6.29
+mne>=1.6
+tqdm>=4.66
 
