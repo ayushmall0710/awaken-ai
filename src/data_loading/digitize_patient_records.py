@@ -128,12 +128,13 @@ def main():
     script_dir = Path(__file__).parent
     project_root = script_dir.parent.parent
     data_dir = project_root / "data" / "EEG"
-    output_dir = data_dir
+    output_dir = project_root / "data" / "processed"
 
     notes_df = load_patient_notes(data_dir)
     history_df = load_patient_history(data_dir)
     patient_records = create_patient_records_structure(notes_df, history_df)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     json_output = output_dir / "patient_records.json"
     with open(json_output, "w") as f:
         json.dump(patient_records, f, indent=2)
