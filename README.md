@@ -1,5 +1,17 @@
 # awaken-ai
 
+## Installation
+
+1. **Install Python dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Install ffmpeg:**
+   - **macOS:** `brew install ffmpeg`
+   - **Windows:** Download from [ffmpeg.org](https://ffmpeg.org/download.html)
+
 ## Data Sync
 
 Sync EEG data files from OneDrive to local directory.
