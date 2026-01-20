@@ -116,15 +116,17 @@ class TimestampAligner:
         
         # Auto-detect threshold using robust statistics
         if threshold is None:
-            median = np.median(data)
-            mad = np.median(np.abs(data - median))
+            # Calculate threshold on absolute values to match peak detection
+            abs_data = np.abs(data)
+            median = np.median(abs_data)
+            mad = np.median(np.abs(abs_data - median))
             threshold = median + 3 * mad
         
         # Convert min_distance to samples
         min_samples = int(min_distance * self.sampling_freq)
         
         # Find peaks using absolute value to catch both positive and negative peaks
-        peak_indices, properties = find_peaks(
+        peak_indices, _ = find_peaks(
             np.abs(data),
             height=threshold,
             distance=min_samples

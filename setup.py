@@ -39,7 +39,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'awaken-align=examples.timestamp_alignment_demo:main',
+            # Entry point for timestamp alignment demo (optional)
+            # 'awaken-align=examples.timestamp_alignment_demo:main',
         ],
     },
     classifiers=[
