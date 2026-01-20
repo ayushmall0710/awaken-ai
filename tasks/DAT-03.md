@@ -39,6 +39,9 @@ python3 eda/run_analysis.py
 | `trial_type` | str | Normalized type (e.g., `language`, `oddball`) |
 | `sentences` | List[Dict] | `[{'event': '...', 'onset_time': ...}]` |
 | `start_time` | float | Unix timestamp |
+| `end_time` | float | Unix timestamp |
+| `duration` | float | Trial duration in seconds |
+| `source_file` | str | Original CSV filename for provenance tracking |
 
 ### Normalization Logic
 - **Trial Types:** collapsed from ~80 variants to ~7 standard types.
