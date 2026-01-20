@@ -46,14 +46,9 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
             # Add provenance tracking - source file name
             df['source_file'] = f.name
 
-            # Ensure minimal columns exist
+            # Ensure minimal columns exist and select only standard columns
             required_cols = ['patient_id', 'date', 'trial_type', 'sentences', 'start_time', 'end_time', 'duration', 'source_file']
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = None
-
-            # Select only standard columns
-            dfs.append(df[required_cols])
+            dfs.append(df.reindex(columns=required_cols))
             print(f"Processed {f.name}: {len(df)} rows")
             
         except Exception as e:
