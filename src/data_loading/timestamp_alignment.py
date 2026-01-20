@@ -88,6 +88,10 @@ class TimestampAligner:
         """
         Detect stimulus onset times from DC audio channel using peak detection.
         
+        This method uses absolute value of the signal to detect both positive
+        and negative peaks, which is useful for detecting audio events that may
+        appear as either polarity in the DC channel.
+        
         Parameters
         ----------
         data : np.ndarray
@@ -119,9 +123,9 @@ class TimestampAligner:
         # Convert min_distance to samples
         min_samples = int(min_distance * self.sampling_freq)
         
-        # Find peaks
+        # Find peaks using absolute value to catch both positive and negative peaks
         peak_indices, properties = find_peaks(
-            np.abs(data),  # Use absolute value to catch both positive and negative peaks
+            np.abs(data),
             height=threshold,
             distance=min_samples
         )
@@ -261,6 +265,11 @@ class TimestampAligner:
         """
         Complete synchronization workflow for a single trial.
         
+        Note: This method detects peaks from the DC channel but does not align
+        with individual stimulus timestamps from CSV, as the older data format
+        only provides trial-level timing. For event-level alignment, use the
+        align_with_csv() method when individual stimulus timestamps are available.
+        
         Parameters
         ----------
         trial_start_unix : float
@@ -290,14 +299,11 @@ class TimestampAligner:
             dc_data, dc_times, threshold=threshold, min_distance=min_distance
         )
         
-        # For now, we don't have individual stimulus timestamps from CSV
-        # This would be used when detailed event timing is available
-        # For validation, we can check if we detected reasonable number of peaks
-        
         # Convert to Unix time
         peak_times_unix = self.edf_time_to_unix(peak_times)
         
         # Create simple result DataFrame
+        # Note: Individual CSV stimulus timestamps not available in older data format
         result = pd.DataFrame({
             'peak_idx': np.arange(len(peak_times)),
             'edf_time': peak_times,

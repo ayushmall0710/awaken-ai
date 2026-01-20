@@ -6,7 +6,14 @@ These tests verify the core functionality without requiring actual EDF/CSV files
 
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+# Try package import first, fall back to path manipulation if not installed
+try:
+    from data_loading import EEGDataLoader, TimestampAligner
+except ImportError:
+    # Development mode: add src to path
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+    from data_loading import EEGDataLoader, TimestampAligner
 
 import numpy as np
 import pandas as pd

@@ -60,7 +60,11 @@ class EEGDataLoader:
             )
         
         # Extract patient ID from filename (e.g., CON008_clipped.EDF -> CON008)
-        self.patient_id = self.edf_path.stem.split('_')[0]
+        try:
+            self.patient_id = self.edf_path.stem.split('_')[0]
+        except (IndexError, AttributeError):
+            # Fallback to full stem if pattern doesn't match
+            self.patient_id = self.edf_path.stem
     
     def _load_csv(self) -> None:
         """Load stimulus CSV log file."""

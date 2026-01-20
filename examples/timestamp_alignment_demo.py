@@ -16,10 +16,14 @@ import argparse
 from pathlib import Path
 import sys
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+# Try package import first, fall back to path manipulation if not installed
+try:
+    from data_loading import EEGDataLoader, TimestampAligner
+except ImportError:
+    # Development mode: add src to path
+    sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+    from data_loading import EEGDataLoader, TimestampAligner
 
-from data_loading import EEGDataLoader, TimestampAligner
 import pandas as pd
 import numpy as np
 
