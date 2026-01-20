@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from pathlib import Path
 from .normalization import normalize_trial_type, normalize_sentences
 
@@ -21,28 +22,14 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
                 
             df = pd.read_csv(f)
             
-            # Pre-process lang_XX to extract sentence info if sentences is empty
+            # Pre-process lang_XX to extract sentence info if sentences is empty (vectorized)
             if 'trial_type' in df.columns and 'sentences' in df.columns:
-                def extract_lang_info(row):
-                    tt = str(row['trial_type']).lower().strip()
-                    sentences = row['sentences']
-                    
-                    # Logic: If trial_type is lang_XX and sentences is empty/NaN,
-                    # use XX as the event.
-                    if tt.startswith('lang_') and tt[5:].isdigit():
-                        # check if sentences is empty (NaN, empty string, or empty list)
-                        is_empty = pd.isna(sentences) or sentences == "" or sentences == "[]"
-                        if is_empty:
-                            # Return logic that normalize_sentences will understand, or direct list[dict]
-                            # normalize_sentences handles strings/ints well. 
-                            return str(tt[5:]) # Return "11"
-                    
-                    return sentences
+                tt_lower = df['trial_type'].astype(str).str.lower().str.strip()
+                is_lang_pattern = tt_lower.str.match(r'^lang_\d+$')
+                is_empty_sentences = df['sentences'].isna() | (df['sentences'] == "") | (df['sentences'] == "[]")
+                mask = is_lang_pattern & is_empty_sentences
 
-                # Apply this ONLY to rows where we need it is hard in apply, so applied to all
-                # But need access to both columns.
-                # using apply(axis=1) is slower but safe.
-                df['sentences'] = df.apply(extract_lang_info, axis=1)
+                df.loc[mask, 'sentences'] = tt_lower[mask].str.extract(r'^lang_(\d+)$')[0]
 
             # Normalize trial_type
             if 'trial_type' in df.columns:
@@ -54,7 +41,7 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
             if 'sentences' in df.columns:
                 df['sentences'] = df['sentences'].apply(normalize_sentences)
             else:
-                df['sentences'] = [[] for _ in range(len(df))]
+                df['sentences'] = np.empty((len(df), 0)).tolist()
 
             # Add provenance tracking - source file name
             df['source_file'] = f.name

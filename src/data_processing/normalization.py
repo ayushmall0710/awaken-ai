@@ -8,9 +8,9 @@ TRIAL_TYPE_MAP = {
     'rcmd': 'right_command',
     'lang': 'language',
     'odd': 'oddball',
-    # 'beep': 'control', # User requested to keep separate
+    # 'beep': 'control',
     'loved_one': 'loved_one_voice',
-    'language_11': 'language', # Example of granular cleaning
+    'language_11': 'language',
 }
 
 def normalize_trial_type(tt):
