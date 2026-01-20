@@ -23,7 +23,7 @@ def main():
     
     # We will use the hardcoded path for now to be safe, as moving data is out of scope 
     # unless confirmed.
-    DATA_DIR = Path("/Users/ayush/Desktop/Capstone Project/Data/extracted/EEG")
+    DATA_DIR = Path("data/EEG")
     OUTPUT_FILE = DATA_DIR / "unified_stimulus_results.parquet"
     
     unify_stimulus_data(DATA_DIR, OUTPUT_FILE)
