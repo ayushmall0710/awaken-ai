@@ -144,10 +144,37 @@ def test_timestamp_validation(loader):
         return False
 
 
-def test_missing_file_handling():
-    """Test 6: Handle missing file scenarios gracefully"""
+def test_auto_discovery():
+    """Test 6: Auto-discover files using from_patient_id"""
     print("\n" + "="*70)
-    print("TEST 6: Missing File Error Handling")
+    print("TEST 6: Auto-Discovery from Patient ID")
+    print("="*70)
+    
+    try:
+        loader = EEGDataLoader.from_patient_id(
+            "CON008",
+            data_root=project_root / "data",
+            use_clipped=True
+        )
+        print(f"✓ Auto-discovery successful: {loader}")
+        
+        # Try loading to verify paths are correct
+        loader.load()
+        print(f"✓ Data loaded via auto-discovery")
+        print(f"  - {loader.edf_path.name}")
+        print(f"  - {loader.stimulus_csv_path.name}")
+        return True
+    except Exception as e:
+        print(f"✗ Auto-discovery failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_missing_file_handling():
+    """Test 7: Handle missing file scenarios gracefully"""
+    print("\n" + "="*70)
+    print("TEST 7: Missing File Error Handling")
     print("="*70)
     
     try:
@@ -183,6 +210,7 @@ def main():
         test_eeg_info(loader)
         test_timestamp_validation(loader)
     
+    test_auto_discovery()
     test_missing_file_handling()
     
     print("\n" + "="*70)

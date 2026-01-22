@@ -46,12 +46,16 @@ class EEGDataLoader:
         csv_loaded (bool): Whether CSV has been loaded
     
     Example:
+        >>> # Explicit paths (full control)
         >>> loader = EEGDataLoader(
         ...     patient_id="CON008",
         ...     edf_path="data/EEG Project Data/EEG/edf/CON008_clipped.EDF",
         ...     stimulus_csv_path="data/EEG Project Data/EEG/CON008_2025-08-14_stimulus_results.csv"
         ... )
         >>> loader.load()
+        
+        >>> # Auto-discovery (convenience)
+        >>> loader = EEGDataLoader.from_patient_id("CON008", use_clipped=True)
         >>> trials = loader.get_trials(trial_type='language')
         >>> print(f"Found {len(trials)} language trials")
     """
@@ -97,6 +101,143 @@ class EEGDataLoader:
         # Set MNE logging level
         if not verbose:
             mne.set_log_level('WARNING')
+    
+    @classmethod
+    def from_patient_id(
+        cls,
+        patient_id: str,
+        data_root: Optional[Union[str, Path]] = None,
+        use_clipped: bool = True,
+        date: Optional[str] = None,
+        preload: bool = True,
+        verbose: bool = False
+    ) -> 'EEGDataLoader':
+        """
+        Factory method to create loader by auto-discovering file paths.
+        
+        Automatically finds EDF and CSV files for a given patient ID, avoiding
+        the need to manually construct paths.
+        
+        Args:
+            patient_id: Patient identifier (e.g., 'CON008', 'CON009')
+            data_root: Root directory for data. If None, uses config.LOCAL_DATA_ROOT
+            use_clipped: Whether to prefer clipped EDF files (default: True)
+            date: Specific date for CSV file (YYYY-MM-DD). If None, auto-discovers
+            preload: Whether to preload EDF data into memory (default: True)
+            verbose: Whether to show detailed loading messages (default: False)
+        
+        Returns:
+            EEGDataLoader instance
+        
+        Raises:
+            EEGDataLoadingError: If files cannot be found
+        
+        Example:
+            >>> # Simple usage
+            >>> loader = EEGDataLoader.from_patient_id("CON008")
+            
+            >>> # With options
+            >>> loader = EEGDataLoader.from_patient_id(
+            ...     "CON009",
+            ...     use_clipped=True,
+            ...     date="2025-08-26"
+            ... )
+        """
+        if data_root is None:
+            data_root = config.LOCAL_DATA_ROOT
+        data_root = Path(data_root)
+        
+        # Find EDF file
+        edf_dir = data_root / "EEG Project Data" / "EEG" / "edf"
+        edf_path = cls._find_edf(edf_dir, patient_id, use_clipped)
+        
+        # Find CSV file
+        csv_dir = data_root / "EEG Project Data" / "EEG"
+        stimulus_csv_path = cls._find_csv(csv_dir, patient_id, date)
+        
+        logger.info(f"Auto-discovered files for {patient_id}:")
+        logger.info(f"  EDF: {edf_path.name}")
+        logger.info(f"  CSV: {stimulus_csv_path.name}")
+        
+        return cls(
+            patient_id=patient_id,
+            edf_path=edf_path,
+            stimulus_csv_path=stimulus_csv_path,
+            preload=preload,
+            verbose=verbose
+        )
+    
+    @staticmethod
+    def _find_edf(edf_dir: Path, patient_id: str, use_clipped: bool) -> Path:
+        """Find EDF file for patient."""
+        # Try clipped first if preferred
+        if use_clipped:
+            clipped_path = edf_dir / f"{patient_id}_clipped.EDF"
+            if clipped_path.exists():
+                return clipped_path
+        
+        # Try raw EDF
+        raw_path = edf_dir / f"{patient_id}.EDF"
+        if raw_path.exists():
+            return raw_path
+        
+        # Try in old stimulus software subfolder
+        old_dir = edf_dir / "old stimulus software"
+        if old_dir.exists():
+            clipped_old = old_dir / f"{patient_id}_clipped.EDF"
+            if clipped_old.exists():
+                return clipped_old
+            
+            raw_old = old_dir / f"{patient_id}.EDF"
+            if raw_old.exists():
+                return raw_old
+        
+        raise EEGDataLoadingError(
+            f"Could not find EDF file for patient {patient_id} in {edf_dir}\n"
+            f"Tried: {patient_id}_clipped.EDF, {patient_id}.EDF, and old stimulus software folder"
+        )
+    
+    @staticmethod
+    def _find_csv(csv_dir: Path, patient_id: str, date: Optional[str]) -> Path:
+        """Find stimulus CSV file for patient."""
+        # If date specified, try exact match first
+        if date:
+            exact_path = csv_dir / f"{patient_id}_{date}_stimulus_results.csv"
+            if exact_path.exists():
+                return exact_path
+        
+        # Search for any matching CSV
+        pattern = f"{patient_id}_*_stimulus_results.csv"
+        matches = list(csv_dir.glob(pattern))
+        
+        if not matches:
+            # Try stimuli_record subfolder
+            stimuli_record_dir = csv_dir / "stimuli_record"
+            if stimuli_record_dir.exists():
+                matches = list(stimuli_record_dir.glob(pattern))
+        
+        if not matches:
+            raise EEGDataLoadingError(
+                f"Could not find stimulus CSV for patient {patient_id} in {csv_dir}\n"
+                f"Pattern: {pattern}"
+            )
+        
+        if len(matches) > 1:
+            if date:
+                raise EEGDataLoadingError(
+                    f"Found multiple CSV files for {patient_id}:\n" +
+                    "\n".join(f"  - {m.name}" for m in matches) +
+                    f"\nSpecified date '{date}' not found."
+                )
+            else:
+                warnings.warn(
+                    f"Found multiple CSV files for {patient_id}:\n" +
+                    "\n".join(f"  - {m.name}" for m in matches) +
+                    f"\nUsing most recent: {matches[-1].name}\n"
+                    f"Specify 'date' parameter to choose a specific file."
+                )
+        
+        return matches[-1]  # Return most recent if multiple
     
     def _validate_paths(self) -> None:
         """Validate that specified file paths exist."""

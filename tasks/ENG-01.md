@@ -33,6 +33,13 @@ Implemented the `EEGDataLoader` class with the following capabilities:
   - Checks patient ID consistency
   - Logs trial type distribution
 
+#### Factory Method
+- `from_patient_id()`: Auto-discover EDF and CSV files for a patient
+  - Eliminates manual path construction
+  - Supports clipped vs raw EDF preference
+  - Handles multiple file locations (main folder, old stimulus software)
+  - Smart CSV selection (date-based or most recent)
+
 #### Data Access Methods
 - `get_trials(trial_type)`: Filter trials by type (language, oddball+p, commands)
 - `get_trial(idx)`: Access specific trial by index
@@ -122,6 +129,7 @@ Created comprehensive usage documentation with:
 
 - **Fail Fast**: Validate paths in `__init__`, catch errors early
 - **Progressive Disclosure**: Simple API with advanced options (preload, verbose)
+- **Factory Pattern**: `from_patient_id()` for convenience, explicit constructor for control
 - **Separation of Concerns**: Loading → Validation → Access
 - **Principle of Least Surprise**: Methods do what names suggest
 
@@ -132,7 +140,11 @@ Created comprehensive usage documentation with:
 ```python
 from data_loading import EEGDataLoader
 
-# Initialize and load
+# Method 1: Auto-discovery (recommended for batch processing)
+loader = EEGDataLoader.from_patient_id("CON008", use_clipped=True)
+loader.load()
+
+# Method 2: Explicit paths (full control)
 loader = EEGDataLoader(
     patient_id="CON008",
     edf_path="data/EEG Project Data/EEG/edf/CON008_clipped.EDF",
