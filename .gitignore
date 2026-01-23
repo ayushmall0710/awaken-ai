@@ -211,3 +211,10 @@ data/
 
 # macOS
 .DS_Store
+
+# Generated reports (keep directory, ignore timestamped files)
+reports/*.json
+reports/*.csv
+reports/*.md
+!reports/.gitkeep
+# tasks/
