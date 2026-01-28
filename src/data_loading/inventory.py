@@ -13,7 +13,6 @@ from tqdm import tqdm
 
 from . import config
 
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
 

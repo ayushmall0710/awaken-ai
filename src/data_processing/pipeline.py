@@ -62,7 +62,7 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
     for f in all_files:
         try:
             # Skip the unified csv/parquet if it exists in the list to avoid recursion
-            if 'unified' in f.name:
+            if "unified" in f.name:
                 continue
 
             df = pd.read_csv(f)
@@ -89,7 +89,7 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
         print(f"Final Row Count: {len(unified_df)}")
 
         # Save to Parquet
-        unified_df.to_parquet(output_file, engine='pyarrow')
+        unified_df.to_parquet(output_file, engine="pyarrow")
         print(f"Successfully saved to {output_file}")
         return unified_df
     else:
