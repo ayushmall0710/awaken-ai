@@ -2,9 +2,8 @@ name: Run Tests
 
 on:
   push:
-    branches: [ "main", "ci-setup" ]
-  pull_request:
     branches: [ "main" ]
+  pull_request:
 
 jobs:
   test:
