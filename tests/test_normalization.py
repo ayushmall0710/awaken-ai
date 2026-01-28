@@ -1,9 +1,5 @@
 import pytest
 import pandas as pd
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from data_processing.normalization import normalize_trial_type, normalize_sentences
 
