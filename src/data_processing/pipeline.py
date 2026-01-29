@@ -3,8 +3,16 @@ from pathlib import Path
 from .normalization import normalize_trial_type, normalize_sentences
 
 # Standard columns for unified stimulus data
-REQUIRED_COLS = ['patient_id', 'date', 'trial_type', 'sentences',
-                 'start_time', 'end_time', 'duration', 'source_file']
+REQUIRED_COLS = [
+    "patient_id",
+    "date",
+    "trial_type",
+    "sentences",
+    "start_time",
+    "end_time",
+    "duration",
+    "source_file",
+]
 
 
 def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
@@ -22,27 +30,29 @@ def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     df = df.copy()
 
     # Lang_XX rescue logic - extract event ID from trial_type when sentences is empty
-    if 'trial_type' in df.columns and 'sentences' in df.columns:
-        tt_lower = df['trial_type'].astype(str).str.lower().str.strip()
-        is_lang_pattern = tt_lower.str.match(r'^lang_\d+$')
-        is_empty_sentences = df['sentences'].isna() | (df['sentences'] == "") | (df['sentences'] == "[]")
+    if "trial_type" in df.columns and "sentences" in df.columns:
+        tt_lower = df["trial_type"].astype(str).str.lower().str.strip()
+        is_lang_pattern = tt_lower.str.match(r"^lang_\d+$")
+        is_empty_sentences = (
+            df["sentences"].isna() | (df["sentences"] == "") | (df["sentences"] == "[]")
+        )
         mask = is_lang_pattern & is_empty_sentences
-        df.loc[mask, 'sentences'] = tt_lower[mask].str.extract(r'^lang_(\d+)$')[0]
+        df.loc[mask, "sentences"] = tt_lower[mask].str.extract(r"^lang_(\d+)$")[0]
 
     # Normalize trial_type
-    if 'trial_type' in df.columns:
-        df['trial_type'] = df['trial_type'].apply(normalize_trial_type)
+    if "trial_type" in df.columns:
+        df["trial_type"] = df["trial_type"].apply(normalize_trial_type)
     else:
-        df['trial_type'] = 'unknown'
+        df["trial_type"] = "unknown"
 
     # Normalize sentences
-    if 'sentences' in df.columns:
-        df['sentences'] = df['sentences'].apply(normalize_sentences)
+    if "sentences" in df.columns:
+        df["sentences"] = df["sentences"].apply(normalize_sentences)
     else:
-        df['sentences'] = [[] for _ in range(len(df))]
+        df["sentences"] = [[] for _ in range(len(df))]
 
     # Add provenance
-    df['source_file'] = source_name
+    df["source_file"] = source_name
 
     # Reindex to standard columns
     return df.reindex(columns=REQUIRED_COLS)
@@ -79,11 +89,20 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
 
         # Deduplicate based on full row (excluding source_file, convert sentences to string for comparison)
         initial_count = len(unified_df)
-        unified_df['_sentences_str'] = unified_df['sentences'].astype(str)
-        unified_df = unified_df.drop_duplicates(subset=['patient_id', 'date', 'trial_type', '_sentences_str',
-                                                         'start_time', 'end_time', 'duration'],
-                                                 keep='first')
-        unified_df = unified_df.drop(columns=['_sentences_str'])
+        unified_df["_sentences_str"] = unified_df["sentences"].astype(str)
+        unified_df = unified_df.drop_duplicates(
+            subset=[
+                "patient_id",
+                "date",
+                "trial_type",
+                "_sentences_str",
+                "start_time",
+                "end_time",
+                "duration",
+            ],
+            keep="first",
+        )
+        unified_df = unified_df.drop(columns=["_sentences_str"])
         duplicates_removed = initial_count - len(unified_df)
         print(f"Removed {duplicates_removed} duplicate rows")
         print(f"Final Row Count: {len(unified_df)}")
