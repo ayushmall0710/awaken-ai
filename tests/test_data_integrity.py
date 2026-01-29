@@ -1,6 +1,7 @@
-import pytest
 import pandas as pd
 import numpy as np
+import json
+from data_processing.pipeline import process_stimulus_df
 
 
 class TestDataIntegrity:
@@ -76,34 +77,41 @@ class TestDataIntegrityEdgeCases:
         df = pd.DataFrame({
             'patient_id': ['P001'],
             'date': ['2024-01-01'],
-            'trial_type': ['left_command'],
-            'sentences': [[]],
+            'trial_type': ['lcmd'],
+            'sentences': ['[]'],  # Raw string input from CSV
             'start_time': [1.0],
             'end_time': [2.0],
-            'duration': [1.0],
-            'source_file': ['patient_df_P001.csv']
+            'duration': [1.0]
         })
         # Should not raise - empty list is valid
-        assert isinstance(df['sentences'].iloc[0], list)
+        # Process the dataframe to test pipeline handling
+        processed = process_stimulus_df(df, "test_source")
+        # Sentences is expected to be an empty list (actual list check)
+        # Note: 'left_command' having empty sentences is expected behavior for now
+        assert isinstance(processed['sentences'].iloc[0], list)
+        assert len(processed['sentences'].iloc[0]) == 0
 
     def test_multiple_events_in_sentences(self):
         """Multiple events in sentences should all be accessible."""
         df = pd.DataFrame({
             'patient_id': ['P001'],
             'date': ['2024-01-01'],
-            'trial_type': ['language'],
-            'sentences': [[
+            'trial_type': ['lang_11'],
+            # Raw JSON string input simulating CSV read
+            'sentences': [json.dumps([
                 {'event': '11', 'onset_time': 1.0},
                 {'event': '12', 'onset_time': 2.0},
                 {'event': '13', 'onset_time': 3.0},
-            ]],
+            ])],
             'start_time': [1.0],
             'end_time': [4.0],
-            'duration': [3.0],
-            'source_file': ['P001_stimulus_results.csv']
+            'duration': [3.0]
         })
-        events = [s['event'] for s in df['sentences'].iloc[0]]
-        assert events == ['11', '12', '13']
+        # Pass through pipeline
+        processed = process_stimulus_df(df, "test_source")
+        # Verify structure preserved
+        processed_events = [s['event'] for s in processed['sentences'].iloc[0]]
+        assert processed_events == ['11', '12', '13']
 
     def test_trial_type_values(self):
         """Known trial types should be in expected set."""
@@ -114,15 +122,16 @@ class TestDataIntegrityEdgeCases:
         df = pd.DataFrame({
             'patient_id': ['P001'] * 5,
             'date': ['2024-01-01'] * 5,
-            'trial_type': ['language', 'left_command', 'right_command',
-                           'oddball', 'loved_one_voice'],
-            'sentences': [[]] * 5,
-            'start_time': [1.0] * 5,
-            'end_time': [2.0] * 5,
-            'duration': [1.0] * 5,
-            'source_file': ['test.csv'] * 5
+            'trial_type': ['lang_11', 'lcmd', 'rcmd',
+                           'odd', 'loved_one'],
+            'sentences': ['[]'] * 5,  # Raw strings
+            'start_time': [1.0] * 5
         })
-        actual_types = set(df['trial_type'].unique())
+        
+        # Run through pipeline to verify normalization
+        processed = process_stimulus_df(df, "test_source")
+        processed_types = set(processed['trial_type'].unique())
+        
         # All actual types should be in expected set
-        unexpected = actual_types - expected_types
+        unexpected = processed_types - expected_types
         assert unexpected == set(), f"Unexpected trial types: {unexpected}"

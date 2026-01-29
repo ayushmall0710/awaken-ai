@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 from pathlib import Path
 from .normalization import normalize_trial_type, normalize_sentences
 
@@ -78,16 +77,16 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
         unified_df = pd.concat(dfs, ignore_index=True)
         print(f"\nTotal Unified Rows: {len(unified_df)}")
 
-        # # Deduplicate based on full row (excluding source_file, convert sentences to string for comparison)
-        # initial_count = len(unified_df)
-        # unified_df['_sentences_str'] = unified_df['sentences'].astype(str)
-        # unified_df = unified_df.drop_duplicates(subset=['patient_id', 'date', 'trial_type', '_sentences_str',
-        #                                                  'start_time', 'end_time', 'duration'],
-        #                                          keep='first')
-        # unified_df = unified_df.drop(columns=['_sentences_str'])
-        # duplicates_removed = initial_count - len(unified_df)
-        # print(f"Removed {duplicates_removed} duplicate rows")
-        # print(f"Final Row Count: {len(unified_df)}")
+        # Deduplicate based on full row (excluding source_file, convert sentences to string for comparison)
+        initial_count = len(unified_df)
+        unified_df['_sentences_str'] = unified_df['sentences'].astype(str)
+        unified_df = unified_df.drop_duplicates(subset=['patient_id', 'date', 'trial_type', '_sentences_str',
+                                                         'start_time', 'end_time', 'duration'],
+                                                 keep='first')
+        unified_df = unified_df.drop(columns=['_sentences_str'])
+        duplicates_removed = initial_count - len(unified_df)
+        print(f"Removed {duplicates_removed} duplicate rows")
+        print(f"Final Row Count: {len(unified_df)}")
 
         # Save to Parquet
         unified_df.to_parquet(output_file, engine='pyarrow')

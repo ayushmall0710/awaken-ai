@@ -1,6 +1,7 @@
 import pandas as pd
 import json
 import ast
+import numpy as np
 
 # Trial Type Mappings
 TRIAL_TYPE_MAP = {
@@ -41,7 +42,11 @@ def normalize_sentences(sample):
     Converts inputs (strings, lists of strings, lists of ints, lists of dicts)
     into a consistent List[Dict] format: [{'event': ..., 'onset_time': ...}]
     """
-    if pd.isna(sample) or sample == "[]" or sample == "":
+    # 0. Handle types that break pd.isna or strict equality checks
+    if isinstance(sample, (list, tuple, np.ndarray)):
+        if len(sample) == 0:
+            return []
+    elif pd.isna(sample) or sample == "[]" or sample == "":
         return []
 
     parsed = None
