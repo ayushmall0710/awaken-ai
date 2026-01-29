@@ -9,3 +9,7 @@ mne>=1.6
 tqdm>=4.66
 mutagen>=1.47.0
 openai-whisper>=20231117
+pyarrow>=14.0
+librosa>=0.10
+flake8>=7.0.0
+black>=24.0.0

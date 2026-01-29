@@ -55,31 +55,34 @@ def _remux_audio_file(filepath: Path) -> bool:
     """
     try:
         fixed_path = filepath.with_stem(f"{filepath.stem}_fixed")
-        
+
         result = subprocess.run(
             [
                 "ffmpeg",
-                "-i", filepath,
-                "-c", "copy",
-                "-movflags", "+faststart",
+                "-i",
+                filepath,
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
                 fixed_path,
                 "-y",
             ],
             capture_output=True,
             text=True,
         )
-        
+
         if result.returncode != 0:
             logger.warning(f"ffmpeg failed for {filepath.name}: {result.stderr}")
             return False
-        
+
         # Replace original with fixed file
         filepath.unlink()
         fixed_path.rename(filepath)
-        
+
         logger.info(f"Re-muxed {filepath.name}")
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to re-mux {filepath.name}: {e}")
         return False
@@ -90,6 +93,7 @@ def _extract_stimulus_metadata(filepath: Path) -> Dict:
     Extract metadata from audio file using mutagen.
     If metadata extraction fails, re-mux the file with ffmpeg and try to extract again.
     """
+
     def _try_extract(file_path: Path) -> Dict:
         """Attempt to extract metadata from file."""
         try:
@@ -100,7 +104,7 @@ def _extract_stimulus_metadata(filepath: Path) -> Dict:
                     "sample_rate": None,
                     "channels": None,
                 }
-            
+
             return {
                 "duration_seconds": getattr(audio.info, "length", None),
                 "sample_rate": getattr(audio.info, "sample_rate", None),
@@ -113,7 +117,7 @@ def _extract_stimulus_metadata(filepath: Path) -> Dict:
                 "sample_rate": None,
                 "channels": None,
             }
-    
+
     metadata = _try_extract(filepath)
     if not _has_valid_metadata(metadata):
         logger.info(f"Incomplete metadata for {filepath.name}, attempting re-mux...")
@@ -145,7 +149,7 @@ def _extract_stimulus_id(filepath: Path) -> str:
 
 def _transcribe_audio(filepath: Path, model: Any):
     """Transcribe audio using Whisper and extract transcript.
-    
+
     Note: Word timestamps are disabled for faster processing. To enable word-level
     timestamps, set word_timestamps=True and uncomment segments/words extraction.
     Word timestamps are complex to store in CSV - consider saving to a separate JSON file.
@@ -157,7 +161,7 @@ def _transcribe_audio(filepath: Path, model: Any):
             fp16=False,  # Explicit FP32 for CPU
         )
         transcript = result.get("text", "").strip()
-        
+
         # Word timestamps extraction
         # segments = result.get("segments", [])
         # words = [segment["words"] for segment in segments if "words" in segment]
@@ -178,7 +182,9 @@ def _transcribe_audio(filepath: Path, model: Any):
         }
 
 
-def _process_single_file(filepath: Path, stimulus_type_map: Dict, audio_folder: Path, model: Any):
+def _process_single_file(
+    filepath: Path, stimulus_type_map: Dict, audio_folder: Path, model: Any
+):
     """Process a single file (metadata + transcription)."""
     metadata = _extract_stimulus_metadata(filepath)
     transcript_info = _transcribe_audio(filepath, model)
@@ -262,7 +268,9 @@ def create_stimulus_manifest(
     manifest_data = []
     for filepath in tqdm(all_files, desc="Processing audio files", unit="file"):
         try:
-            result = _process_single_file(filepath, stimulus_type_map, audio_folder, model)
+            result = _process_single_file(
+                filepath, stimulus_type_map, audio_folder, model
+            )
             manifest_data.append(result)
         except Exception as e:
             logger.error(f"Error processing {filepath.name}: {e}")
