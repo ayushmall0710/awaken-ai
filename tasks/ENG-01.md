@@ -33,9 +33,11 @@ Main class that loads the unified Parquet file and provides comprehensive access
   - Provides fast querying via pandas DataFrame
   
 - **EDF Loading**: On-demand loading with LRU cache
-  - Auto-discovers EDF files by patient ID
-  - LRU cache (default size: 3 patients) for memory efficiency
+  - Auto-discovers EDF files by patient ID and session date
+  - Supports multi-session patients (returns Dict[date, Raw])
+  - LRU cache (min size: 5) for memory efficiency with multi-session support
   - Lazy loading - only loads when explicitly requested
+  - Direct file loading via filepath parameter for advanced use
 
 #### Cross-Patient Access Methods
 - `get_all_trials()`: Get all trials from all patients
@@ -47,12 +49,14 @@ Main class that loads the unified Parquet file and provides comprehensive access
 #### Single-Patient Access Methods  
 - `get_patient_trials(patient_id)`: Get all trials for one patient
 - `get_patient(patient_id)`: Get PatientData view object
+- `get_patient_sessions(patient_id)`: List recording sessions for a patient
 
 #### EDF Management
-- `load_edf(patient_id, use_clipped)`: Load EDF with caching
+- `load_edf(patient_id, date, filepath, use_clipped)`: Load EDF with caching (multi-session aware)
+- `get_patient_sessions(patient_id)`: List recording sessions for a patient
 - `get_cached_edfs()`: Check cache statistics
 - `clear_edf_cache()`: Clear cached EDFs
-- `_find_edf()`: Auto-discovery logic (searches multiple locations)
+- `_find_edf()`: Auto-discovery logic (searches multiple locations, date-specific files)
 
 #### Validation System
 - **Schema Validation**: Validates Parquet structure on init
@@ -62,9 +66,9 @@ Main class that loads the unified Parquet file and provides comprehensive access
   
 - **Per-Patient Validation**: `validate_patient(patient_id)`
   - EDF file existence and loadability
-  - Timestamp alignment (CSV times within EDF duration)
   - Trial completeness (no missing timing data)
   - Sentence structure validity (List[Dict] format)
+  - Timestamp alignment: Deferred to ENG-02 (DC audio channel alignment)
   
 - **Cross-Patient Validation**: `validate_all_patients()`
   - Returns DataFrame with validation results per patient
@@ -84,7 +88,11 @@ Focused interface for single-patient workflows:
 - Defensive copying to prevent state mutation
 
 #### Methods
-- `raw` (property): Lazy-loads and returns EEG data
+- `raw` (property): Lazy-loads and returns EEG data (Dict for multi-session patients)
+- `get_raw(date)`: Get EEG data for specific session
+- `list_sessions()`: List recording sessions for this patient
+- `edf_paths` (property): Get EDF file path(s)
+- `edf_filenames` (property): Get EDF filename(s)
 - `get_trials_by_type(trial_type)`: Filter patient's trials
 - `get_trial(trial_idx)`: Get specific trial by index
 - `get_trial_types()`: List trial types for this patient
@@ -208,28 +216,74 @@ patient_ids = loader.get_patient_ids()
 trial_types = loader.get_trial_types()
 ```
 
-### Single-Patient Workflow
+### Single-Patient Workflow (Single Session)
 
 ```python
 # Get focused view for one patient
 patient = loader.get_patient('CON008')
+
+# Check sessions
+sessions = patient.list_sessions()
+print(f"Sessions: {sessions}")  # ['2025-08-14']
 
 # Access trial data (no EDF loaded yet)
 language_trials = patient.get_trials_by_type('language')
 oddball_trials = patient.get_trials_by_type('oddball')
 
 # Lazy load EDF when needed
-raw = patient.raw  # Triggers EDF loading on first access
+raw = patient.raw  # Returns single Raw for single-session
 print(f"Channels: {len(raw.ch_names)}")
 print(f"Sampling rate: {raw.info['sfreq']} Hz")
+
+# Get EDF filenames
+print(f"EDF file: {patient.edf_filenames}")  # 'CON008_clipped.EDF'
 
 # Get EEG metadata
 info = patient.get_eeg_info()
 
 # Validate data quality
 validation = patient.validate()
-if not validation['timestamp_alignment']:
-    print("Need DC channel alignment (ENG-02)")
+```
+
+### Multi-Session Patient Workflow
+
+```python
+# Some patients have multiple recording sessions
+patient = loader.get_patient('CON005')
+
+# Check sessions
+sessions = patient.list_sessions()
+print(f"Sessions: {sessions}")  # ['2025-02-14', '2025-05-06']
+
+# Get EDF filenames for all sessions
+filenames = patient.edf_filenames
+print(filenames)
+# Output: {'2025-02-14': 'CON005_20250214_clipped.EDF',
+#          '2025-05-06': 'CON005_20250506_clipped.EDF'}
+
+# Load all sessions (returns Dict)
+edfs = patient.raw  # Returns Dict[date, Raw] for multi-session
+print(f"Type: {type(edfs)}")  # <class 'dict'>
+print(f"Sessions loaded: {list(edfs.keys())}")
+
+# Access specific session from Dict
+raw_feb = edfs['2025-02-14']
+raw_may = edfs['2025-05-06']
+
+# OR: Load specific session directly
+raw_specific = patient.get_raw('2025-02-14')  # Returns single Raw
+print(f"Type: {type(raw_specific)}")  # <class 'mne.io.Raw'>
+
+# Handle both single and multi-session programmatically
+raw_data = patient.raw
+if isinstance(raw_data, dict):
+    # Multi-session: choose or loop
+    for date, raw in raw_data.items():
+        print(f"Session {date}: {len(raw.ch_names)} channels")
+else:
+    # Single session
+    raw = raw_data
+    print(f"Channels: {len(raw.ch_names)}")
 ```
 
 ### Batch Processing
@@ -264,22 +318,57 @@ loader.clear_edf_cache()
 
 ## Integration with Downstream Tasks
 
-### ENG-02 (Timestamp Alignment) - Due Jan 24
+### ENG-02: Timestamp Alignment (Due Jan 24)
 
+The loader provides comprehensive support for ENG-02's DC audio channel alignment:
+
+**Helper Methods Added:**
+- `PatientData.get_dc_channel(channel_name, date)`: Extract DC audio channel
+- `PatientData.get_trial_timing_info(trial_type, date)`: Get trial timing with EDF-relative times
+
+**Multi-Session Handling:**
+
+For single-session patients (e.g., CON008):
 ```python
-loader = UnifiedDataLoader(parquet_path)
 patient = loader.get_patient('CON008')
 
-# Get oddball trials for alignment
-oddball_trials = patient.get_trials_by_type('oddball')
+# Extract DC channel for timestamp alignment
+dc = patient.get_dc_channel('DC')
+audio_data = dc.get_data()[0]
+sfreq = dc.info['sfreq']
 
-# Access DC channel for precise alignment
-dc_channel = patient.raw.copy().pick_channels(['DC'])
-
-# Use DC audio waveform to detect beep onsets
-# Cross-reference with oddball_trials timestamps
-# Achieve sub-50ms alignment precision
+# Get oddball trial timing with EDF-relative times
+timing = patient.get_trial_timing_info('oddball')
+for _, trial in timing.iterrows():
+    edf_start = trial['edf_start_time']  # Relative to EDF start
+    sentences = trial['sentences']  # ['standard', 'rare', ...]
 ```
+
+For multi-session patients (e.g., CON005):
+```python
+patient = loader.get_patient('CON005')
+sessions = patient.list_sessions()  # ['2025-02-14', '2025-05-06']
+
+# Process each session independently (CRITICAL)
+for session_date in sessions:
+    # Get session-specific DC channel
+    dc = patient.get_dc_channel('DC', date=session_date)
+    audio_data = dc.get_data()[0]
+    
+    # Get timing for THIS session only
+    timing = patient.get_trial_timing_info('oddball', date=session_date)
+    
+    # Now edf_start_time is relative to this session's EDF
+    for _, trial in timing.iterrows():
+        edf_start = trial['edf_start_time']
+        # ... DC audio alignment logic ...
+```
+
+**Why Session-Awareness Matters:**
+- Multi-session patients have separate EDF files with different start times
+- Trial times must be matched to the correct session's EDF
+- DC audio beeps are session-specific
+- ENG-02 must loop through sessions for multi-session patients
 
 ### ENG-02b (ERP Pipeline) - Due Jan 30
 
@@ -387,14 +476,61 @@ All dependencies already in `requirements.txt` ✓
 
 ### 3. Memory Management
 - Parquet in memory: 79KB (negligible)
-- LRU cache: Default 3 patients × ~100-200 MB per EDF = ~300-600 MB
+- LRU cache: Min 5 sessions (increased from 3 for multi-session support)
+- Each session: ~100-200 MB per EDF
+- Total cache: ~500-1000 MB (5 sessions)
 - Configurable via `edf_cache_size` parameter
 - Cache can be cleared with `clear_edf_cache()`
+- Cache key: (patient_id, date, use_clipped) for session-specific caching
 
-### 4. Validation Warnings
-- Some patients may have timestamp misalignment (detected by validation)
-- ENG-02 will resolve alignment issues using DC audio channel
-- Missing measurement dates handled gracefully (sets validation to None)
+### 4. Multi-Session Support
+- Some patients have multiple recording sessions (e.g., CON005: 2 sessions)
+- API automatically handles single vs multi-session:
+  - `load_edf(patient_id)` returns Raw for single-session, Dict[date, Raw] for multi-session
+  - `load_edf(patient_id, date)` always returns single Raw
+  - `get_patient_sessions(patient_id)` lists all sessions
+- Cache key includes session date: (patient_id, date, use_clipped)
+- File naming convention: `{patient_id}_{YYYYMMDD}_clipped.EDF`
+
+### 5. Validation Strategy
+- Timestamp alignment validation deferred to ENG-02
+- ENG-02 will use DC audio channel for precise (<50ms) synchronization
+- Current validation focuses on data completeness and format correctness
+- Missing measurement dates handled gracefully (validation returns None)
+
+---
+
+## Known Limitations
+
+### 1. Timestamp Alignment
+**Status:** Deferred to ENG-02
+
+- Current validation removed (assumed single EDF per patient)
+- ENG-02 will implement DC audio channel alignment for precise (<50ms) synchronization
+- PatientData.validate() returns `timestamp_alignment: None` until ENG-02 is complete
+
+### 2. EDF File Naming Conventions
+**Assumption:** Date-based naming for multi-session patients
+
+- Expected format: `{patient_id}_{YYYYMMDD}_clipped.EDF`
+- Falls back to `{patient_id}_clipped.EDF` for single-session patients
+- If actual files use different naming, discovery may fail
+
+### 3. Multi-Session API Complexity
+**Type Handling:** Return types vary based on session count
+
+- Single-session: `load_edf()` returns `mne.io.Raw`
+- Multi-session: `load_edf()` returns `Dict[str, mne.io.Raw]`
+- Code must check type with `isinstance()` for robustness
+- Specifying `date` parameter always returns single `Raw`
+
+### 4. EDF File Availability
+**Local Sync Dependency:**
+
+- EDF files (~100-200 MB each) not in git repository
+- Must be synced from OneDrive locally
+- Tests gracefully handle missing files (don't fail, just skip)
+- `edf_paths` property may raise error if files not found
 
 ---
 
@@ -402,11 +538,12 @@ All dependencies already in `requirements.txt` ✓
 
 - **Factory Pattern**: `get_patient()` creates PatientData views
 - **Lazy Loading**: EDFs loaded on first access to `.raw` property
-- **LRU Caching**: Automatic memory management for EDFs
+- **LRU Caching**: Automatic memory management for EDFs (session-specific keys)
 - **Defensive Copying**: All public methods return copies
 - **Fail Fast**: Schema validation on initialization
 - **Tri-State Logic**: True/False/None for validation results
 - **View Pattern**: PatientData is lightweight view over main DataFrame
+- **Union Types**: Polymorphic returns for single vs multi-session handling
 
 ---
 

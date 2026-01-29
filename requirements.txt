@@ -10,3 +10,4 @@ tqdm>=4.66
 mutagen>=1.47.0
 openai-whisper>=20231117
 pyarrow>=14.0.0
+pytest>=7.4
