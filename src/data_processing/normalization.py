@@ -1,17 +1,19 @@
 import pandas as pd
 import json
 import ast
+import numpy as np
 
 # Trial Type Mappings
 TRIAL_TYPE_MAP = {
-    'lcmd': 'left_command',
-    'rcmd': 'right_command',
-    'lang': 'language',
-    'odd': 'oddball',
+    "lcmd": "left_command",
+    "rcmd": "right_command",
+    "lang": "language",
+    "odd": "oddball",
     # 'beep': 'control',
-    'loved_one': 'loved_one_voice',
-    'language_11': 'language',
+    "loved_one": "loved_one_voice",
+    "language_11": "language",
 }
+
 
 def normalize_trial_type(tt):
     """
@@ -19,33 +21,38 @@ def normalize_trial_type(tt):
     """
     if pd.isna(tt):
         return "unknown"
-    
+
     tt_str = str(tt).lower().strip()
-    
+
     # Remove '+p' suffix
-    if tt_str.endswith('+p'):
+    if tt_str.endswith("+p"):
         tt_str = tt_str[:-2]
-        
+
     # Handle lang_XX patterns
-    if tt_str.startswith('lang_') and tt_str[5:].isdigit():
-        return 'language'
+    if tt_str.startswith("lang_") and tt_str[5:].isdigit():
+        return "language"
 
     # Apply explict mapping
     if tt_str in TRIAL_TYPE_MAP:
         return TRIAL_TYPE_MAP[tt_str]
-        
+
     return tt_str
+
 
 def normalize_sentences(sample):
     """
     Converts inputs (strings, lists of strings, lists of ints, lists of dicts)
     into a consistent List[Dict] format: [{'event': ..., 'onset_time': ...}]
     """
-    if pd.isna(sample) or sample == "[]" or sample == "":
+    # 0. Handle types that break pd.isna or strict equality checks
+    if isinstance(sample, (list, tuple, np.ndarray)):
+        if len(sample) == 0:
+            return []
+    elif pd.isna(sample) or sample == "[]" or sample == "":
         return []
 
     parsed = None
-    
+
     # 1. Parse stringified content if necessary
     if isinstance(sample, str):
         try:
@@ -55,7 +62,7 @@ def normalize_sentences(sample):
                 parsed = ast.literal_eval(sample)
             except (ValueError, SyntaxError):
                 # Treat as a single raw string event
-                return [{'event': sample, 'onset_time': None}]
+                return [{"event": sample, "onset_time": None}]
     else:
         parsed = sample
 
@@ -70,17 +77,17 @@ def normalize_sentences(sample):
             # Already a dict, preserve it.
             norm_item = item.copy()
             normalized_list.append(norm_item)
-            
+
         elif isinstance(item, (int, float)):
             # Convert numeric event code -> Dict
-            normalized_list.append({'event': str(item), 'onset_time': None})
-            
+            normalized_list.append({"event": str(item), "onset_time": None})
+
         elif isinstance(item, str):
             # Convert string event -> Dict
-            normalized_list.append({'event': item, 'onset_time': None})
-            
+            normalized_list.append({"event": item, "onset_time": None})
+
         else:
             # Unknown type
-            normalized_list.append({'event': str(item), 'onset_time': None})
-            
+            normalized_list.append({"event": str(item), "onset_time": None})
+
     return normalized_list

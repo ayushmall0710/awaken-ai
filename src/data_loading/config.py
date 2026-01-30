@@ -19,7 +19,7 @@ ONEDRIVE_ROOT = os.environ.get(
         / "OneDrive-SharedLibraries-UW"
         / "Peter Schwab - EEG Project Data"
     ),
-    # If your OneDrive is synced to a different location, update this path or export 
+    # If your OneDrive is synced to a different location, update this path or export
     # the environment variable
     # Example:
     # ONEDRIVE_ROOT=/path/to/your/onedrive

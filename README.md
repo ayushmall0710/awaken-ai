@@ -36,4 +36,20 @@ export ONEDRIVE_ROOT="/path/to/onedrive"
 ./sync_data.sh                    # Interactive sync
 ./sync_data.sh --sync             # Direct sync
 ./sync_data.sh --sync --overwrite  # Overwrite existing
+./sync_data.sh --sync --overwrite  # Overwrite existing
 ```
+
+## Development
+
+**Code Quality:**
+
+This project uses `flake8` for linting and `black` for formatting.
+CI **checks** for style issues but does not fix them automatically.
+
+**Before committing, run:**
+
+```bash
+black .
+```
+
+This ensures your code passes the CI format check.
