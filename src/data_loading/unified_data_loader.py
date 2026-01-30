@@ -422,10 +422,10 @@ class UnifiedDataLoader:
             warnings.warn(f"Missing timestamp column: {e}")
             validation_results["timestamps_valid"] = False
 
-        # Check sentences is list or array type (Parquet converts lists to numpy arrays)
+        # Check sentences is list type
         try:
             first_sentences = self.trials_df["sentences"].iloc[0]
-            if not isinstance(first_sentences, (list, np.ndarray)):
+            if not isinstance(first_sentences, list):
                 warnings.warn(
                     f"Sentences column has unexpected type: {type(first_sentences)}"
                 )
