@@ -2,15 +2,14 @@
 Test suite for UnifiedDataLoader and PatientData classes.
 
 Run with: pytest tests/test_unified_data_loader.py -v
+
+Uses fixture-based dummy data for CI compatibility.
 """
 
-import unittest
-import warnings
 from pathlib import Path
 
 import pandas as pd
 import pytest
-import mne
 
 # Add src to path
 import sys
@@ -22,208 +21,180 @@ from data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadi
 from data_loading.patient_data import PatientData
 
 
-class TestUnifiedDataLoader(unittest.TestCase):
+@pytest.fixture
+def sample_unified_data():
+    """Sample unified stimulus data for testing."""
+    return {
+        "patient_id": ["CON001a", "CON001a", "CON005", "CON005", "CON005", "CON008"],
+        "date": [
+            "2025-01-15",
+            "2025-01-15",
+            "2025-02-14",
+            "2025-02-14",
+            "2025-05-06",
+            "2025-03-10",
+        ],
+        "trial_type": [
+            "language",
+            "oddball",
+            "language",
+            "oddball",
+            "language",
+            "language",
+        ],
+        "sentences": [
+            [{"text": "hello", "order": 1}],
+            [{"text": "standard", "order": 1}],
+            [{"text": "world", "order": 1}],
+            [{"text": "rare", "order": 1}],
+            [{"text": "test", "order": 1}],
+            [{"text": "data", "order": 1}],
+        ],
+        "start_time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        "end_time": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
+        "duration": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+        "source_file": [
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+        ],
+    }
+
+
+@pytest.fixture
+def sample_unified_df(sample_unified_data):
+    """Sample unified DataFrame for testing."""
+    return pd.DataFrame(sample_unified_data)
+
+
+@pytest.fixture
+def temp_parquet_file(sample_unified_df, tmp_path):
+    """Create temporary parquet file for testing."""
+    parquet_file = tmp_path / "test_unified_stimulus_results.parquet"
+    sample_unified_df.to_parquet(parquet_file, index=False)
+    return parquet_file
+
+
+@pytest.fixture
+def loader(temp_parquet_file):
+    """Create UnifiedDataLoader instance with test data."""
+    return UnifiedDataLoader(temp_parquet_file)
+
+
+class TestUnifiedDataLoader:
     """Test suite for UnifiedDataLoader class."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Load test data once for all tests."""
-        cls.parquet_path = (
-            project_root / "data" / "EEG" / "unified_stimulus_results.parquet"
-        )
+    def test_initialization(self, loader):
+        assert loader is not None
+        assert len(loader.trials_df) > 0
+        assert len(loader.get_patient_ids()) == 3  # CON001a, CON005, CON008
 
-        if not cls.parquet_path.exists():
-            raise FileNotFoundError(f"Parquet not found: {cls.parquet_path}")
+    def test_cross_patient_queries(self, loader):
+        patient_ids = loader.get_patient_ids()
+        assert isinstance(patient_ids, list)
+        assert len(patient_ids) > 0
 
-        cls.loader = UnifiedDataLoader(cls.parquet_path)
+        trial_types = loader.get_trial_types()
+        assert "language" in trial_types
 
-    def test_initialization(self):
-        """Test loader initialization."""
-        self.assertIsNotNone(self.loader)
-        self.assertGreater(len(self.loader.trials_df), 0)
-        self.assertEqual(len(self.loader.get_patient_ids()), 14)
+        language_trials = loader.get_trials_by_type("language")
+        assert len(language_trials) > 0
 
-    def test_cross_patient_queries(self):
-        patient_ids = self.loader.get_patient_ids()
-        self.assertIsInstance(patient_ids, list)
-        self.assertGreater(len(patient_ids), 0)
+        filtered = loader.get_trials_by_type("language", patient_ids=patient_ids[:2])
+        assert len(filtered) <= len(language_trials)
 
-        trial_types = self.loader.get_trial_types()
-        self.assertIn("language", trial_types)
-
-        language_trials = self.loader.get_trials_by_type("language")
-        self.assertGreater(len(language_trials), 0)
-
-        filtered = self.loader.get_trials_by_type(
-            "language", patient_ids=patient_ids[:2]
-        )
-        self.assertLessEqual(len(filtered), len(language_trials))
-
-    def test_single_patient_access(self):
-        patient_ids = self.loader.get_patient_ids()
+    def test_single_patient_access(self, loader):
+        patient_ids = loader.get_patient_ids()
         test_patient = patient_ids[0]
 
-        trials = self.loader.get_patient_trials(test_patient)
-        self.assertGreater(len(trials), 0)
+        trials = loader.get_patient_trials(test_patient)
+        assert len(trials) > 0
 
-        patient = self.loader.get_patient(test_patient)
-        self.assertIsInstance(patient, PatientData)
-        self.assertEqual(patient.patient_id, test_patient)
+        patient = loader.get_patient(test_patient)
+        assert isinstance(patient, PatientData)
+        assert patient.patient_id == test_patient
 
-    def test_multi_session_support(self):
-        sessions = self.loader.get_patient_sessions("CON005")
-        self.assertEqual(len(sessions), 2)
-        self.assertIn("2025-02-14", sessions)
-        self.assertIn("2025-05-06", sessions)
+    def test_multi_session_support(self, loader):
+        sessions = loader.get_patient_sessions("CON005")
+        assert len(sessions) == 2
+        assert "2025-02-14" in sessions
+        assert "2025-05-06" in sessions
 
-        patient = self.loader.get_patient("CON005")
+        patient = loader.get_patient("CON005")
         patient_sessions = patient.list_sessions()
-        self.assertEqual(len(patient_sessions), 2)
+        assert len(patient_sessions) == 2
 
-    def test_edf_loading_single_session(self):
-        patient = self.loader.get_patient("CON001a")
+    def test_validation_schema(self, loader):
+        validation = loader.validate_schema()
+        assert validation["has_required_columns"]
+        assert validation["has_data"]
 
-        try:
-            raw = patient.raw
-            self.assertIsNotNone(raw)
-            self.assertIsInstance(raw, mne.io.Raw)
-        except UnifiedDataLoadingError as e:
-            self.assertIn("Could not find EDF", str(e))
+    def test_validation_per_patient(self, loader):
+        patient_ids = loader.get_patient_ids()
+        validation_df = loader.validate_all_patients()
 
-    def test_edf_loading_multi_session(self):
-        try:
-            edfs = self.loader.load_edf("CON005")
-            self.assertIsNotNone(edfs)
-            self.assertIsInstance(edfs, dict)
-            self.assertEqual(len(edfs), 2)
-            self.assertIn("2025-02-14", edfs)
-            self.assertIn("2025-05-06", edfs)
-            self.assertIsInstance(edfs["2025-02-14"], mne.io.Raw)
+        assert len(validation_df) == len(patient_ids)
+        assert "patient_id" in validation_df.columns
+        assert "has_trials" in validation_df.columns
 
-            raw = self.loader.load_edf("CON005", date="2025-02-14")
-            self.assertIsNotNone(raw)
-            self.assertIsInstance(raw, mne.io.Raw)
-        except UnifiedDataLoadingError as e:
-            self.assertIn("Could not find EDF", str(e))
+    def test_error_handling_invalid_patient(self, loader):
+        with pytest.raises(UnifiedDataLoadingError):
+            loader.get_patient_trials("INVALID_ID")
 
-    def test_validation_schema(self):
-        validation = self.loader.validate_schema()
-        self.assertTrue(validation["has_required_columns"])
-        self.assertTrue(validation["has_data"])
+    def test_load_edf_filepath_exclusivity(self, loader):
+        with pytest.raises(ValueError):
+            loader.load_edf(patient_id="CON005", filepath="/some/path.EDF")
 
-    def test_validation_per_patient(self):
-        patient_ids = self.loader.get_patient_ids()
-        validation_df = self.loader.validate_all_patients()
+        with pytest.raises(ValueError):
+            loader.load_edf()
 
-        self.assertEqual(len(validation_df), len(patient_ids))
-        self.assertIn("patient_id", validation_df.columns)
-        self.assertIn("has_trials", validation_df.columns)
+    def test_error_handling_invalid_session(self, loader):
+        with pytest.raises(UnifiedDataLoadingError):
+            loader.load_edf("CON005", date="2099-01-01")
 
-    def test_error_handling_invalid_patient(self):
-        with self.assertRaises(UnifiedDataLoadingError):
-            self.loader.get_patient_trials("INVALID_ID")
-
-    def test_edf_filenames_single_session(self):
-        patient = self.loader.get_patient("CON001a")
-
-        try:
-            paths = patient.edf_paths
-            filenames = patient.edf_filenames
-
-            self.assertIsInstance(paths, Path)
-            self.assertIsInstance(filenames, str)
-            self.assertTrue(filenames.endswith(".EDF"))
-        except UnifiedDataLoadingError as e:
-            self.assertIn("Could not find EDF", str(e))
-
-    def test_edf_filenames_multi_session(self):
-        patient = self.loader.get_patient("CON005")
-
-        try:
-            paths = patient.edf_paths
-            filenames = patient.edf_filenames
-
-            self.assertIsInstance(paths, dict)
-            self.assertIsInstance(filenames, dict)
-            self.assertEqual(len(paths), 2)
-            self.assertEqual(len(filenames), 2)
-            self.assertIn("2025-02-14", filenames)
-            self.assertIn("2025-05-06", filenames)
-            self.assertTrue(filenames["2025-02-14"].endswith(".EDF"))
-        except UnifiedDataLoadingError as e:
-            self.assertIn("Could not find EDF", str(e))
-
-    def test_load_edf_by_filepath(self):
-        patient = self.loader.get_patient("CON001a")
-
-        try:
-            edf_path = patient.edf_paths
-            raw = self.loader.load_edf(filepath=edf_path)
-            self.assertIsNotNone(raw)
-            self.assertIsInstance(raw, mne.io.Raw)
-        except UnifiedDataLoadingError:
-            pass
-
-    def test_load_edf_filepath_exclusivity(self):
-        with self.assertRaises(ValueError):
-            self.loader.load_edf(patient_id="CON005", filepath="/some/path.EDF")
-
-        with self.assertRaises(ValueError):
-            self.loader.load_edf()
-
-    def test_error_handling_invalid_session(self):
-        with self.assertRaises(UnifiedDataLoadingError):
-            self.loader.load_edf("CON005", date="2099-01-01")
-
-    def test_metadata_access(self):
-        info = self.loader.get_info()
-        self.assertIn("total_trials", info)
-        self.assertIn("total_patients", info)
-        self.assertEqual(info["total_trials"], len(self.loader.trials_df))
+    def test_metadata_access(self, loader):
+        info = loader.get_info()
+        assert "total_trials" in info
+        assert "total_patients" in info
+        assert info["total_trials"] == len(loader.trials_df)
 
 
-class TestPatientData(unittest.TestCase):
+class TestPatientData:
     """Test suite for PatientData class."""
 
-    @classmethod
-    def setUpClass(cls):
-        """Load test data once for all tests."""
-        parquet_path = (
-            project_root / "data" / "EEG" / "unified_stimulus_results.parquet"
-        )
-        cls.loader = UnifiedDataLoader(parquet_path)
-        cls.patient = cls.loader.get_patient("CON001a")
-
-    def test_trial_filtering(self):
-        trial_types = self.patient.get_trial_types()
-        self.assertGreater(len(trial_types), 0)
+    def test_trial_filtering(self, loader):
+        patient = loader.get_patient("CON001a")
+        trial_types = patient.get_trial_types()
+        assert len(trial_types) > 0
 
         if trial_types:
-            trials = self.patient.get_trials_by_type(trial_types[0])
-            self.assertGreaterEqual(len(trials), 0)
+            trials = patient.get_trials_by_type(trial_types[0])
+            assert len(trials) >= 0
 
-    def test_trial_access(self):
-        if len(self.patient.trials_df) > 0:
-            trial = self.patient.get_trial(0)
-            self.assertIsNotNone(trial)
-            self.assertIn("trial_type", trial.index)
+    def test_trial_access(self, loader):
+        patient = loader.get_patient("CON001a")
+        if len(patient.trials_df) > 0:
+            trial = patient.get_trial(0)
+            assert trial is not None
+            assert "trial_type" in trial.index
 
-    def test_multi_session_patient(self):
-        patient_multi = self.loader.get_patient("CON005")
+    def test_multi_session_patient(self, loader):
+        patient_multi = loader.get_patient("CON005")
 
         sessions = patient_multi.list_sessions()
-        self.assertEqual(len(sessions), 2)
+        assert len(sessions) == 2
 
-        try:
-            edfs = patient_multi.get_raw()
-            self.assertIsInstance(edfs, dict)
-            self.assertEqual(len(edfs), 2)
+    def test_get_all_trials(self, loader):
+        all_trials = loader.get_all_trials()
+        assert isinstance(all_trials, pd.DataFrame)
+        assert len(all_trials) == 6
 
-            raw = patient_multi.get_raw("2025-02-14")
-            self.assertIsInstance(raw, mne.io.Raw)
-        except UnifiedDataLoadingError:
-            pass
-
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_get_trial_summary(self, loader):
+        summary = loader.get_trial_summary()
+        assert isinstance(summary, pd.DataFrame)
+        assert "patient_id" in summary.columns
+        assert "trial_type" in summary.columns
+        assert "count" in summary.columns
