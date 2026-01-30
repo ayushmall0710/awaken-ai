@@ -13,3 +13,4 @@ pyarrow>=14.0
 librosa>=0.10
 flake8>=7.0.0
 black>=24.0.0
+pytest>=7.4
