@@ -9,9 +9,10 @@ from typing import Dict, List, Optional, Union
 import mne
 import numpy as np
 import pandas as pd
+import scipy.io.wavfile as wav
 
-from . import config
-from .patient_data import PatientData
+from src.data_loading import config
+from src.data_loading.patient_data import PatientData
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,12 +32,12 @@ class UnifiedDataLoader:
 
     def __init__(
         self,
-        parquet_path: Union[str, Path],
+        parquet_path: Optional[Union[str, Path]] = None,
         data_root: Optional[Union[str, Path]] = None,
         edf_cache_size: int = 3,
         verbose: bool = False,
     ):
-        self.parquet_path = Path(parquet_path)
+        self.parquet_path = Path(parquet_path) if parquet_path else config.UNIFIED_PARQUET_PATH
         self.data_root = Path(data_root) if data_root else config.LOCAL_DATA_ROOT
         self.edf_cache_size = edf_cache_size
         self.verbose = verbose
@@ -250,7 +251,7 @@ class UnifiedDataLoader:
 
     def _find_edf(self, patient_id: str, date: str, use_clipped: bool) -> Path:
         """Auto-discover EDF file for patient session (tries date-specific, then fallbacks)."""
-        edf_dir = self.data_root / "EEG Project Data" / "EEG" / "edf"
+        edf_dir = self.data_root / "EEG" / "edf"
 
         # Format date for filename (remove hyphens)
         date_str = date.replace("-", "")
@@ -330,6 +331,56 @@ class UnifiedDataLoader:
         """Clear all cached EDF files from memory."""
         self._load_edf_cached.cache_clear()
         logger.info("EDF cache cleared")
+
+    def get_stimulus_audio_path(
+        self, trial: pd.Series, event_id: Optional[str] = None
+    ) -> Optional[Path]:
+        """Get stimulus audio file path for a trial."""
+        trial_type = trial["trial_type"].lower()
+
+        if trial_type == "language":
+            if event_id:
+                return config.SENTENCES_DIR / f"lang{event_id}.wav"
+            events = trial.get("sentences", [])
+            if len(events) > 0:
+                event_id = (
+                    events[0].get("event")
+                    if isinstance(events[0], dict)
+                    else str(events[0])
+                )
+                return config.SENTENCES_DIR / f"lang{event_id}.wav"
+
+        if trial_type in ["left_command", "right_command"]:
+            return config.PROMPTS_DIR / config.COMMAND_AUDIO_FILE
+
+        return None
+
+    def load_stimulus_audio(self, filepath: Union[str, Path]) -> tuple[int, np.ndarray]:
+        """
+        Load stimulus audio file.
+
+        Args:
+            filepath: Path to audio file (.wav format)
+
+        Returns:
+            Tuple of (sample_rate, audio_data as float32 array)
+        """
+        filepath = Path(filepath)
+
+        if not filepath.exists():
+            raise UnifiedDataLoadingError(f"Audio file not found: {filepath}")
+
+        try:
+            fs, data = wav.read(filepath)
+
+            # Convert int to float32 [-1.0, 1.0] range
+            if np.issubdtype(data.dtype, np.integer):
+                max_val = np.iinfo(data.dtype).max
+                data = data.astype(np.float32) / max_val
+
+            return fs, data.astype(np.float32)
+        except Exception as e:
+            raise UnifiedDataLoadingError(f"Failed to load audio from {filepath}: {str(e)}")
 
     # ==================== Validation ====================
 

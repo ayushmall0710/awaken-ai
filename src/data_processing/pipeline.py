@@ -1,8 +1,7 @@
 from pathlib import Path
-
 import pandas as pd
 
-from .normalization import normalize_sentences, normalize_trial_type
+from src.data_processing.normalization import normalize_sentences, normalize_trial_type
 
 # Standard columns for unified stimulus data
 REQUIRED_COLS = [
