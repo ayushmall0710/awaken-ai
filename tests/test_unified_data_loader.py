@@ -26,8 +26,22 @@ def sample_unified_data():
     """Sample unified stimulus data for testing."""
     return {
         "patient_id": ["CON001a", "CON001a", "CON005", "CON005", "CON005", "CON008"],
-        "date": ["2025-01-15", "2025-01-15", "2025-02-14", "2025-02-14", "2025-05-06", "2025-03-10"],
-        "trial_type": ["language", "oddball", "language", "oddball", "language", "language"],
+        "date": [
+            "2025-01-15",
+            "2025-01-15",
+            "2025-02-14",
+            "2025-02-14",
+            "2025-05-06",
+            "2025-03-10",
+        ],
+        "trial_type": [
+            "language",
+            "oddball",
+            "language",
+            "oddball",
+            "language",
+            "language",
+        ],
         "sentences": [
             [{"text": "hello", "order": 1}],
             [{"text": "standard", "order": 1}],
@@ -39,7 +53,14 @@ def sample_unified_data():
         "start_time": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         "end_time": [2.0, 3.0, 4.0, 5.0, 6.0, 7.0],
         "duration": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-        "source_file": ["test.csv", "test.csv", "test.csv", "test.csv", "test.csv", "test.csv"],
+        "source_file": [
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+            "test.csv",
+        ],
     }
 
 
