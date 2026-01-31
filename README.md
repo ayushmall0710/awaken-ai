@@ -43,13 +43,13 @@ export ONEDRIVE_ROOT="/path/to/onedrive"
 
 **Code Quality:**
 
-This project uses `flake8` for linting and `black` for formatting.
+This project uses `ruff` for both linting and formatting.
 CI **checks** for style issues but does not fix them automatically.
 
 **Before committing, run:**
 
 ```bash
-black .
+ruff check --fix . && ruff format .
 ```
 
-This ensures your code passes the CI format check.
+This ensures your code passes the CI format check. You can also install `Ruff` extension to auto-format the code everytime you save the file.

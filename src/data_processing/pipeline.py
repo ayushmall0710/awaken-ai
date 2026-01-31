@@ -1,6 +1,8 @@
-import pandas as pd
 from pathlib import Path
-from .normalization import normalize_trial_type, normalize_sentences
+
+import pandas as pd
+
+from .normalization import normalize_sentences, normalize_trial_type
 
 # Standard columns for unified stimulus data
 REQUIRED_COLS = [
@@ -33,9 +35,7 @@ def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     if "trial_type" in df.columns and "sentences" in df.columns:
         tt_lower = df["trial_type"].astype(str).str.lower().str.strip()
         is_lang_pattern = tt_lower.str.match(r"^lang_\d+$")
-        is_empty_sentences = (
-            df["sentences"].isna() | (df["sentences"] == "") | (df["sentences"] == "[]")
-        )
+        is_empty_sentences = df["sentences"].isna() | (df["sentences"] == "") | (df["sentences"] == "[]")
         mask = is_lang_pattern & is_empty_sentences
         df.loc[mask, "sentences"] = tt_lower[mask].str.extract(r"^lang_(\d+)$")[0]
 

@@ -1,14 +1,14 @@
 """Unified data loader for Parquet file from DAT-03 with cross-patient and single-patient access."""
 
 import logging
-from pathlib import Path
-from typing import Optional, Dict, List, Union
-from functools import lru_cache
 import warnings
+from functools import lru_cache
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
-import pandas as pd
-import numpy as np
 import mne
+import numpy as np
+import pandas as pd
 
 from . import config
 from .patient_data import PatientData
@@ -43,34 +43,26 @@ class UnifiedDataLoader:
 
         # Validate Parquet file exists
         if not self.parquet_path.exists():
-            raise UnifiedDataLoadingError(
-                f"Parquet file not found: {self.parquet_path}"
-            )
+            raise UnifiedDataLoadingError(f"Parquet file not found: {self.parquet_path}")
 
         # Load Parquet file into memory
         logger.info(f"Loading unified data from {self.parquet_path.name}")
         try:
             self.trials_df = pd.read_parquet(self.parquet_path)
         except Exception as e:
-            raise UnifiedDataLoadingError(
-                f"Failed to load Parquet file {self.parquet_path}: {str(e)}"
-            )
+            raise UnifiedDataLoadingError(f"Failed to load Parquet file {self.parquet_path}: {str(e)}")
 
         # Validate schema
         self.validate_schema()
 
         # Set up LRU cache for EDF loading (min size 5 for multi-session support)
-        self._load_edf_cached = lru_cache(maxsize=max(5, edf_cache_size))(
-            self._load_edf_uncached
-        )
+        self._load_edf_cached = lru_cache(maxsize=max(5, edf_cache_size))(self._load_edf_uncached)
 
         # Set MNE logging level
         if not verbose:
             mne.set_log_level("WARNING")
 
-        logger.info(
-            f"Loaded {len(self.trials_df)} trials from {len(self.get_patient_ids())} patients"
-        )
+        logger.info(f"Loaded {len(self.trials_df)} trials from {len(self.get_patient_ids())} patients")
 
     # ==================== Cross-Patient Access ====================
 
@@ -78,9 +70,7 @@ class UnifiedDataLoader:
         """Get all trials from all patients."""
         return self.trials_df.copy()
 
-    def get_trials_by_type(
-        self, trial_type: str, patient_ids: Optional[List[str]] = None
-    ) -> pd.DataFrame:
+    def get_trials_by_type(self, trial_type: str, patient_ids: Optional[List[str]] = None) -> pd.DataFrame:
         """
         Get trials of specific type, optionally filtered by patient(s).
 
@@ -105,8 +95,7 @@ class UnifiedDataLoader:
 
         if len(filtered) == 0:
             warnings.warn(
-                f"No trials found for type '{trial_type}'"
-                + (f" in patients {patient_ids}" if patient_ids else "")
+                f"No trials found for type '{trial_type}'" + (f" in patients {patient_ids}" if patient_ids else "")
             )
 
         return filtered.copy()
@@ -145,11 +134,7 @@ class UnifiedDataLoader:
             CON009      language        89
             ...
         """
-        summary = (
-            self.trials_df.groupby(["patient_id", "trial_type"])
-            .size()
-            .reset_index(name="count")
-        )
+        summary = self.trials_df.groupby(["patient_id", "trial_type"]).size().reset_index(name="count")
         return summary.sort_values(["patient_id", "trial_type"])
 
     # ==================== Single-Patient Access ====================
@@ -172,8 +157,7 @@ class UnifiedDataLoader:
         if len(patient_trials) == 0:
             available = self.get_patient_ids()
             raise UnifiedDataLoadingError(
-                f"Patient '{patient_id}' not found in dataset. "
-                f"Available patients: {available}"
+                f"Patient '{patient_id}' not found in dataset. Available patients: {available}"
             )
 
         return patient_trials.copy()
@@ -223,13 +207,9 @@ class UnifiedDataLoader:
 
             logger.info(f"Loading EDF from direct path: {filepath.name}")
             try:
-                return mne.io.read_raw_edf(
-                    str(filepath), preload=False, verbose=self.verbose
-                )
+                return mne.io.read_raw_edf(str(filepath), preload=False, verbose=self.verbose)
             except Exception as e:
-                raise UnifiedDataLoadingError(
-                    f"Failed to load EDF from {filepath}: {str(e)}"
-                )
+                raise UnifiedDataLoadingError(f"Failed to load EDF from {filepath}: {str(e)}")
 
         # Patient-based loading (normal flow)
         # If date not specified, load based on session count
@@ -244,29 +224,20 @@ class UnifiedDataLoader:
                 return self._load_edf_cached(patient_id, sessions[0], use_clipped)
             else:
                 # Multiple sessions - return Dict with all sessions
-                logger.info(
-                    f"Patient {patient_id} has {len(sessions)} sessions. "
-                    f"Loading all: {sessions}"
-                )
-                return {
-                    session: self._load_edf_cached(patient_id, session, use_clipped)
-                    for session in sessions
-                }
+                logger.info(f"Patient {patient_id} has {len(sessions)} sessions. Loading all: {sessions}")
+                return {session: self._load_edf_cached(patient_id, session, use_clipped) for session in sessions}
         else:
             # Specific date requested - validate and return single Raw
             sessions = self.get_patient_sessions(patient_id)
             if date not in sessions:
                 raise UnifiedDataLoadingError(
-                    f"Date '{date}' not found for patient {patient_id}. "
-                    f"Available sessions: {sessions}"
+                    f"Date '{date}' not found for patient {patient_id}. Available sessions: {sessions}"
                 )
 
             logger.info(f"Loading specific session for {patient_id}: {date}")
             return self._load_edf_cached(patient_id, date, use_clipped)
 
-    def _load_edf_uncached(
-        self, patient_id: str, date: str, use_clipped: bool
-    ) -> mne.io.Raw:
+    def _load_edf_uncached(self, patient_id: str, date: str, use_clipped: bool) -> mne.io.Raw:
         edf_path = self._find_edf(patient_id, date, use_clipped)
 
         logger.info(f"Loading EDF for {patient_id} ({date}): {edf_path.name}")
@@ -275,9 +246,7 @@ class UnifiedDataLoader:
             raw = mne.io.read_raw_edf(edf_path, preload=True, verbose=self.verbose)
             return raw
         except Exception as e:
-            raise UnifiedDataLoadingError(
-                f"Failed to load EDF for {patient_id} on {date} from {edf_path}: {str(e)}"
-            )
+            raise UnifiedDataLoadingError(f"Failed to load EDF for {patient_id} on {date} from {edf_path}: {str(e)}")
 
     def _find_edf(self, patient_id: str, date: str, use_clipped: bool) -> Path:
         """Auto-discover EDF file for patient session (tries date-specific, then fallbacks)."""
@@ -385,9 +354,7 @@ class UnifiedDataLoader:
             "source_file",
         ]
 
-        missing_columns = [
-            col for col in required_columns if col not in self.trials_df.columns
-        ]
+        missing_columns = [col for col in required_columns if col not in self.trials_df.columns]
 
         if missing_columns:
             raise UnifiedDataLoadingError(
@@ -426,9 +393,7 @@ class UnifiedDataLoader:
         try:
             first_sentences = self.trials_df["sentences"].iloc[0]
             if not isinstance(first_sentences, (list, np.ndarray)):
-                warnings.warn(
-                    f"Sentences column has unexpected type: {type(first_sentences)}"
-                )
+                warnings.warn(f"Sentences column has unexpected type: {type(first_sentences)}")
                 validation_results["sentences_valid"] = False
         except (IndexError, KeyError):
             pass
@@ -471,7 +436,7 @@ class UnifiedDataLoader:
         edf_found = False
         for session_date in sessions:
             try:
-                edf_path = self._find_edf(patient_id, session_date, use_clipped=True)
+                _ = self._find_edf(patient_id, session_date, use_clipped=True)
                 validation["edf_exists"] = True
                 edf_found = True
                 break
@@ -489,9 +454,7 @@ class UnifiedDataLoader:
             return validation
 
         # Check timestamp completeness
-        null_counts = (
-            patient_trials[["start_time", "end_time", "duration"]].isnull().sum()
-        )
+        null_counts = patient_trials[["start_time", "end_time", "duration"]].isnull().sum()
         if null_counts.any():
             validation["timestamps_complete"] = False
 
@@ -556,16 +519,8 @@ class UnifiedDataLoader:
             "patient_ids": self.get_patient_ids(),
             "trial_types": self.get_trial_types(),
             "date_range": (
-                (
-                    self.trials_df["date"].min()
-                    if "date" in self.trials_df.columns
-                    else None
-                ),
-                (
-                    self.trials_df["date"].max()
-                    if "date" in self.trials_df.columns
-                    else None
-                ),
+                (self.trials_df["date"].min() if "date" in self.trials_df.columns else None),
+                (self.trials_df["date"].max() if "date" in self.trials_df.columns else None),
             ),
             "edf_cache_size": self.edf_cache_size,
             "edf_cache_stats": self.get_cached_edfs(),
@@ -573,9 +528,4 @@ class UnifiedDataLoader:
 
     def __repr__(self) -> str:
         """String representation of loader."""
-        return (
-            f"UnifiedDataLoader("
-            f"{len(self.trials_df)} trials, "
-            f"{len(self.get_patient_ids())} patients"
-            f")"
-        )
+        return f"UnifiedDataLoader({len(self.trials_df)} trials, {len(self.get_patient_ids())} patients)"

@@ -1,12 +1,12 @@
 """PatientData class for single-patient workflows."""
 
 import logging
-from pathlib import Path
-from typing import Optional, Dict, List, Callable, Union
 import warnings
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Union
 
-import pandas as pd
 import mne
+import pandas as pd
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -46,10 +46,7 @@ class PatientData:
         if len(sessions) == 1:
             return self._find_edf_fn(self.patient_id, sessions[0], use_clipped=True)
         else:
-            return {
-                session: self._find_edf_fn(self.patient_id, session, use_clipped=True)
-                for session in sessions
-            }
+            return {session: self._find_edf_fn(self.patient_id, session, use_clipped=True) for session in sessions}
 
     @property
     def edf_filenames(self) -> Union[str, Dict[str, str]]:
@@ -59,9 +56,7 @@ class PatientData:
             return {date: path.name for date, path in paths.items()}
         return paths.name
 
-    def get_raw(
-        self, date: Optional[str] = None
-    ) -> Union[mne.io.Raw, Dict[str, mne.io.Raw]]:
+    def get_raw(self, date: Optional[str] = None) -> Union[mne.io.Raw, Dict[str, mne.io.Raw]]:
         """
         Get EEG data. Returns Raw for single/specified session, Dict[date, Raw] for multi-session.
 
@@ -96,8 +91,7 @@ class PatientData:
         """Get trial by index."""
         if trial_idx < 0 or trial_idx >= len(self.trials_df):
             raise IndexError(
-                f"Trial index {trial_idx} out of range [0, {len(self.trials_df)-1}] "
-                f"for patient {self.patient_id}"
+                f"Trial index {trial_idx} out of range [0, {len(self.trials_df) - 1}] for patient {self.patient_id}"
             )
 
         return self.trials_df.iloc[trial_idx]
@@ -138,14 +132,10 @@ class PatientData:
         }
 
         # Check timestamp completeness
-        null_counts = (
-            self.trials_df[["start_time", "end_time", "duration"]].isnull().sum()
-        )
+        null_counts = self.trials_df[["start_time", "end_time", "duration"]].isnull().sum()
         if null_counts.any():
             validation["timestamps_complete"] = False
-            warnings.warn(
-                f"Patient {self.patient_id} has trials with missing timing data:\n{null_counts}"
-            )
+            warnings.warn(f"Patient {self.patient_id} has trials with missing timing data:\n{null_counts}")
 
         # Check sentences validity
         for sentences in self.trials_df["sentences"]:
@@ -158,15 +148,12 @@ class PatientData:
                 break
             if sentences and not all(isinstance(s, dict) for s in sentences):
                 validation["sentences_valid"] = False
-                warnings.warn(
-                    f"Patient {self.patient_id} has invalid sentence items "
-                    f"(expected dict elements)"
-                )
+                warnings.warn(f"Patient {self.patient_id} has invalid sentence items (expected dict elements)")
                 break
 
         # Try to load EDF
         try:
-            raw = self.raw
+            _ = self.raw
             validation["edf_loadable"] = True
 
             # TODO(ENG-02): Implement timestamp alignment validation
@@ -183,13 +170,5 @@ class PatientData:
 
     def __repr__(self) -> str:
         sessions = self.list_sessions()
-        session_info = (
-            f"{len(sessions)} session(s)" if len(sessions) > 1 else "single session"
-        )
-        return (
-            f"PatientData("
-            f"patient={self.patient_id}, "
-            f"{len(self.trials_df)} trials, "
-            f"{session_info}"
-            f")"
-        )
+        session_info = f"{len(sessions)} session(s)" if len(sessions) > 1 else "single session"
+        return f"PatientData(patient={self.patient_id}, {len(self.trials_df)} trials, {session_info})"
