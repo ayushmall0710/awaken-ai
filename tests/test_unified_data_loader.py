@@ -9,8 +9,11 @@ Uses fixture-based dummy data for CI compatibility.
 import pandas as pd
 import pytest
 
+from src.data_loading.unified_data_loader import (
+    UnifiedDataLoader,
+    UnifiedDataLoadingError,
+)
 from src.data_loading.patient_data import PatientData
-from src.data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
 
 
 @pytest.fixture
