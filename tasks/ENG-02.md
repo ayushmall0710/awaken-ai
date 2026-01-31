@@ -14,9 +14,12 @@ Implemented timestamp alignment to synchronize experimental event logs (stimuli)
 
 ### 2. Peak Detection (Oddball/Beep Trials)
 
-- **Problem**: Beeps are short pulses, not complex audio.
-- **Solution**: Used peak detection (`scipy.signal.find_peaks`) to identify signal pulses in the DC channel.
-- **Result**: ~99-100% alignment success for oddball trials.
+- **Problem**: Beeps are short pulses mixed with instruction audio, requiring precise separation.
+- **Solution**:
+  - **Instruction Masking**: Implemented `_detect_instruction_end` to find and mask the instruction using cross-correlation, effectively isolating the beep sequence.
+  - **Highpass Filtering**: Applied a 50Hz highpass filter to remove baseline drift and low-frequency noise.
+  - **Envelope Peak Detection**: Used `scipy.signal.find_peaks` on the signal envelope with adaptive prominence (0.5 \* std_dev) to robustly identify beep onsets.
+- **Result**: ~99-100% alignment success for oddball trials, with robust handling of instruction prompts and noise.
 
 ### 3. Data Schema & Validation
 
@@ -25,6 +28,10 @@ Implemented timestamp alignment to synchronize experimental event logs (stimuli)
   - `correlation_score` (confidence metric)
   - `peak_amplitude` (for beeps)
 - **Validation**: Added a robust `validate()` method that provides alignment rates broken down by trial type and identifies specific trials with poor performance.
+
+### 4. Code Optimization
+
+- **Audio Caching**: Implemented `lru_cache` in `UnifiedDataLoader` to cache stimulus audio files, eliminating redundant disk I/O.
 
 ## Why this approach?
 

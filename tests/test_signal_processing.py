@@ -127,3 +127,21 @@ def test_audio_envelope(sine_wave):
     # Allowing some edge artifacts
     mid_vals = envelope[10:-10]
     assert np.allclose(mid_vals, 1.0, atol=0.1)
+
+
+def test_highpass_filter():
+    """Test 50Hz highpass filter removes low freq drift."""
+    # Create signal: 10Hz (drift) + 100Hz (signal)
+    # At 1000Hz fs
+    t = np.linspace(0, 1, 1000)
+    drift = np.sin(2 * np.pi * 10 * t)  # Low freq
+    signal = np.sin(2 * np.pi * 100 * t)  # High freq
+    combined = drift + signal
+
+    filtered = utils.highpass_filter(combined, sfreq=1000, cutoff_hz=50)
+
+    # Low frequency 10Hz should be attenuated (<50Hz)
+    # High frequency 100Hz should be preserved (>50Hz)
+    # Check middle to avoid edge effects
+    assert np.allclose(filtered[100:-100], signal[100:-100], atol=0.2)
+    assert np.std(filtered) < np.std(combined)

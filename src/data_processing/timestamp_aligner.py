@@ -6,7 +6,7 @@ Uses cross-correlation for language/command trials, peak detection for oddball/b
 """
 
 from pathlib import Path
-from typing import Optional, Union, Dict, List
+from typing import Optional, Union, Dict, List, Tuple
 import logging
 
 import pandas as pd
@@ -21,8 +21,6 @@ logger = logging.getLogger(__name__)
 
 
 ALIGNMENT_CONFIG = {
-    "prominence": 1.5,
-    "min_distance_sec": 0.8,
     "search_buffer_sec": 5.0,
 }
 
@@ -33,7 +31,7 @@ TRIAL_TYPE_TO_METHOD = {
     "oddball": "peak_detection",
     "beep": "peak_detection",
     "control": "peak_detection",
-    "loved_one_voice": "peak_detection",
+    "loved_one_voice": "peak_detection",  # TODO: Confirm method (placeholder)
 }
 
 
@@ -100,7 +98,9 @@ class TimestampAligner:
             # Load EDF for this session
             try:
                 # use use_clipped preference from init, using UnifiedDataLoader's cache
-                raw = patient.get_raw(date)
+                raw = self.loader.load_edf(
+                    self.patient_id, date=date, use_clipped=self.use_clipped
+                )
             except Exception as e:
                 logger.warning(f"Skipping session {date}: Could not load EDF ({e})")
                 continue
@@ -159,18 +159,26 @@ class TimestampAligner:
             return 0.0
 
         edf_start_unix = meas_date.timestamp()
-        first_trial_start = stimulus_df["start_time"].iloc[0]
+        first_trial_start = stimulus_df["start_time"].min()
 
         diff = abs(first_trial_start - edf_start_unix)
 
-        if diff > 3600:  # 1 hour
-            correction = (diff // 3600) * 3600
+        if diff > 1800:  # 30 mins (to handle fractional timezones like IST)
+            correction = (diff // 1800) * 1800
             if first_trial_start > edf_start_unix:
                 correction = -correction
             logger.info(f"Timezone offset detected: {correction / 3600:.1f} hours")
             return correction
 
         return 0.0
+
+    def _edf_to_unix(self, edf_time: float) -> float:
+        """Convert EDF-relative time to Unix timestamp."""
+        return edf_time - self.timezone_offset + self.edf_start_unix
+
+    def _unix_to_edf(self, unix_time: float) -> float:
+        """Convert Unix timestamp to EDF-relative time."""
+        return (unix_time - self.edf_start_unix) + self.timezone_offset
 
     def _align_correlation(self, trial: pd.Series) -> pd.DataFrame:
         """Align using cross-correlation with source audio (aligns each event individually)."""
@@ -179,10 +187,8 @@ class TimestampAligner:
             return pd.DataFrame()
 
         # Convert trial unix times to EDF-relative times
-        trial_start_edf = (
-            trial["start_time"] - self.edf_start_unix
-        ) + self.timezone_offset
-        trial_end_edf = (trial["end_time"] - self.edf_start_unix) + self.timezone_offset
+        trial_start_edf = self._unix_to_edf(trial["start_time"])
+        trial_end_edf = self._unix_to_edf(trial["end_time"])
         buffer = ALIGNMENT_CONFIG["search_buffer_sec"]
 
         # Search window for this trial
@@ -232,9 +238,7 @@ class TimestampAligner:
 
             # Convert EDF time back to unix time
             event_start_edf = current_search_start + (lag / src_fs)
-            event_start_unix = (
-                event_start_edf - self.timezone_offset + self.edf_start_unix
-            )
+            event_start_unix = self._edf_to_unix(event_start_edf)
 
             # Enrich event with alignment metadata
             enriched_event = event.copy()
@@ -254,10 +258,19 @@ class TimestampAligner:
         return self._build_trial_result(trial, enriched_events, "correlation")
 
     def _align_peaks(self, trial: pd.Series) -> pd.DataFrame:
-        """Align using peak detection on trial's time window."""
+        """
+        Align using peak detection on trial's time window.
+
+        Approach:
+        1. First detect instruction audio (if prompt file exists) and mask it out
+        2. Use top-N peaks by prominence (N = event count) to filter ghost peaks
+        3. Sort by time and match to events
+        """
+        trial_type = trial["trial_type"].lower()
+
         # Convert trial unix times to EDF-relative times
-        t_start = (trial["start_time"] - self.edf_start_unix) + self.timezone_offset
-        t_end = (trial["end_time"] - self.edf_start_unix) + self.timezone_offset
+        t_start = self._unix_to_edf(trial["start_time"])
+        t_end = self._unix_to_edf(trial["end_time"])
 
         # Extract DC signal chunk for this trial's time window
         start_idx = int(t_start * self.sr)
@@ -268,32 +281,35 @@ class TimestampAligner:
 
         dc_chunk = self.dc_signal[start_idx:end_idx]
 
-        # Run peak detection on this trial's chunk
-        peaks, properties = utils.detect_peaks(
-            dc_chunk,
-            sfreq=self.sr,
-            prominence=ALIGNMENT_CONFIG["prominence"],
-            min_distance_sec=ALIGNMENT_CONFIG["min_distance_sec"],
-            normalize=True,
+        # Step 1: Find instruction end using correlation
+        search_start_idx = self._detect_instruction_end(dc_chunk, trial_type)
+
+        # Step 2: Get valid chunk after instruction
+        valid_chunk = dc_chunk[search_start_idx:]
+
+        # Step 3: Apply highpass filter to remove low-frequency noise
+        filtered_chunk = utils.highpass_filter(valid_chunk, sfreq=self.sr, cutoff_hz=50)
+
+        # Step 4: Detect peaks in envelope
+        events = trial.get("sentences", [])
+        if len(events) == 0:
+            return pd.DataFrame()
+
+        peaks, widths = self._detect_envelope_peaks(
+            filtered_chunk, num_events=len(events)
         )
 
         if len(peaks) == 0:
             return pd.DataFrame()
 
-        # Convert EDF peak times back to unix timestamps
-        peak_times_unix = (
-            (t_start + (peaks / self.sr)) - self.timezone_offset + self.edf_start_unix
-        )
-        peak_amplitudes = dc_chunk[peaks]  # Normalized DC signal values
+        # Adjust peak indices to full chunk coordinates
+        peaks = peaks + search_start_idx
 
-        # Note: scipy may not always return widths, so handle missing case
-        peak_durations = properties.get("widths", np.full(len(peaks), np.nan)) / self.sr
+        # Step 5: Convert to timestamps and enrich events
+        peak_times_unix = self._edf_to_unix(t_start + (peaks / self.sr))
+        peak_amplitudes = dc_chunk[peaks]
+        peak_durations = widths / self.sr
 
-        events = trial.get("sentences", [])
-        if len(events) == 0:
-            return pd.DataFrame()
-
-        # Enrich events with peak metadata
         enriched_events = []
         for idx, event in enumerate(events):
             enriched_event = event.copy()
@@ -320,6 +336,77 @@ class TimestampAligner:
             enriched_events.append(enriched_event)
 
         return self._build_trial_result(trial, enriched_events, "peak_detection")
+
+    def _detect_instruction_end(self, dc_chunk: np.ndarray, trial_type: str) -> int:
+        """Find where instruction audio ends using cross-correlation."""
+        prompt_map = {"oddball": "oddballprompt.wav"}
+        prompt_file = prompt_map.get(trial_type)
+
+        if not prompt_file:
+            return 0
+
+        prompt_path = config.PROMPTS_DIR / prompt_file
+        try:
+            src_fs, src_data = self.loader.load_stimulus_audio(prompt_path)
+            src_envelope = utils.audio_envelope(src_data, sample_rate=src_fs)
+
+            dc_resampled = utils.resample_signal(dc_chunk, int(self.sr), src_fs)
+            lag, score = utils.cross_correlate(dc_resampled, src_envelope)
+
+            if score >= 0.7:
+                instruction_duration_samples = int(len(src_data) / src_fs * self.sr)
+                instruction_start_samples = int(lag / src_fs * self.sr)
+                search_start_idx = (
+                    instruction_start_samples + instruction_duration_samples
+                )
+                logger.info(
+                    f"Instruction detected (score={score:.2f}), masking first {search_start_idx/self.sr:.1f}s"
+                )
+                return search_start_idx
+            else:
+                logger.warning(
+                    f"Instruction not found (score={score:.2f}). Using full window."
+                )
+        except Exception as e:
+            logger.warning(f"Failed to detect instruction: {e}")
+
+        return 0
+
+    def _detect_envelope_peaks(
+        self, signal_data: np.ndarray, num_events: int
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Detect peaks in envelope and return top-N by prominence."""
+        envelope = utils.audio_envelope(signal_data, sample_rate=self.sr, smooth_ms=30)
+
+        peaks, properties = utils.detect_peaks(
+            envelope,
+            sfreq=self.sr,
+            prominence=np.std(envelope) * 0.5,
+            min_distance_sec=0.3,
+            normalize=False,
+        )
+
+        if len(peaks) == 0:
+            return np.array([]), np.array([])
+
+        prominences = properties.get("prominences", np.ones(len(peaks)))
+        widths = properties.get("widths", np.full(len(peaks), np.nan))
+
+        if len(peaks) > num_events:
+            top_indices = np.argsort(prominences)[::-1][:num_events]
+            peaks = peaks[top_indices]
+            widths = widths[top_indices]
+            logger.info(
+                f"Envelope: Filtered {len(prominences)} peaks to top {num_events}"
+            )
+        elif len(peaks) < num_events:
+            raise ValueError(
+                f"Insufficient peaks: Found {len(peaks)} for {num_events} events."
+            )
+
+        # Sort by time
+        sort_order = np.argsort(peaks)
+        return peaks[sort_order], widths[sort_order]
 
     def _build_trial_result(
         self,

@@ -343,6 +343,7 @@ class UnifiedDataLoader:
                 return config.SENTENCES_DIR / f"lang{event_id}.wav"
             events = trial.get("sentences", [])
             if len(events) > 0:
+                # Default to first event if ID not specified (common for single-sentence trials)
                 event_id = (
                     events[0].get("event")
                     if isinstance(events[0], dict)
@@ -355,6 +356,7 @@ class UnifiedDataLoader:
 
         return None
 
+    @lru_cache(maxsize=3)
     def load_stimulus_audio(self, filepath: Union[str, Path]) -> tuple[int, np.ndarray]:
         """
         Load stimulus audio file.
@@ -363,7 +365,9 @@ class UnifiedDataLoader:
             filepath: Path to audio file (.wav format)
 
         Returns:
-            Tuple of (sample_rate, audio_data as float32 array)
+            Tuple[int, np.ndarray]: (sample_rate, audio_data)
+                - sample_rate: int (Hz)
+                - audio_data: float32 array aligned to [-1.0, 1.0]
         """
         filepath = Path(filepath)
 

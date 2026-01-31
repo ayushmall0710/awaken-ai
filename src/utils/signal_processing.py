@@ -8,8 +8,7 @@ from typing import Tuple, List, Any
 import logging
 
 import numpy as np
-import scipy.signal as signal
-from scipy.signal import find_peaks, hilbert
+import scipy.signal
 from scipy.ndimage import uniform_filter1d
 import mne
 
@@ -83,17 +82,11 @@ def detect_peaks(
         Tuple of (peaks indices, properties dict)
     """
     min_dist_samples = int(min_distance_sec * sfreq)
+    data = normalize_signal(signal_data) if normalize else signal_data.copy()
 
-    # Normalize if requested
-    data = normalize_signal(signal_data) if normalize else signal_data
-
-    peaks, properties = find_peaks(
-        data,
-        prominence=prominence,
-        distance=min_dist_samples,
-        width=1,  # Request peak widths
+    return scipy.signal.find_peaks(
+        data, prominence=prominence, distance=min_dist_samples, width=1
     )
-    return peaks, properties
 
 
 def resample_signal(signal_data: np.ndarray, src_hz: int, target_hz: int) -> np.ndarray:
@@ -110,7 +103,7 @@ def resample_signal(signal_data: np.ndarray, src_hz: int, target_hz: int) -> np.
     """
     if src_hz == target_hz:
         return signal_data
-    return signal.resample_poly(signal_data, target_hz, src_hz)
+    return scipy.signal.resample_poly(signal_data, target_hz, src_hz)
 
 
 def normalize_signal(signal_data: np.ndarray) -> np.ndarray:
@@ -143,7 +136,7 @@ def cross_correlate(recording: np.ndarray, template: np.ndarray) -> Tuple[int, f
     rec_norm = normalize_signal(recording)
     tmpl_norm = normalize_signal(template)
 
-    corr = signal.correlate(rec_norm, tmpl_norm, mode="valid", method="fft")
+    corr = scipy.signal.correlate(rec_norm, tmpl_norm, mode="valid", method="fft")
 
     if len(corr) == 0:
         return 0, 0.0
@@ -171,7 +164,7 @@ def audio_envelope(
     Returns:
         Amplitude envelope of the audio
     """
-    analytic_signal = hilbert(audio)
+    analytic_signal = scipy.signal.hilbert(audio)
     envelope = np.abs(analytic_signal)
 
     if smooth_ms > 0 and sample_rate is not None:
@@ -179,3 +172,30 @@ def audio_envelope(
         envelope = uniform_filter1d(envelope, size=window_samples)
 
     return envelope
+
+
+def highpass_filter(
+    signal_data: np.ndarray, sfreq: float, cutoff_hz: float = 50.0, order: int = 4
+) -> np.ndarray:
+    """
+    Apply highpass filter to remove low-frequency components (e.g., baseline drift).
+
+    Args:
+        signal_data: Input signal array
+        sfreq: Sampling frequency in Hz
+        cutoff_hz: Cutoff frequency in Hz
+        order: Order of the filter
+
+    Returns:
+        Filtered signal array
+    """
+    nyq = sfreq / 2
+    cutoff = min(cutoff_hz, nyq - 1)
+    if cutoff <= 0:
+        logger.warning(
+            f"Invalid cutoff frequency {cutoff_hz}Hz for sfreq {sfreq}Hz. Returning original signal."
+        )
+        return signal_data.copy()
+
+    b, a = scipy.signal.butter(order, cutoff / nyq, btype="high")
+    return scipy.signal.filtfilt(b, a, signal_data)

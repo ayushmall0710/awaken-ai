@@ -124,6 +124,7 @@ def test_align_end_to_end(aligner, mock_raw, sample_trials_df):
     patient.get_raw.return_value = mock_raw
 
     aligner.loader.get_patient.return_value = patient
+    aligner.loader.load_edf.return_value = mock_raw
 
     with patch.object(aligner, "_align_correlation") as mock_align_corr:
         mock_align_corr.return_value = pd.DataFrame(
@@ -140,7 +141,9 @@ def test_align_end_to_end(aligner, mock_raw, sample_trials_df):
     assert "P001" in results
     assert len(results["P001"]) == 1
 
-    patient.get_raw.assert_called_with("2024-01-01")
+    aligner.loader.load_edf.assert_called_with(
+        "P001", date="2024-01-01", use_clipped=True
+    )
 
 
 @patch("pandas.read_parquet")
