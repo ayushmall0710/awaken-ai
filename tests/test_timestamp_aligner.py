@@ -3,9 +3,8 @@ import pandas as pd
 import numpy as np
 from unittest.mock import MagicMock, patch
 from pathlib import Path
-from datetime import datetime, timezone
 
-from src.data_processing.timestamp_aligner import TimestampAligner
+from src.data_processing.timestamp_aligner import TimestampAligner, AudioMatch
 
 
 @pytest.fixture
@@ -45,9 +44,8 @@ def test_detect_timezone_offset_negative(aligner, mock_raw):
     assert offset == 7200.0
 
 
-@patch("src.data_processing.timestamp_aligner.utils")
-def test_align_correlation(mock_utils, aligner, mock_raw, sample_trials_df):
-    """Test correlation alignment logic."""
+def test_align_sentence_trials(aligner, mock_raw, sample_trials_df):
+    """Test alignment logic for sentence trials."""
     # Setup aligner context manually
     aligner.patient_id = "P001"
     aligner.raw = mock_raw
@@ -59,25 +57,18 @@ def test_align_correlation(mock_utils, aligner, mock_raw, sample_trials_df):
 
     # Mock loader returning a path
     aligner.loader.get_stimulus_audio_path.return_value = Path("fake_audio.wav")
-    aligner.loader.load_stimulus_audio.return_value = (
-        44100,
-        np.zeros(44100),
-    )  # 1s audio
 
-    # Mock file existence check
-    with patch("pathlib.Path.exists", return_value=True):
-        # Mock signal processing
-        mock_utils.resample_signal.return_value = np.zeros(1000)
-        mock_utils.audio_envelope.return_value = np.zeros(1000)
-
-        # Lag=22050 samples (0.5s at 44100Hz)
-        def mock_cross_corr(sig1, sig2):
-            return 22050, 0.95
-
-        mock_utils.cross_correlate.side_effect = mock_cross_corr
+    # Mock _compute_audio_match to return a valid AudioMatch dataclass
+    # We patch the METHOD on the instance or class
+    with patch.object(aligner, "_compute_audio_match") as mock_match:
+        # Return match at offset 0.5s, duration 1.0s, score 0.95
+        mock_match.return_value = AudioMatch(
+            offset_seconds=0.5, duration_seconds=1.0, score=0.95
+        )
 
         trial = sample_trials_df.iloc[0]
-        result_df = aligner._align_correlation(trial)
+        # Ensure trial has sentences
+        result_df = aligner._align_sentence_trials(trial)
 
     assert not result_df.empty
     aligned_sentence = result_df.iloc[0]["sentences"][0]
@@ -99,17 +90,28 @@ def test_align_peaks(mock_utils, aligner, mock_raw, sample_trials_df):
     aligner.edf_start_unix = mock_raw.info["meas_date"].timestamp()
     aligner.timezone_offset = 0.0
 
-    # Mock peaks: return index 500 (relative to chunk)
-    mock_utils.detect_peaks.return_value = (np.array([500]), {"widths": np.array([50])})
+    # Mock Instruction detection to return 0 (no instruction found/masked)
+    # We can patch _detect_instruction_end directly
+    with patch.object(aligner, "_detect_instruction_end", return_value=0):
+        # Mock peaks: return index 500 (relative to chunk)
+        mock_utils.detect_peaks.return_value = (
+            np.array([500]),
+            {"widths": np.array([50])},
+        )
+        mock_utils.highpass_filter.return_value = np.zeros(1000)
+        mock_utils.audio_envelope.return_value = np.zeros(1000)
 
-    trial = sample_trials_df.iloc[0]
-    trial["trial_type"] = "oddball"
+        trial = sample_trials_df.iloc[0]
+        trial["trial_type"] = "oddball"
 
-    result_df = aligner._align_peaks(trial)
+        result_df = aligner._align_peaks(trial)
 
     assert not result_df.empty
     aligned_sentence = result_df.iloc[0]["sentences"][0]
 
+    # Index 500 @ 1000Hz = 0.5s into the chunk
+    # Trial started at t=1.0. Chunk starts at 1.0.
+    # So peak is at 1.0 + 0.5 = 1.5
     expected_unix = aligner.edf_start_unix + 1.5
     assert aligned_sentence["event_start"] == expected_unix
     assert "peak_amplitude" in aligned_sentence
@@ -120,14 +122,18 @@ def test_align_end_to_end(aligner, mock_raw, sample_trials_df):
     # Mock patient and session data
     patient = MagicMock()
     patient.trials_df = sample_trials_df
+    # Ensure trial types map to method
+    sample_trials_df["trial_type"] = "language"
+
     patient.list_sessions.return_value = ["2024-01-01"]
     patient.get_raw.return_value = mock_raw
 
     aligner.loader.get_patient.return_value = patient
     aligner.loader.load_edf.return_value = mock_raw
 
-    with patch.object(aligner, "_align_correlation") as mock_align_corr:
-        mock_align_corr.return_value = pd.DataFrame(
+    # Patch the specific alignment method used for 'language' trials
+    with patch.object(aligner, "_align_sentence_trials") as mock_align_lang:
+        mock_align_lang.return_value = pd.DataFrame(
             [{"patient_id": "P001", "trial_type": "language"}]
         )
 

@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Union
 
 import mne
+import librosa
 import numpy as np
 import pandas as pd
-import scipy.io.wavfile as wav
 
 from src.data_loading import config
 from src.data_loading.patient_data import PatientData
@@ -332,9 +332,7 @@ class UnifiedDataLoader:
         self._load_edf_cached.cache_clear()
         logger.info("EDF cache cleared")
 
-    def get_stimulus_audio_path(
-        self, trial: pd.Series, event_id: Optional[str] = None
-    ) -> Optional[Path]:
+    def get_stimulus_audio_path(self, trial: pd.Series, event_id: Optional[str] = None) -> Optional[Path]:
         """Get stimulus audio file path for a trial."""
         trial_type = trial["trial_type"].lower()
 
@@ -344,11 +342,7 @@ class UnifiedDataLoader:
             events = trial.get("sentences", [])
             if len(events) > 0:
                 # Default to first event if ID not specified (common for single-sentence trials)
-                event_id = (
-                    events[0].get("event")
-                    if isinstance(events[0], dict)
-                    else str(events[0])
-                )
+                event_id = events[0].get("event") if isinstance(events[0], dict) else str(events[0])
                 return config.SENTENCES_DIR / f"lang{event_id}.wav"
 
         if trial_type in ["left_command", "right_command"]:
@@ -375,14 +369,12 @@ class UnifiedDataLoader:
             raise UnifiedDataLoadingError(f"Audio file not found: {filepath}")
 
         try:
-            fs, data = wav.read(filepath)
+            # Load with librosa (supports wav, mp3, etc)
+            # sr=None preserves original sampling rate
+            data, fs = librosa.load(filepath, sr=None)
 
-            # Convert int to float32 [-1.0, 1.0] range
-            if np.issubdtype(data.dtype, np.integer):
-                max_val = np.iinfo(data.dtype).max
-                data = data.astype(np.float32) / max_val
-
-            return fs, data.astype(np.float32)
+            # Ensure float32
+            return int(fs), data.astype(np.float32)
         except Exception as e:
             raise UnifiedDataLoadingError(f"Failed to load audio from {filepath}: {str(e)}")
 
