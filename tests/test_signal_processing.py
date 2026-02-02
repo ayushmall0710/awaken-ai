@@ -1,6 +1,7 @@
-import pytest
+from unittest.mock import MagicMock
+
 import numpy as np
-from unittest.mock import MagicMock, patch
+import pytest
 
 from src.utils import signal_processing as utils
 
@@ -65,7 +66,10 @@ def test_detect_peaks(pulse_signal):
     """Test peak detectionWrapper."""
     # Prominence 1.0 < 5.0 so all should be found
     peaks, properties = utils.detect_peaks(
-        pulse_signal, sfreq=100.0, prominence=1.0, min_distance_sec=0.1  # 10 samples
+        pulse_signal,
+        sfreq=100.0,
+        prominence=1.0,
+        min_distance_sec=0.1,  # 10 samples
     )
 
     np.testing.assert_array_equal(peaks, [20, 50, 80])

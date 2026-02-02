@@ -6,8 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
-import mne
 import librosa
+import mne
 import numpy as np
 import pandas as pd
 

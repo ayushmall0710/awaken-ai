@@ -1,10 +1,11 @@
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from src.data_processing.timestamp_aligner import TimestampAligner, AudioMatch
+import numpy as np
+import pandas as pd
+import pytest
+
+from src.data_processing.timestamp_aligner import AudioMatch, TimestampAligner
 
 
 @pytest.fixture
@@ -20,9 +21,7 @@ def aligner(mock_loader):
 
 def test_detect_timezone_offset_no_offset(aligner, mock_raw):
     """Test 0 offset case (same timezone)."""
-    trials_df = pd.DataFrame(
-        {"start_time": [mock_raw.info["meas_date"].timestamp() + 1.0]}
-    )
+    trials_df = pd.DataFrame({"start_time": [mock_raw.info["meas_date"].timestamp() + 1.0]})
     offset = aligner._detect_timezone_offset(mock_raw, trials_df)
     assert offset == 0.0
 
@@ -62,9 +61,7 @@ def test_align_sentence_trials(aligner, mock_raw, sample_trials_df):
     # We patch the METHOD on the instance or class
     with patch.object(aligner, "_compute_audio_match") as mock_match:
         # Return match at offset 0.5s, duration 1.0s, score 0.95
-        mock_match.return_value = AudioMatch(
-            offset_seconds=0.5, duration_seconds=1.0, score=0.95
-        )
+        mock_match.return_value = AudioMatch(offset_seconds=0.5, duration_seconds=1.0, score=0.95)
 
         trial = sample_trials_df.iloc[0]
         # Ensure trial has sentences
@@ -133,9 +130,7 @@ def test_align_end_to_end(aligner, mock_raw, sample_trials_df):
 
     # Patch the specific alignment method used for 'language' trials
     with patch.object(aligner, "_align_sentence_trials") as mock_align_lang:
-        mock_align_lang.return_value = pd.DataFrame(
-            [{"patient_id": "P001", "trial_type": "language"}]
-        )
+        mock_align_lang.return_value = pd.DataFrame([{"patient_id": "P001", "trial_type": "language"}])
 
         with patch.object(aligner, "_detect_dc_channel", return_value="DC1"):
             with patch(
@@ -147,9 +142,7 @@ def test_align_end_to_end(aligner, mock_raw, sample_trials_df):
     assert "P001" in results
     assert len(results["P001"]) == 1
 
-    aligner.loader.load_edf.assert_called_with(
-        "P001", date="2024-01-01", use_clipped=True
-    )
+    aligner.loader.load_edf.assert_called_with("P001", date="2024-01-01", use_clipped=True)
 
 
 @patch("pandas.read_parquet")
@@ -173,8 +166,6 @@ def test_validate(mock_read_parquet):
         report = TimestampAligner.validate("P001")
 
     # Check for success
-    assert (
-        report.get("status") != "error"
-    ), f"Validation failed with: {report.get('message')}"
+    assert report.get("status") != "error", f"Validation failed with: {report.get('message')}"
     assert report["patient_id"] == "P001"
     assert report["trials"] == 2

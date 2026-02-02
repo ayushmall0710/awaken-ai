@@ -4,20 +4,18 @@ Signal Processing Utilities
 Helper functions for signal processing: peak detection, resampling, normalization, cross-correlation.
 """
 
-from typing import Tuple, List, Any
 import logging
+from typing import Any, List, Tuple
 
+import mne
 import numpy as np
 import scipy.signal
 from scipy.ndimage import uniform_filter1d
-import mne
 
 logger = logging.getLogger(__name__)
 
 
-def select_best_dc_channel(
-    raw: mne.io.Raw, keywords: List[str] = ["DC", "AUX", "AUDIO", "DIG", "STIM"]
-) -> str:
+def select_best_dc_channel(raw: mne.io.Raw, keywords: List[str] = ["DC", "AUX", "AUDIO", "DIG", "STIM"]) -> str:
     """
     Select the best DC channel based on keywords and standard deviation.
 
@@ -84,9 +82,7 @@ def detect_peaks(
     min_dist_samples = int(min_distance_sec * sfreq)
     data = normalize_signal(signal_data) if normalize else signal_data.copy()
 
-    return scipy.signal.find_peaks(
-        data, prominence=prominence, distance=min_dist_samples, width=1
-    )
+    return scipy.signal.find_peaks(data, prominence=prominence, distance=min_dist_samples, width=1)
 
 
 def resample_signal(signal_data: np.ndarray, src_hz: int, target_hz: int) -> np.ndarray:
@@ -147,9 +143,7 @@ def cross_correlate(recording: np.ndarray, template: np.ndarray) -> Tuple[int, f
     return lag, min(max(score, 0.0), 1.0)
 
 
-def audio_envelope(
-    audio: np.ndarray, sample_rate: float = None, smooth_ms: float = 20
-) -> np.ndarray:
+def audio_envelope(audio: np.ndarray, sample_rate: float = None, smooth_ms: float = 20) -> np.ndarray:
     """
     Compute audio amplitude envelope using Hilbert transform.
 
@@ -174,9 +168,7 @@ def audio_envelope(
     return envelope
 
 
-def highpass_filter(
-    signal_data: np.ndarray, sfreq: float, cutoff_hz: float = 50.0, order: int = 4
-) -> np.ndarray:
+def highpass_filter(signal_data: np.ndarray, sfreq: float, cutoff_hz: float = 50.0, order: int = 4) -> np.ndarray:
     """
     Apply highpass filter to remove low-frequency components (e.g., baseline drift).
 
@@ -192,9 +184,7 @@ def highpass_filter(
     nyq = sfreq / 2
     cutoff = min(cutoff_hz, nyq - 1)
     if cutoff <= 0:
-        logger.warning(
-            f"Invalid cutoff frequency {cutoff_hz}Hz for sfreq {sfreq}Hz. Returning original signal."
-        )
+        logger.warning(f"Invalid cutoff frequency {cutoff_hz}Hz for sfreq {sfreq}Hz. Returning original signal.")
         return signal_data.copy()
 
     b, a = scipy.signal.butter(order, cutoff / nyq, btype="high")

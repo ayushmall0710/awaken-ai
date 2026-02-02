@@ -5,14 +5,14 @@ Aligns stimulus events with EDF recordings using DC channel analysis.
 Uses cross-correlation for language/command trials, peak detection for oddball/beep.
 """
 
-from pathlib import Path
-from typing import Optional, Union, Dict, List, Tuple
-from dataclasses import dataclass, asdict
 import logging
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
-import pandas as pd
-import numpy as np
 import mne
+import numpy as np
+import pandas as pd
 
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
@@ -118,9 +118,7 @@ class TimestampAligner:
             # Load EDF for this session
             try:
                 # use use_clipped preference from init, using UnifiedDataLoader's cache
-                raw = self.loader.load_edf(
-                    self.patient_id, date=date, use_clipped=self.use_clipped
-                )
+                raw = self.loader.load_edf(self.patient_id, date=date, use_clipped=self.use_clipped)
             except Exception as e:
                 logger.warning(f"Skipping session {date}: Could not load EDF ({e})")
                 continue
@@ -172,9 +170,7 @@ class TimestampAligner:
         """Auto-detect DC channel from EDF using signal_processing utility."""
         return utils.select_best_dc_channel(raw)
 
-    def _detect_timezone_offset(
-        self, raw: mne.io.Raw, stimulus_df: pd.DataFrame
-    ) -> float:
+    def _detect_timezone_offset(self, raw: mne.io.Raw, stimulus_df: pd.DataFrame) -> float:
         """Detect timezone offset by comparing EDF start time with first trial."""
         meas_date = raw.info.get("meas_date")
         if meas_date is None or stimulus_df.empty:
@@ -229,9 +225,7 @@ class TimestampAligner:
             dc_chunk_env = utils.audio_envelope(dc_chunk, sample_rate=self.sr)
 
             # 3. Resample DC Envelope to Source Audio Rate
-            dc_chunk_env_resampled = utils.resample_signal(
-                dc_chunk_env, int(self.sr), int(src_fs)
-            )
+            dc_chunk_env_resampled = utils.resample_signal(dc_chunk_env, int(self.sr), int(src_fs))
 
             # 4. Correlate
             lag, score = utils.cross_correlate(dc_chunk_env_resampled, src_envelope)
@@ -362,14 +356,10 @@ class TimestampAligner:
         )
 
         if prompt_result:
-            logger.info(
-                f"Found prompt for {trial_type} trial (score={prompt_result.correlation_score:.2f})"
-            )
+            logger.info(f"Found prompt for {trial_type} trial (score={prompt_result.correlation_score:.2f})")
             commands_search_start = self._unix_to_edf(prompt_result.event_end)
         else:
-            logger.warning(
-                f"Prompt not found for {trial_type} trial. Using trial start."
-            )
+            logger.warning(f"Prompt not found for {trial_type} trial. Using trial start.")
             commands_search_start = trial_start
 
         enriched_events = []
@@ -447,9 +437,7 @@ class TimestampAligner:
         if len(events) == 0:
             return pd.DataFrame()
 
-        peaks, widths = self._detect_envelope_peaks(
-            filtered_chunk, num_events=len(events)
-        )
+        peaks, widths = self._detect_envelope_peaks(filtered_chunk, num_events=len(events))
 
         if len(peaks) == 0:
             return pd.DataFrame()
@@ -467,20 +455,12 @@ class TimestampAligner:
             enriched_event = event.copy()
             if idx < len(peak_times_unix):
                 event_start = float(peak_times_unix[idx])
-                beep_duration = (
-                    float(peak_durations[idx])
-                    if not np.isnan(peak_durations[idx])
-                    else None
-                )
+                beep_duration = float(peak_durations[idx]) if not np.isnan(peak_durations[idx]) else None
 
                 enriched_event.update(
                     {
                         "event_start": event_start,
-                        "event_end": (
-                            event_start + beep_duration
-                            if beep_duration
-                            else event_start
-                        ),
+                        "event_end": (event_start + beep_duration if beep_duration else event_start),
                         "event_duration": beep_duration,
                         "peak_amplitude": float(peak_amplitudes[idx]),
                     }
@@ -503,17 +483,13 @@ class TimestampAligner:
         if match:
             # Calculate end index in samples
             end_samples = int((match.offset_seconds + match.duration_seconds) * self.sr)
-            logger.info(
-                f"Instruction detected (score={match.score:.2f}), masking first {end_samples / self.sr:.1f}s"
-            )
+            logger.info(f"Instruction detected (score={match.score:.2f}), masking first {end_samples / self.sr:.1f}s")
             return max(0, end_samples)
 
         logger.warning("Instruction not found. Using full window.")
         return 0
 
-    def _detect_envelope_peaks(
-        self, signal_data: np.ndarray, num_events: int
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    def _detect_envelope_peaks(self, signal_data: np.ndarray, num_events: int) -> Tuple[np.ndarray, np.ndarray]:
         """Detect peaks in envelope and return top-N by prominence."""
         envelope = utils.audio_envelope(signal_data, sample_rate=self.sr, smooth_ms=30)
 
@@ -534,13 +510,9 @@ class TimestampAligner:
         if len(peaks) > num_events:
             top_indices = np.argsort(prominences)[::-1][:num_events]
             peaks, widths = peaks[top_indices], widths[top_indices]
-            logger.info(
-                f"Envelope: Filtered {len(prominences)} peaks to top {num_events}"
-            )
+            logger.info(f"Envelope: Filtered {len(prominences)} peaks to top {num_events}")
         elif len(peaks) < num_events:
-            raise ValueError(
-                f"Insufficient peaks: Found {len(peaks)} for {num_events} events."
-            )
+            raise ValueError(f"Insufficient peaks: Found {len(peaks)} for {num_events} events.")
 
         sort_order = np.argsort(peaks)
         return peaks[sort_order], widths[sort_order]
@@ -627,13 +599,9 @@ class TimestampAligner:
             lambda x: isinstance(x, dict) and x.get("event_start") is not None
         )
         # Re-join with trial_type from original df since index matches
-        trial_stats = events_df.groupby(level=0).agg(
-            total=("sentences", "count"), aligned=("is_aligned", "sum")
-        )
+        trial_stats = events_df.groupby(level=0).agg(total=("sentences", "count"), aligned=("is_aligned", "sum"))
         trial_stats["type"] = df["trial_type"]
-        trial_stats["pct"] = (
-            trial_stats["aligned"] / trial_stats["total"] * 100
-        ).fillna(0)
+        trial_stats["pct"] = (trial_stats["aligned"] / trial_stats["total"] * 100).fillna(0)
 
         worst_trials_df = trial_stats.sort_values("pct").reset_index()
         worst_trials = worst_trials_df.to_dict("records")
@@ -659,19 +627,13 @@ class TimestampAligner:
 
         # Overall Stats
         pct = (events_with_start / total_events * 100) if total_events > 0 else 0
-        print(
-            f"  Overall: {events_with_start}/{total_events} events aligned ({pct:.1f}%)"
-        )
+        print(f"  Overall: {events_with_start}/{total_events} events aligned ({pct:.1f}%)")
         print()
 
         print("  By Trial Type:")
         for t_type, stats in type_stats.items():
-            t_pct = (
-                (stats["aligned"] / stats["total"] * 100) if stats["total"] > 0 else 0
-            )
-            print(
-                f"    • {t_type:<10}: {stats['aligned']}/{stats['total']} ({t_pct:.1f}%)"
-            )
+            t_pct = (stats["aligned"] / stats["total"] * 100) if stats["total"] > 0 else 0
+            print(f"    • {t_type:<10}: {stats['aligned']}/{stats['total']} ({t_pct:.1f}%)")
 
         if not scores.empty:
             count = len(scores)
@@ -689,9 +651,7 @@ class TimestampAligner:
         print("  Trials Performance:")
         for t in worst_trials:
             if t["pct"] < 100:
-                print(
-                    f"    • Trial {t['index']} ({t['type']}): {t['aligned']}/{t['total']} aligned ({t['pct']:.1f}%)"
-                )
+                print(f"    • Trial {t['index']} ({t['type']}): {t['aligned']}/{t['total']} aligned ({t['pct']:.1f}%)")
             else:
                 print("    • None (all trials 100% aligned)")
                 break
