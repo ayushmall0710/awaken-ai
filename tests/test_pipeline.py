@@ -1,7 +1,6 @@
-import pytest
 import pandas as pd
 
-from data_processing.pipeline import process_stimulus_df, REQUIRED_COLS
+from data_processing.pipeline import REQUIRED_COLS, process_stimulus_df
 
 
 class TestProcessStimulusDf:

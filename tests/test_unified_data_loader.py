@@ -6,19 +6,11 @@ Run with: pytest tests/test_unified_data_loader.py -v
 Uses fixture-based dummy data for CI compatibility.
 """
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
-# Add src to path
-import sys
-
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root / "src"))
-
-from data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
-from data_loading.patient_data import PatientData
+from src.data_loading.patient_data import PatientData
+from src.data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
 
 
 @pytest.fixture

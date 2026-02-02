@@ -11,6 +11,5 @@ mutagen>=1.47.0
 openai-whisper>=20231117
 pyarrow>=14.0
 librosa>=0.10
-flake8>=7.0.0
-black>=24.0.0
+ruff>=0.1.0
 pytest>=7.4

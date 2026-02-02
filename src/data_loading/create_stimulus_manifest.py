@@ -7,16 +7,14 @@ import subprocess
 import warnings
 from itertools import chain
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 import pandas as pd
 import whisper
 from mutagen import File
 from tqdm import tqdm
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Suppress Whisper FP16 warnings
@@ -182,9 +180,7 @@ def _transcribe_audio(filepath: Path, model: Any):
         }
 
 
-def _process_single_file(
-    filepath: Path, stimulus_type_map: Dict, audio_folder: Path, model: Any
-):
+def _process_single_file(filepath: Path, stimulus_type_map: Dict, audio_folder: Path, model: Any):
     """Process a single file (metadata + transcription)."""
     metadata = _extract_stimulus_metadata(filepath)
     transcript_info = _transcribe_audio(filepath, model)
@@ -193,9 +189,7 @@ def _process_single_file(
         "stimulus_id": _extract_stimulus_id(filepath),
         "filename": filepath.name,
         "filepath": (
-            filepath.relative_to(audio_folder.parent)
-            if audio_folder.parent in filepath.parents
-            else filepath
+            filepath.relative_to(audio_folder.parent) if audio_folder.parent in filepath.parents else filepath
         ),
         "transcript_text": transcript_info["transcript_text"],
         "duration_seconds": metadata["duration_seconds"],
@@ -216,11 +210,7 @@ def _scan_audio_files(audio_folder: Path):
         if not level1_folder.is_dir():
             continue
 
-        folder_files = list(
-            chain.from_iterable(
-                level1_folder.rglob(f"*{ext}") for ext in AUDIO_EXTENSIONS
-            )
-        )
+        folder_files = list(chain.from_iterable(level1_folder.rglob(f"*{ext}") for ext in AUDIO_EXTENSIONS))
         all_files.extend(folder_files)
 
         stimulus_type = _get_stimulus_type_from_folder(level1_folder.name)
@@ -268,9 +258,7 @@ def create_stimulus_manifest(
     manifest_data = []
     for filepath in tqdm(all_files, desc="Processing audio files", unit="file"):
         try:
-            result = _process_single_file(
-                filepath, stimulus_type_map, audio_folder, model
-            )
+            result = _process_single_file(filepath, stimulus_type_map, audio_folder, model)
             manifest_data.append(result)
         except Exception as e:
             logger.error(f"Error processing {filepath.name}: {e}")

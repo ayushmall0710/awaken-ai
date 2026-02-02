@@ -5,8 +5,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.append(str(PROJECT_ROOT))
 
-from src.data_processing.pipeline import unify_stimulus_data
-from src.data_loading.config import LOCAL_DATA_ROOT
+from src.data_processing.pipeline import unify_stimulus_data  # noqa: E402
 
 
 def main():

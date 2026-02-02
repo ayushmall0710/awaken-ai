@@ -1,8 +1,8 @@
-import pandas as pd
-from pathlib import Path
-import json
 import ast
-import sys
+import json
+from pathlib import Path
+
+import pandas as pd
 
 # Set display options to see full content
 pd.set_option("display.max_colwidth", None)
@@ -74,9 +74,9 @@ def analyze_sentences_column(series):
 
 
 def analyze_file(filepath):
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"ANALYZING: {filepath.name}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
 
     try:
         df = pd.read_csv(filepath)
@@ -93,7 +93,7 @@ def analyze_file(filepath):
 
         # 2. Sentences Analysis
         if "sentences" in df.columns:
-            print(f"\n[sentences] Analysis:")
+            print("\n[sentences] Analysis:")
             analysis = analyze_sentences_column(df["sentences"])
             for k, v in analysis.items():
                 print(f"  {k}: {v}")
@@ -111,13 +111,13 @@ for f in all_files:
 # Analyze Unified Parquet if exists
 parquet_file = DATA_DIR / "unified_stimulus_results.parquet"
 if parquet_file.exists():
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print(f"ANALYZING UNIFIED PARQUET: {parquet_file.name}")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     df_p = pd.read_parquet(parquet_file)
     print(f"Dimensions: {df_p.shape}")
-    print(f"\n[trial_type] Unique Values:")
+    print("\n[trial_type] Unique Values:")
     print(df_p["trial_type"].unique())
-    print(f"\n[sentences] Sample (index 0):")
+    print("\n[sentences] Sample (index 0):")
     print(df_p["sentences"].iloc[0])
     print(f"Type: {type(df_p['sentences'].iloc[0])}")

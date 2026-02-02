@@ -12,13 +12,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 ONEDRIVE_ROOT = os.environ.get(
     "ONEDRIVE_ROOT",
-    str(
-        Path.home()
-        / "Library"
-        / "CloudStorage"
-        / "OneDrive-SharedLibraries-UW"
-        / "Peter Schwab - EEG Project Data"
-    ),
+    str(Path.home() / "Library" / "CloudStorage" / "OneDrive-SharedLibraries-UW" / "Peter Schwab - EEG Project Data"),
     # If your OneDrive is synced to a different location, update this path or export
     # the environment variable
     # Example:

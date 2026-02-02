@@ -1,7 +1,9 @@
-import pytest
-import pandas as pd
 import tempfile
 from pathlib import Path
+
+import pandas as pd
+import pytest
+
 from data_processing.pipeline import process_stimulus_df
 
 

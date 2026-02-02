@@ -1,6 +1,8 @@
-import pandas as pd
-import numpy as np
 import json
+
+import numpy as np
+import pandas as pd
+
 from data_processing.pipeline import process_stimulus_df
 
 
@@ -34,9 +36,7 @@ class TestDataIntegrity:
         """Verify sentences are stored as lists/arrays."""
         if len(unified_df) > 0:
             sample = unified_df["sentences"].iloc[0]
-            assert isinstance(
-                sample, (np.ndarray, list)
-            ), f"Sentences should be list/array, got {type(sample)}"
+            assert isinstance(sample, (np.ndarray, list)), f"Sentences should be list/array, got {type(sample)}"
 
     def test_data_rescue_logic(self, unified_df):
         """Verify that lang_XX data was correctly moved to sentences events."""
@@ -49,9 +49,7 @@ class TestDataIntegrity:
                     has_rescued = True
                     break
 
-        assert (
-            has_rescued
-        ), "Failed to find rescued lang_XX data (events '11' or '70') in sentences column."
+        assert has_rescued, "Failed to find rescued lang_XX data (events '11' or '70') in sentences column."
 
     def test_no_critical_nulls(self, unified_df):
         """Verify patient_id is never null."""
@@ -66,17 +64,11 @@ class TestDataIntegrity:
 
         # Check that all source files end with .csv
         invalid_sources = unified_df[~unified_df["source_file"].str.endswith(".csv")]
-        assert (
-            len(invalid_sources) == 0
-        ), f"Found {len(invalid_sources)} rows with invalid source_file extensions"
+        assert len(invalid_sources) == 0, f"Found {len(invalid_sources)} rows with invalid source_file extensions"
 
         # Check that source files contain expected patterns
         valid_patterns = ["patient_df", "stimulus_results"]
-        valid_count = (
-            unified_df["source_file"]
-            .apply(lambda x: any(pattern in x for pattern in valid_patterns))
-            .sum()
-        )
+        valid_count = unified_df["source_file"].apply(lambda x: any(pattern in x for pattern in valid_patterns)).sum()
 
         # At least some files should match known patterns
         assert valid_count > 0, "No rows found with recognized source file patterns"

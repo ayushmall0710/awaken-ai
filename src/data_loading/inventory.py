@@ -4,8 +4,8 @@ Verifies and syncs files from OneDrive to local data directory using pattern mat
 """
 
 import argparse
-import shutil
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, List
 
@@ -55,20 +55,14 @@ class DataInventory:
                     base_pattern = pattern.split("**")[0].rstrip("/")
                     file_pattern = pattern.split("**")[-1].lstrip("/")
                     search_root = root / base_pattern if base_pattern else root
-                    found_files = (
-                        list(search_root.rglob(file_pattern))
-                        if search_root.exists()
-                        else []
-                    )
+                    found_files = list(search_root.rglob(file_pattern)) if search_root.exists() else []
                 else:
                     found_files = list(root.glob(pattern))
 
                 for file_path in found_files:
                     if file_path.is_file():
                         try:
-                            rel_path_str = str(file_path.relative_to(root)).replace(
-                                "\\", "/"
-                            )
+                            rel_path_str = str(file_path.relative_to(root)).replace("\\", "/")
                             if rel_path_str not in files:
                                 files[rel_path_str] = {
                                     "type": file_type,
@@ -88,9 +82,7 @@ class DataInventory:
         files = self._get_pattern_files(root)
         found = list(files.keys())
         missing_required = [
-            path
-            for path, info in files.items()
-            if info.get("required", False) and not (root / path).exists()
+            path for path, info in files.items() if info.get("required", False) and not (root / path).exists()
         ]
         return {"found": found, "missing": [], "missing_required": missing_required}
 
@@ -107,9 +99,7 @@ class DataInventory:
 
         return missing
 
-    def sync_files(
-        self, files_to_sync: List[str], overwrite: bool = False
-    ) -> Dict[str, int]:
+    def sync_files(self, files_to_sync: List[str], overwrite: bool = False) -> Dict[str, int]:
         """Sync specified files from OneDrive to local."""
         stats = {"copied": 0, "skipped": 0, "missing": 0, "errors": 0}
 
@@ -153,9 +143,7 @@ class DataInventory:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Verify and sync EEG data files from OneDrive"
-    )
+    parser = argparse.ArgumentParser(description="Verify and sync EEG data files from OneDrive")
     parser.add_argument(
         "--onedrive-root",
         type=str,
@@ -168,12 +156,8 @@ if __name__ == "__main__":
         default=str(config.LOCAL_DATA_ROOT),
         help=f"Local data root path (default: {config.LOCAL_DATA_ROOT})",
     )
-    parser.add_argument(
-        "--sync", action="store_true", help="Actually sync files (default: just verify)"
-    )
-    parser.add_argument(
-        "--overwrite", action="store_true", help="Overwrite existing files"
-    )
+    parser.add_argument("--sync", action="store_true", help="Actually sync files (default: just verify)")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing files")
     args = parser.parse_args()
 
     inventory = DataInventory(args.onedrive_root, args.local_data_root)
