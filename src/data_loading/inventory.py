@@ -11,7 +11,7 @@ from typing import Dict, List
 
 from tqdm import tqdm
 
-from . import config
+from src.data_loading import config
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)

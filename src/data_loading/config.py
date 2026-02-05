@@ -27,3 +27,19 @@ LOCAL_DATA_ROOT = PROJECT_ROOT / "data"
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE = LOG_DIR / "data_inventory.log"
+
+# Data subdirectories
+EEG_DATA_DIR = LOCAL_DATA_ROOT / "EEG"
+PROCESSED_DATA_DIR = LOCAL_DATA_ROOT / "processed"
+ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
+
+# Audio directories (relative to LOCAL_DATA_ROOT)
+AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
+SENTENCES_DIR = AUDIO_DIR / "sentences"
+PROMPTS_DIR = AUDIO_DIR / "prompts"
+
+# Audio files
+COMMAND_AUDIO_FILE = "motorcommandprompt.wav"
+
+# Unified Parquet File Path
+UNIFIED_PARQUET_PATH = EEG_DATA_DIR / "unified_stimulus_results.parquet"
