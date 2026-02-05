@@ -1,3 +1,40 @@
+[project]
+name = "awaken-ai"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    "mne>=1.6",
+    "tqdm>=4.66",
+    "mutagen>=1.47.0",
+    "pyarrow>=14.0",
+    "librosa>=0.10",
+]
+
+[project.optional-dependencies]
+# Development dependencies (includes heavy packages like Whisper)
+dev = [
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+    "openai-whisper>=20231117",
+]
+# Testing dependencies
+test = [
+    "pytest>=7.4",
+]
+# Linting and formatting
+lint = [
+    "ruff>=0.1.0",
+]
+# All dependencies for complete local development
+all = [
+    "awaken-ai[dev,test,lint]",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

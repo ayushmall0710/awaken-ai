@@ -5,7 +5,13 @@
 1. **Install Python dependencies:**
 
    ```bash
-   pip install -r requirements.txt
+   # For `dev` - recommended full installation
+   pip install -e ".[all]"
+   
+   # Or minimal installation (core dependencies only)
+   pip install -e .
+
+   # Check `pyproject.toml` for more details.
    ```
 
 2. **Install ffmpeg:**
