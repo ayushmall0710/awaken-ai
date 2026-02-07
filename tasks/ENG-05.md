@@ -1,7 +1,5 @@
 # ENG-05: Language Optimization
-
-**Status:** Done (Code Review Complete - 2026-02-07)  
-**Data Validation:** ✅ Verified on CON008, CON009 (72/72 epochs, signal quality confirmed)
+**Data Validation:** Verified on CON008 (199/210 epochs, 6/7 checks), CON009 (553/574 epochs, 5/7 checks)
 **Category:** Signal Processing / Optimization
 **Dependencies:** ENG-01 (Unified Data Loader), ENG-02 (Timestamp Alignment)
 **Target Branch:** `feature/ENG-05-lang-opt` (rebased on `main`)
@@ -20,16 +18,14 @@ This optimization is critical for eventual clinical deployment where high-densit
 
 ### Validated Workflow
 - **Data Loading**: Uses `UnifiedDataLoader` to fetch patient trials and load EDFs.
-### Validated Workflow
-- **Data Loading**: Uses `UnifiedDataLoader` to fetch patient trials and load EDFs.
-- **Timestamp Alignment**: Relies on `src/data_processing/timestamp_aligner.py` to robustly detect timezone offsets and align events.
+- **Timestamp Alignment**: Relies on `src/data_processing/timestamp_aligner.py` to detect timezone offsets and align events. `TimestampAligner` outputs `event_start_edf` (EDF-relative seconds) in enriched events so downstream consumers use aligned times directly without any timezone conversion.
 - **Language Processor**: `src/data_processing/language_optimization.py`
     - **Channel Selection**: Implements `select_optimal_channels` prioritizing LH focus (F7, T7, P7, F3, C3, P3) + Clinical 20 fallback.
     - **Filtering**: Applies 0.5-30Hz bandpass filter to remove drift and high-freq noise.
-    - **Epoching**: Extracts 16s epochs starting from aligned trial start times provided by TimestampAligner.
+    - **Epoching**: Extracts 16s epochs using `event_start_edf` from TimestampAligner output. Converts directly to MNE sample indices without timezone logic.
 
 ### Key Decisions
-- **Integrated Workflow**: `LanguageProcessor` is designed to strictly consume pre-aligned events from `TimestampAligner`. This eliminates the need for duplicate timezone detection logic within the processor itself and ensures consistent event timing across all analyses.
+- **No Duplicate Timezone Logic**: `LanguageProcessor` is a pure consumer of `TimestampAligner` output. Timezone detection and Unix-to-EDF conversion are handled entirely by the aligner, which exposes `event_start_edf` in its enriched events. The processor reads this field directly to compute epoch sample offsets.
 
 ### Verification
 - **Unit Tests**: `tests/test_language_optimization.py` covers initialization, channel selection, filtering, and end-to-end processing.
