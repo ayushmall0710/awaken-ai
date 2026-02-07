@@ -2,16 +2,16 @@
 Debug script to investigate why epoch data is all zeros.
 """
 
-import sys
-import os
 import logging
-import numpy as np
+import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
+
 from src.data_loading.unified_data_loader import UnifiedDataLoader
 from src.data_processing.language_optimization import LanguageProcessor
-import mne
+from src.data_processing.timestamp_aligner import TimestampAligner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,6 +24,13 @@ def debug_signal_chain(patient_id="CON008"):
     print(f"DEBUGGING SIGNAL CHAIN: {patient_id}")
     print(f"{'=' * 60}\n")
 
+    # 0. Align Timestamps
+    print("STEP 0: Align Timestamps")
+    print("-" * 60)
+    aligner = TimestampAligner(patient_id=patient_id)
+    aligned_events = aligner.align(save=False)[patient_id]
+    print(f"Aligned {len(aligned_events)} events")
+
     loader = UnifiedDataLoader()
     processor = LanguageProcessor(loader=loader)
 
@@ -35,7 +42,7 @@ def debug_signal_chain(patient_id="CON008"):
     # Check raw data
     raw_data = raw.get_data()
     print(f"Raw data shape: {raw_data.shape}")
-    print(f"Raw data stats (all channels):")
+    print("Raw data stats (all channels):")
     print(f"  Min: {raw_data.min():.6f}")
     print(f"  Max: {raw_data.max():.6f}")
     print(f"  Mean: {raw_data.mean():.6f}")
@@ -51,13 +58,13 @@ def debug_signal_chain(patient_id="CON008"):
     print(f"  Std: {ch_data.std():.6f}")
 
     # Step 2: After channel selection
-    print(f"\nSTEP 2: After Channel Selection")
+    print("\nSTEP 2: After Channel Selection")
     print("-" * 60)
     raw_selected = processor.select_optimal_channels(raw.copy(), focus="LH")
     data_selected = raw_selected.get_data()
 
     print(f"Selected data shape: {data_selected.shape}")
-    print(f"Selected data stats:")
+    print("Selected data stats:")
     print(f"  Min: {data_selected.min():.6f}")
     print(f"  Max: {data_selected.max():.6f}")
     print(f"  Mean: {data_selected.mean():.6f}")
@@ -72,13 +79,13 @@ def debug_signal_chain(patient_id="CON008"):
         print(f"  Std: {ch_data_sel.std():.6f}")
 
     # Step 3: After filtering
-    print(f"\nSTEP 3: After Filtering (0.5-30 Hz)")
+    print("\nSTEP 3: After Filtering (0.5-30 Hz)")
     print("-" * 60)
     raw_filtered = processor.preprocess_signal(raw_selected)
     data_filtered = raw_filtered.get_data()
 
     print(f"Filtered data shape: {data_filtered.shape}")
-    print(f"Filtered data stats:")
+    print("Filtered data stats:")
     print(f"  Min: {data_filtered.min():.6f}")
     print(f"  Max: {data_filtered.max():.6f}")
     print(f"  Mean: {data_filtered.mean():.6f}")
@@ -93,7 +100,7 @@ def debug_signal_chain(patient_id="CON008"):
         print(f"  Std: {ch_data_filt.std():.6f}")
 
     # Step 4: Check units
-    print(f"\nSTEP 4: Check Data Units")
+    print("\nSTEP 4: Check Data Units")
     print("-" * 60)
 
     # MNE stores data internally in Volts, but displays in µV
@@ -102,21 +109,21 @@ def debug_signal_chain(patient_id="CON008"):
     print(f"Raw data range in µV: [{raw_data.min() * 1e6:.2f}, {raw_data.max() * 1e6:.2f}]")
 
     # Step 5: Check epochs
-    print(f"\nSTEP 5: Create Epochs")
+    print("\nSTEP 5: Create Epochs")
     print("-" * 60)
 
     epochs = processor.process_patient(patient_id, focus="LH")
     epoch_data = epochs.get_data()
 
     print(f"Epoch data shape: {epoch_data.shape}")
-    print(f"Epoch data stats:")
+    print("Epoch data stats:")
     print(f"  Min: {epoch_data.min():.6e}")
     print(f"  Max: {epoch_data.max():.6e}")
     print(f"  Mean: {epoch_data.mean():.6e}")
     print(f"  Std: {epoch_data.std():.6e}")
 
     # Check in µV
-    print(f"\nEpoch data in µV:")
+    print("\nEpoch data in µV:")
     print(f"  Min: {epoch_data.min() * 1e6:.2f} µV")
     print(f"  Max: {epoch_data.max() * 1e6:.2f} µV")
     print(f"  Mean: {epoch_data.mean() * 1e6:.2f} µV")

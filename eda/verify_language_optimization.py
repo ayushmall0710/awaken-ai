@@ -3,17 +3,17 @@ Deep data validation for Language Optimization (ENG-05).
 Verifies epoch alignment, channel selection correctness, and signal quality.
 """
 
-import sys
-import os
 import logging
+import os
+import sys
+
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
-from src.data_processing.language_optimization import LanguageProcessor
 from src.data_loading.unified_data_loader import UnifiedDataLoader
+from src.data_processing.language_optimization import LanguageProcessor
+from src.data_processing.timestamp_aligner import TimestampAligner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,27 +28,44 @@ def verify_patient(patient_id="CON008"):
 
     # Initialize
     loader = UnifiedDataLoader()
-    processor = LanguageProcessor(loader=loader)
 
-    # 1. Load trials and inspect
-    print("1. TRIAL DATA INSPECTION")
+    # 1. Align Timestamps first
+    print("1. TIMESTAMP ALIGNMENT")
     print("-" * 60)
-    trials = loader.get_patient_trials(patient_id)
-    lang_trials = trials[trials["trial_type"] == "language"]
+    aligner = TimestampAligner(patient_id=patient_id)
+    aligned_trials = aligner.align(save=False)[patient_id]
 
-    print(f"Total trials for {patient_id}: {len(trials)}")
-    print(f"Language trials: {len(lang_trials)}")
-    print(f"\nLanguage trial details:")
-    print(f"  Date: {lang_trials['date'].unique()}")
-    print(f"  Duration range: {lang_trials['duration'].min():.1f}s - {lang_trials['duration'].max():.1f}s")
-    print(f"  Mean duration: {lang_trials['duration'].mean():.1f}s")
+    print(f"Aligned trials (rows): {len(aligned_trials)}")
 
-    # Check if trial durations make sense
-    if lang_trials["duration"].min() < 10 or lang_trials["duration"].max() > 20:
-        print(f"⚠️  WARNING: Unusual trial durations detected!")
+    # Flatten nested 'sentences' to get actual events
+    if "sentences" in aligned_trials.columns:
+        aligned_events_flat = aligned_trials.explode("sentences")
+
+        def extract_start(x):
+            if isinstance(x, dict) and "event_start" in x:
+                return x["event_start"]
+            return None
+
+        aligned_events_flat["event_start"] = aligned_events_flat["sentences"].apply(extract_start)
+        aligned_events_flat = aligned_events_flat.dropna(subset=["event_start"])
+    else:
+        aligned_events_flat = aligned_trials
+
+    lang_events = aligned_events_flat[aligned_events_flat["trial_type"] == "language"]
+
+    print(f"Total flattened events: {len(aligned_events_flat)}")
+    print(f"Language events: {len(lang_events)}")
+
+    if lang_events.empty:
+        print("❌ No language events found after alignment!")
+        return False
+
+    print(
+        f"Time range (EDF-relative, approx): {lang_events['event_start'].min():.1f}s - {lang_events['event_start'].max():.1f}s"
+    )
 
     # 2. Load Raw EDF and inspect
-    print(f"\n2. RAW EDF INSPECTION")
+    print("\n2. RAW EDF INSPECTION")
     print("-" * 60)
     raw = loader.load_edf(patient_id)
 
@@ -57,21 +74,12 @@ def verify_patient(patient_id="CON008"):
     print(f"Total channels: {len(raw.ch_names)}")
     print(f"EDF measurement date: {raw.info['meas_date']}")
 
-    # Check EDF start time vs trial times
-    edf_start_unix = raw.info["meas_date"].timestamp()
-    first_trial_time = lang_trials["start_time"].min()
-    last_trial_time = lang_trials["end_time"].max()
-
-    print(f"\nTimestamp alignment check:")
-    print(f"  EDF start (unix): {edf_start_unix}")
-    print(f"  First trial (unix): {first_trial_time}")
-    print(f"  Last trial (unix): {last_trial_time}")
-    print(f"  Offset (hours): {(first_trial_time - edf_start_unix) / 3600:.1f}h")
-
     # 3. Process and get epochs
-    print(f"\n3. EPOCH DATA INSPECTION")
+    print("\n3. EPOCH DATA INSPECTION")
     print("-" * 60)
-    epochs = processor.process_patient(patient_id, focus="LH")
+
+    processor = LanguageProcessor(loader=loader)
+    epochs = processor.process_patient(patient_id, aligned_events=aligned_trials, focus="LH")
 
     if epochs is None:
         print("❌ ERROR: No epochs returned!")
@@ -84,10 +92,9 @@ def verify_patient(patient_id="CON008"):
     print(f"Epoch shape: {epochs.get_data().shape}")  # (n_epochs, n_channels, n_times)
 
     # 4. Verify channel selection logic
-    print(f"\n4. CHANNEL SELECTION VERIFICATION")
+    print("\n4. CHANNEL SELECTION VERIFICATION")
     print("-" * 60)
 
-    original_channels = set(raw.ch_names)
     selected_channels = set(epochs.ch_names)
 
     # Expected LH priority channels
@@ -99,7 +106,7 @@ def verify_patient(patient_id="CON008"):
     if lh_missing:
         print(f"⚠️  LH priority channels missing: {lh_missing}")
     else:
-        print(f"✅ All LH priority channels present")
+        print("✅ All LH priority channels present")
 
     # Check Clinical 20
     clinical_20 = {
@@ -127,13 +134,13 @@ def verify_patient(patient_id="CON008"):
     print(f"Clinical 20 channels found: {len(clinical_found)}/19 expected")
 
     # 5. Signal quality inspection
-    print(f"\n5. SIGNAL QUALITY INSPECTION")
+    print("\n5. SIGNAL QUALITY INSPECTION")
     print("-" * 60)
 
     data = epochs.get_data()  # (n_epochs, n_channels, n_times)
 
     # Check for expected signal characteristics
-    print(f"Data statistics (first epoch):")
+    print("Data statistics (first epoch):")
     first_epoch = data[0]  # (n_channels, n_times)
 
     for i, ch in enumerate(epochs.ch_names[:5]):  # First 5 channels
@@ -147,7 +154,7 @@ def verify_patient(patient_id="CON008"):
     mean_amplitudes = np.abs(data).mean(axis=(0, 2))  # Mean across epochs and time
     std_amplitudes = data.std(axis=(0, 2))
 
-    print(f"\nChannel-wise statistics (all epochs):")
+    print("\nChannel-wise statistics (all epochs):")
     print(f"  Mean amplitude range: {mean_amplitudes.min():.2f} - {mean_amplitudes.max():.2f} µV")
     print(f"  Std dev range: {std_amplitudes.min():.2f} - {std_amplitudes.max():.2f} µV")
 
@@ -159,7 +166,7 @@ def verify_patient(patient_id="CON008"):
         for idx in flat_channels:
             print(f"    - {epochs.ch_names[idx]}")
     else:
-        print(f"✅ No flat channels detected")
+        print("✅ No flat channels detected")
 
     # Check for extreme values (artifacts)
     extreme_threshold = 500  # µV
@@ -170,7 +177,7 @@ def verify_patient(patient_id="CON008"):
         print(f"✅ No extreme artifacts detected (>{extreme_threshold} µV)")
 
     # 6. Verify epoch timing alignment
-    print(f"\n6. EPOCH TIMING VERIFICATION")
+    print("\n6. EPOCH TIMING VERIFICATION")
     print("-" * 60)
 
     # Get the events that were used to create epochs
@@ -178,11 +185,12 @@ def verify_patient(patient_id="CON008"):
 
     # Sample check: First 3 language trials
     print("Checking first 3 language trials alignment:")
-    for i, (idx, trial) in enumerate(lang_trials.head(3).iterrows()):
+    for i, (idx, trial) in enumerate(lang_events.head(3).iterrows()):
         if i >= len(epochs):
             break
 
-        trial_start = trial["start_time"]
+        # event_start is the aligned timestamp from TimestampAligner
+        trial_start = trial["event_start"]
         trial_duration = trial["duration"]
 
         # The epoch should start at trial_start (after timezone correction)
@@ -193,21 +201,21 @@ def verify_patient(patient_id="CON008"):
         print(f"    Epoch duration: {epochs.times[-1] - epochs.times[0]:.1f}s")
 
         if abs(trial_duration - (epochs.times[-1] - epochs.times[0])) > 1.0:
-            print(f"    ⚠️  Duration mismatch > 1s")
+            print("    ⚠️  Duration mismatch > 1s")
         else:
-            print(f"    ✅ Duration matches expected")
+            print("    ✅ Duration matches expected")
 
     # 7. Filter verification
-    print(f"\n7. FILTER APPLICATION VERIFICATION")
+    print("\n7. FILTER APPLICATION VERIFICATION")
     print("-" * 60)
 
     print(f"Highpass filter: {epochs.info['highpass']} Hz (expected: 0.5 Hz)")
     print(f"Lowpass filter: {epochs.info['lowpass']} Hz (expected: 30.0 Hz)")
 
     if epochs.info["highpass"] != 0.5 or epochs.info["lowpass"] != 30.0:
-        print(f"⚠️  WARNING: Filter settings don't match specification!")
+        print("⚠️  WARNING: Filter settings don't match specification!")
     else:
-        print(f"✅ Filters correctly applied")
+        print("✅ Filters correctly applied")
 
     # 8. Final summary
     print(f"\n{'=' * 60}")
@@ -253,15 +261,15 @@ def verify_patient(patient_id="CON008"):
         print("⚠️  Filter settings incorrect")
 
     # Check 6: Epoch count matches trial count
-    if len(epochs) == len(lang_trials):
+    if len(epochs) == len(lang_events):
         print(f"✅ Epoch count matches trial count ({len(epochs)})")
         checks_passed += 1
     else:
-        print(f"⚠️  Epoch count mismatch: {len(epochs)} epochs vs {len(lang_trials)} trials")
+        print(f"⚠️  Epoch count mismatch: {len(epochs)} epochs vs {len(lang_events)} trials")
 
     # Check 7: Signal quality
     if np.any(np.abs(data) > extreme_threshold):
-        print(f"⚠️  Extreme artifacts present")
+        print("⚠️  Extreme artifacts present")
     else:
         print("✅ No extreme artifacts")
         checks_passed += 1

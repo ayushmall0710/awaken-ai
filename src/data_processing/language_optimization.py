@@ -219,6 +219,33 @@ class LanguageProcessor:
             # Single session
             return self._create_epochs_from_aligned(raw, events_df, focus, filter_signal, tmax)
 
+    def _detect_timezone_offset(self, raw: mne.io.Raw, events_df: pd.DataFrame) -> float:
+        """
+        Detect timezone offset by comparing EDF start time with first trial start time.
+        Logic mirrors TimestampAligner to ensuring consistent timing.
+        """
+        meas_date = raw.info.get("meas_date")
+        if meas_date is None or events_df.empty:
+            return 0.0
+
+        edf_start_unix = meas_date.timestamp()
+
+        # Use 'start_time' column for initial offset detection (this is the scheduled/trial time)
+        if "start_time" not in events_df.columns:
+            return 0.0
+
+        first_trial_start = events_df["start_time"].min()
+        diff = abs(first_trial_start - edf_start_unix)
+
+        if diff > 1800:  # 30 mins threshold
+            correction = (diff // 1800) * 1800
+            if first_trial_start > edf_start_unix:
+                correction = -correction
+            logger.info(f"LanguageProcessor detected timezone offset: {correction / 3600:.1f} hours")
+            return correction
+
+        return 0.0
+
     def _create_epochs_from_aligned(
         self,
         raw: mne.io.Raw,
@@ -229,16 +256,7 @@ class LanguageProcessor:
     ) -> Optional[mne.Epochs]:
         """
         Internal helper to create epochs from aligned events for a single session.
-
-        Args:
-            raw: Single MNE Raw object.
-            events_df: Aligned events with 'event_start' (EDF-relative seconds).
-            focus: Channel selection strategy.
-            filter_signal: Apply filtering.
-            tmax: Epoch duration.
-
-        Returns:
-            mne.Epochs or None.
+        Handles both flat (one event per row) and nested (one trial per row) DataFrames.
         """
         # 1. Channel Selection
         raw_selected = self.select_optimal_channels(raw, focus=focus)
@@ -247,17 +265,50 @@ class LanguageProcessor:
         if filter_signal:
             raw_selected = self.preprocess_signal(raw_selected)
 
-        # 3. Convert aligned events to MNE events array
+        # 3. Calculate Timezone Offset
+        timezone_offset = self._detect_timezone_offset(raw, events_df)
+        edf_start_unix = raw.info["meas_date"].timestamp()
+
+        # 4. Convert aligned events to MNE events array
         events = []
         event_id = {"language": 1}
 
-        for _, row in events_df.iterrows():
-            # event_start is already in EDF-relative seconds (from TimestampAligner)
-            onset_sec = row["event_start"]
+        # Determine input structure (TimestampAligner returns nested 'sentences' column)
+        is_nested = "sentences" in events_df.columns and "event_start" not in events_df.columns
+
+        if is_nested:
+            # Flatten by iterating over trials and their nested events
+            iterator = []
+            for _, trial_row in events_df.iterrows():
+                nested_items = trial_row.get("sentences", [])
+                if isinstance(nested_items, list):
+                    iterator.extend(nested_items)
+        else:
+            # Already flat or unknown structure
+            if "event_start" not in events_df.columns:
+                logger.error("Aligner output missing 'event_start' and 'sentences'. Cannot process.")
+                return None
+            iterator = [row.to_dict() for _, row in events_df.iterrows()]
+
+        # Process flattened event stream
+        for event_data in iterator:
+            if not isinstance(event_data, dict):
+                continue
+
+            event_unix = event_data.get("event_start")
+
+            # Skip if alignment failed (NaN or None)
+            if event_unix is None or pd.isna(event_unix):
+                continue
+
+            # Convert Unix timestamp to EDF-relative seconds
+            onset_sec = event_unix - edf_start_unix + timezone_offset
 
             # Validate onset is within recording bounds
             if onset_sec < 0 or onset_sec > raw_selected.times[-1]:
-                logger.warning(f"Event onset {onset_sec:.2f}s out of bounds, skipping.")
+                # Only log if significantly out of bounds to avoid noise
+                if abs(onset_sec) > 5.0 and abs(onset_sec - raw_selected.times[-1]) > 5.0:
+                    logger.debug(f"Event onset {onset_sec:.2f}s out of bounds.")
                 continue
 
             sample = int(onset_sec * raw_selected.info["sfreq"])
@@ -269,7 +320,7 @@ class LanguageProcessor:
 
         events_array = np.array(events)
 
-        # 4. Create Epochs
+        # 5. Create Epochs
         epochs = mne.Epochs(
             raw_selected,
             events_array,
@@ -279,6 +330,8 @@ class LanguageProcessor:
             baseline=None,
             preload=True,
             reject=None,
+            verbose=False,
+            event_repeated="drop",
         )
 
         return epochs
