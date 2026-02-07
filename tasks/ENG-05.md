@@ -20,14 +20,16 @@ This optimization is critical for eventual clinical deployment where high-densit
 
 ### Validated Workflow
 - **Data Loading**: Uses `UnifiedDataLoader` to fetch patient trials and load EDFs.
-- **Timestamp Alignment**: Integrated a shared utility `src/utils/time_utils.py` to robustly detect timezone offsets (e.g., -7h for CON00X patients) between EDF `meas_date` and trial unix timestamps. This ensures accurate epoching.
+### Validated Workflow
+- **Data Loading**: Uses `UnifiedDataLoader` to fetch patient trials and load EDFs.
+- **Timestamp Alignment**: Relies on `src/data_processing/timestamp_aligner.py` to robustly detect timezone offsets and align events.
 - **Language Processor**: `src/data_processing/language_optimization.py`
     - **Channel Selection**: Implements `select_optimal_channels` prioritizing LH focus (F7, T7, P7, F3, C3, P3) + Clinical 20 fallback.
     - **Filtering**: Applies 0.5-30Hz bandpass filter to remove drift and high-freq noise.
-    - **Epoching**: Extracts 16s epochs starting from aligned trial start times.
+    - **Epoching**: Extracts 16s epochs starting from aligned trial start times provided by TimestampAligner.
 
-### Key Refactoring
-- **Shared Timezone Utility**: Extracted `detect_timezone_offset` into `src/utils/time_utils.py` to be used by both `TimestampAligner` and `LanguageProcessor`, eliminating code duplication and ensuring consistent offset calculation logic (handling 30-min offsets).
+### Key Decisions
+- **Integrated Workflow**: `LanguageProcessor` is designed to strictly consume pre-aligned events from `TimestampAligner`. This eliminates the need for duplicate timezone detection logic within the processor itself and ensures consistent event timing across all analyses.
 
 ### Verification
 - **Unit Tests**: `tests/test_language_optimization.py` covers initialization, channel selection, filtering, and end-to-end processing.
