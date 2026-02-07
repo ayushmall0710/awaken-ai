@@ -219,33 +219,6 @@ class LanguageProcessor:
             # Single session
             return self._create_epochs_from_aligned(raw, events_df, focus, filter_signal, tmax)
 
-    def _detect_timezone_offset(self, raw: mne.io.Raw, events_df: pd.DataFrame) -> float:
-        """
-        Detect timezone offset by comparing EDF start time with first trial start time.
-        Logic mirrors TimestampAligner to ensuring consistent timing.
-        """
-        meas_date = raw.info.get("meas_date")
-        if meas_date is None or events_df.empty:
-            return 0.0
-
-        edf_start_unix = meas_date.timestamp()
-
-        # Use 'start_time' column for initial offset detection (this is the scheduled/trial time)
-        if "start_time" not in events_df.columns:
-            return 0.0
-
-        first_trial_start = events_df["start_time"].min()
-        diff = abs(first_trial_start - edf_start_unix)
-
-        if diff > 1800:  # 30 mins threshold
-            correction = (diff // 1800) * 1800
-            if first_trial_start > edf_start_unix:
-                correction = -correction
-            logger.info(f"LanguageProcessor detected timezone offset: {correction / 3600:.1f} hours")
-            return correction
-
-        return 0.0
-
     def _create_epochs_from_aligned(
         self,
         raw: mne.io.Raw,
@@ -265,16 +238,16 @@ class LanguageProcessor:
         if filter_signal:
             raw_selected = self.preprocess_signal(raw_selected)
 
-        # 3. Calculate Timezone Offset
-        timezone_offset = self._detect_timezone_offset(raw, events_df)
-        edf_start_unix = raw.info["meas_date"].timestamp()
-
-        # 4. Convert aligned events to MNE events array
+        # 3. Convert aligned events to MNE events array
+        # TimestampAligner provides event_start_edf (EDF-relative seconds) directly,
+        # so no timezone conversion is needed here.
+        sfreq = raw_selected.info["sfreq"]
+        recording_end = raw_selected.times[-1]
         events = []
         event_id = {"language": 1}
 
         # Determine input structure (TimestampAligner returns nested 'sentences' column)
-        is_nested = "sentences" in events_df.columns and "event_start" not in events_df.columns
+        is_nested = "sentences" in events_df.columns and "event_start_edf" not in events_df.columns
 
         if is_nested:
             # Flatten by iterating over trials and their nested events
@@ -284,9 +257,9 @@ class LanguageProcessor:
                 if isinstance(nested_items, list):
                     iterator.extend(nested_items)
         else:
-            # Already flat or unknown structure
-            if "event_start" not in events_df.columns:
-                logger.error("Aligner output missing 'event_start' and 'sentences'. Cannot process.")
+            # Already flat
+            if "event_start_edf" not in events_df.columns:
+                logger.error("Aligner output missing 'event_start_edf' and 'sentences'. Cannot process.")
                 return None
             iterator = [row.to_dict() for _, row in events_df.iterrows()]
 
@@ -295,23 +268,19 @@ class LanguageProcessor:
             if not isinstance(event_data, dict):
                 continue
 
-            event_unix = event_data.get("event_start")
+            onset_sec = event_data.get("event_start_edf")
 
             # Skip if alignment failed (NaN or None)
-            if event_unix is None or pd.isna(event_unix):
+            if onset_sec is None or pd.isna(onset_sec):
                 continue
 
-            # Convert Unix timestamp to EDF-relative seconds
-            onset_sec = event_unix - edf_start_unix + timezone_offset
-
             # Validate onset is within recording bounds
-            if onset_sec < 0 or onset_sec > raw_selected.times[-1]:
-                # Only log if significantly out of bounds to avoid noise
-                if abs(onset_sec) > 5.0 and abs(onset_sec - raw_selected.times[-1]) > 5.0:
+            if onset_sec < 0 or onset_sec > recording_end:
+                if abs(onset_sec) > 5.0 and abs(onset_sec - recording_end) > 5.0:
                     logger.debug(f"Event onset {onset_sec:.2f}s out of bounds.")
                 continue
 
-            sample = int(onset_sec * raw_selected.info["sfreq"])
+            sample = int(onset_sec * sfreq)
             events.append([sample, 0, 1])
 
         if not events:

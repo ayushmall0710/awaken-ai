@@ -95,7 +95,8 @@ def aligned_events_df():
                 "patient_id": "TEST",
                 "date": "2024-01-01",
                 "trial_type": "language",
-                "event_start": base_ts + 5.0,  # EDF-relative seconds converted to Unix
+                "event_start": base_ts + 5.0,
+                "event_start_edf": 5.0,
                 "event_end": base_ts + 21.0,
                 "duration": 16.0,
             },
@@ -103,7 +104,8 @@ def aligned_events_df():
                 "patient_id": "TEST",
                 "date": "2024-01-01",
                 "trial_type": "language",
-                "event_start": base_ts + 25.0,  # Another trial at 25s
+                "event_start": base_ts + 25.0,
+                "event_start_edf": 25.0,
                 "event_end": base_ts + 41.0,
                 "duration": 16.0,
             },
