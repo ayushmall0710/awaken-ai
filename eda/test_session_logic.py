@@ -2,8 +2,8 @@
 Test to verify single-session trial filtering works correctly
 """
 
-import sys
 import os
+import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -36,15 +36,15 @@ def test_single_session_logic():
         print(f"  Trial dates: {trial_dates}")
 
         if edf_date in trial_dates:
-            print(f"  ✅ EDF date matches trial date")
+            print("  ✅ EDF date matches trial date")
         else:
             print(f"  ❌  Mismatch! EDF: {edf_date}, Trials: {trial_dates}")
 
         # Check if ALL trials match this date
         if len(trial_dates) == 1 and edf_date in trial_dates:
-            print(f"  ✅ All trials are from same session as EDF")
+            print("  ✅ All trials are from same session as EDF")
         else:
-            print(f"  ⚠️  trials span multiple dates but EDF is single session!")
+            print("  ⚠️  trials span multiple dates but EDF is single session!")
     else:
         print("Dict returned (multiple sessions)")
         for date, raw_obj in raw.items():

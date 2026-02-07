@@ -61,7 +61,8 @@ def verify_patient(patient_id="CON008"):
         return False
 
     print(
-        f"Time range (EDF-relative, approx): {lang_events['event_start'].min():.1f}s - {lang_events['event_start'].max():.1f}s"
+        f"Time range (EDF-relative, approx): {lang_events['event_start'].min():.1f}s - "
+        f"{lang_events['event_start'].max():.1f}s"
     )
 
     # 2. Load Raw EDF and inspect
