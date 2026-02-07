@@ -88,22 +88,23 @@ def mock_loader(mock_language_raw):
 @pytest.fixture
 def aligned_events_df():
     """Mock aligned events from TimestampAligner."""
+    base_ts = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
     return pd.DataFrame(
         [
             {
                 "patient_id": "TEST",
                 "date": "2024-01-01",
                 "trial_type": "language",
-                "event_start": 5.0,  # EDF-relative seconds
-                "event_end": 21.0,
+                "event_start": base_ts + 5.0,  # EDF-relative seconds converted to Unix
+                "event_end": base_ts + 21.0,
                 "duration": 16.0,
             },
             {
                 "patient_id": "TEST",
                 "date": "2024-01-01",
                 "trial_type": "language",
-                "event_start": 25.0,  # Another trial at 25s
-                "event_end": 41.0,
+                "event_start": base_ts + 25.0,  # Another trial at 25s
+                "event_end": base_ts + 41.0,
                 "duration": 16.0,
             },
         ]
@@ -189,4 +190,3 @@ def test_process_patient_with_aligned_events(mock_loader, aligned_events_df):
 
     # Should process aligned events
     assert len(epochs) >= 1
-
