@@ -137,7 +137,7 @@ def verify_patient(patient_id="CON008"):
     print("\n5. SIGNAL QUALITY INSPECTION")
     print("-" * 60)
 
-    data = epochs.get_data()  # (n_epochs, n_channels, n_times)
+    data = epochs.get_data() * 1e6  # Convert Volts to uV for analysis
 
     # Check for expected signal characteristics
     print("Data statistics (first epoch):")
