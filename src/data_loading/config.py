@@ -33,6 +33,13 @@ EEG_DATA_DIR = LOCAL_DATA_ROOT / "EEG"
 PROCESSED_DATA_DIR = LOCAL_DATA_ROOT / "processed"
 ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 
+# ERP Pipeline output directories (ENG-02b)
+EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
+ERPS_DIR = PROCESSED_DATA_DIR / "erps"
+FEATURES_DIR = PROCESSED_DATA_DIR / "features"
+ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
+QC_REPORTS_DIR = PROCESSED_DATA_DIR / "qc"
+
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
 SENTENCES_DIR = AUDIO_DIR / "sentences"
