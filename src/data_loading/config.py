@@ -33,9 +33,18 @@ EEG_DATA_DIR = LOCAL_DATA_ROOT / "EEG"
 PROCESSED_DATA_DIR = LOCAL_DATA_ROOT / "processed"
 ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 
+<<<<<<< HEAD
 # ENG-03 outputs
 EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
 QC_DIR = PROCESSED_DATA_DIR / "qc"
+=======
+# ERP Pipeline output directories (ENG-02b)
+EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
+ERPS_DIR = PROCESSED_DATA_DIR / "erps"
+FEATURES_DIR = PROCESSED_DATA_DIR / "features"
+ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
+QC_REPORTS_DIR = PROCESSED_DATA_DIR / "qc"
+>>>>>>> 2053e71 (Add ERP/Oddball pipeline for P300 extraction (ENG-02b))
 
 # ENG-06 outputs
 REPORTS_DIR = PROCESSED_DATA_DIR / "reports"
