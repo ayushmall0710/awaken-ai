@@ -5,7 +5,7 @@ Unit tests for ERP Pipeline (ENG-02b)
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import mne
 import numpy as np
@@ -13,6 +13,18 @@ import pandas as pd
 import pytest
 
 from src.data_processing.erp_pipeline import ERP_CONFIG, OddballERPPipeline
+
+
+# Patch UnifiedDataLoader for all tests to avoid requiring data files in CI
+@pytest.fixture(autouse=True)
+def mock_unified_loader():
+    """Auto-mock UnifiedDataLoader to avoid requiring data files."""
+    with patch("src.data_processing.erp_pipeline.UnifiedDataLoader") as mock:
+        mock_instance = Mock()
+        mock_instance.load_aligned_trials = Mock(return_value=pd.DataFrame())
+        mock_instance.load_eeg = Mock()
+        mock.return_value = mock_instance
+        yield mock_instance
 
 
 @pytest.fixture
