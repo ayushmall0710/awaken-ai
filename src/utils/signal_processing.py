@@ -7,20 +7,81 @@ Helper functions for signal processing: peak detection, resampling, normalizatio
 import logging
 from typing import Any, List, Tuple
 
-import mne
 import numpy as np
 import scipy.signal
 from scipy.ndimage import uniform_filter1d
 
 logger = logging.getLogger(__name__)
 
+# Keywords that identify non-EEG auxiliary channels in EDF files.
+# Used by select_best_dc_channel (to *find* them) and exclude_non_eeg_channels (to *drop* them).
+# Covers: DC/stimulus, polysomnography (EMG/ECG/respiratory/SpO2), movement, and misc sensors.
+NON_EEG_CHANNEL_KEYWORDS: List[str] = [
+    # Original
+    "DC",
+    "AUX",
+    "AUDIO",
+    "DIG",
+    "STIM",
+    # Electrophysiological (non-brain)
+    "EMG",
+    "ECG",
+    "EKG",
+    # Infraorbital / EOG reference (eye movement, not scalp EEG)
+    "IO1",
+    "IO2",
+    # Leg / limb movement
+    "LAT1",
+    "LAT2",
+    "RAT1",
+    "RAT2",
+    # Respiratory
+    "RESP",
+    "ABD",
+    "FLOW",
+    "SNORE",
+    "THORAX",
+    # Differential / misc sensors
+    "DIF",
+    # Body position
+    "POS",
+    # Pulse oximetry
+    "OSAT",
+    "SAT",
+    "SPO2",
+    "PR",
+    "PULSE",
+]
 
-def select_best_dc_channel(raw: mne.io.Raw, keywords: List[str] = ["DC", "AUX", "AUDIO", "DIG", "STIM"]) -> str:
+# DC-only subset used by select_best_dc_channel.
+DC_CHANNEL_KEYWORDS: List[str] = ["DC", "AUX", "AUDIO", "DIG", "STIM"]
+
+
+def exclude_non_eeg_channels(raw: Any) -> List[str]:
+    """
+    Return a list of channel names that match non-EEG keywords.
+
+    Useful for dropping DC/AUX/STIM channels before ICA or epoching.
+
+    Args:
+        raw: MNE Raw-like object (expects ``.ch_names``).
+
+    Returns:
+        List of channel names to exclude.
+    """
+    excluded = []
+    for ch in raw.ch_names:
+        if any(kw in ch.upper() for kw in NON_EEG_CHANNEL_KEYWORDS):
+            excluded.append(ch)
+    return excluded
+
+
+def select_best_dc_channel(raw: Any, keywords: List[str] = DC_CHANNEL_KEYWORDS) -> str:
     """
     Select the best DC channel based on keywords and standard deviation.
 
     Args:
-        raw: MNE Raw object
+        raw: MNE Raw-like object (expects `.ch_names` and optionally `.get_data(picks=...)`)
         keywords: List of keywords to identify candidate channels
 
     Returns:
