@@ -17,6 +17,7 @@ import pandas as pd
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
 from src.utils import signal_processing as utils
+from src.utils.time_utils import detect_timezone_offset, edf_to_unix, unix_to_edf
 
 logger = logging.getLogger(__name__)
 
@@ -171,32 +172,19 @@ class TimestampAligner:
         return utils.select_best_dc_channel(raw)
 
     def _detect_timezone_offset(self, raw: mne.io.Raw, stimulus_df: pd.DataFrame) -> float:
-        """Detect timezone offset by comparing EDF start time with first trial."""
-        meas_date = raw.info.get("meas_date")
-        if meas_date is None or stimulus_df.empty:
-            return 0.0
+        """Detect timezone offset by comparing EDF start time with first trial.
 
-        edf_start_unix = meas_date.timestamp()
-        first_trial_start = stimulus_df["start_time"].min()
-
-        diff = abs(first_trial_start - edf_start_unix)
-
-        if diff > 1800:  # 30 mins (to handle fractional timezones like IST)
-            correction = (diff // 1800) * 1800
-            if first_trial_start > edf_start_unix:
-                correction = -correction
-            logger.info(f"Timezone offset detected: {correction / 3600:.1f} hours")
-            return correction
-
-        return 0.0
+        Delegates to :func:`src.utils.time_utils.detect_timezone_offset`.
+        """
+        return detect_timezone_offset(raw, stimulus_df)
 
     def _edf_to_unix(self, edf_time: float) -> float:
         """Convert EDF-relative time to Unix timestamp."""
-        return edf_time - self.timezone_offset + self.edf_start_unix
+        return edf_to_unix(edf_time, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset)
 
     def _unix_to_edf(self, unix_time: float) -> float:
         """Convert Unix timestamp to EDF-relative time."""
-        return (unix_time - self.edf_start_unix) + self.timezone_offset
+        return unix_to_edf(unix_time, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset)
 
     def _compute_audio_match(
         self, dc_chunk: np.ndarray, audio_path: Path, min_score: float = 0.75
