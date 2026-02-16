@@ -544,6 +544,23 @@ class UnifiedDataLoader:
         cols = ["patient_id"] + [c for c in df.columns if c != "patient_id"]
         return df[cols]
 
+    # ==================== Aligned Events (ENG-02 output) ====================
+
+    def load_aligned_events(self, patient_id: str) -> pd.DataFrame:
+        """Load aligned-events parquet produced by ENG-02 for *patient_id*.
+
+        Returns:
+            DataFrame with columns from the alignment stage (start_time, end_time,
+            trial_type, date, …).
+
+        Raises:
+            FileNotFoundError: If the aligned-events file does not exist.
+        """
+        path = config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"Aligned events parquet not found: {path}")
+        return pd.read_parquet(path)
+
     # ==================== Metadata ====================
 
     def get_info(self) -> Dict:

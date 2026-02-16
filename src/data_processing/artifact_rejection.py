@@ -312,10 +312,8 @@ class ArtifactRejector:
     # ── I/O helpers ──────────────────────────────────────────────────────
 
     def _load_aligned_events(self, patient_id: str) -> pd.DataFrame:
-        path = config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet"
-        if not path.exists():
-            raise FileNotFoundError(f"Aligned events parquet not found: {path}")
-        return pd.read_parquet(path)
+        """Delegate to UnifiedDataLoader so the logic is shared."""
+        return self.loader.load_aligned_events(patient_id)
 
     @staticmethod
     def _epochs_output_path(patient_id: str, date: str, trial_type: str) -> Path:
@@ -348,7 +346,7 @@ class ArtifactRejector:
         # Identify non-EEG channels for diagnostic logging.
         non_eeg_names = exclude_non_eeg_channels(raw)
         if non_eeg_names:
-            notes.append(f"non_eeg_channels={non_eeg_names}")
+            notes.append(f"[CHANNELS] non_eeg_excluded={non_eeg_names}")
 
         # Full copy — we do NOT drop channels so that EOG reference channels
         # (IO1/IO2, Fp1/Fp2) remain available for find_bads_eog.
@@ -356,9 +354,9 @@ class ArtifactRejector:
 
         # Pick EEG-only channels (keyword exclusion is always applied).
         picks_eeg = _pick_eeg_indices(raw_for_ica)
-        notes.append(f"n_eeg_channels={len(picks_eeg)}")
+        notes.append(f"[CHANNELS] n_eeg={len(picks_eeg)}")
         if len(picks_eeg) == 0:
-            notes.append("no_eeg_channels_after_exclusion_fallback=all")
+            notes.append("[CHANNELS] no_eeg_after_exclusion\tfallback=all")
             picks_eeg = np.arange(len(raw_for_ica.ch_names))
 
         # Bandpass filter EEG channels only (for ICA stability).
@@ -366,7 +364,7 @@ class ArtifactRejector:
         try:
             raw_for_ica.filter(l_freq=l_freq, h_freq=h_freq, picks=picks_eeg, verbose=self.verbose)
         except Exception as e:
-            notes.append(f"filter_failed={type(e).__name__}:{e}")
+            notes.append(f"[FILTER] failed={type(e).__name__}: {e}")
 
         # Fit ICA on EEG-only picks.
         ica = mne.preprocessing.ICA(
@@ -393,10 +391,10 @@ class ArtifactRejector:
                     eog_components.extend(list(inds))
                     eog_channels_used.append(ch)
                 except Exception as e:
-                    notes.append(f"find_bads_eog_ch={ch}_failed={type(e).__name__}:{e}")
+                    notes.append(f"[EOG] find_bads ch={ch}\tfailed={type(e).__name__}: {e}")
             eog_components = sorted(set(eog_components))
         else:
-            notes.append("no_eog_channels_detected")
+            notes.append("[EOG] no_eog_channels_detected")
 
         # Fallback: let MNE try its own EOG-channel synthesis if we found nothing.
         if not eog_components:
@@ -404,9 +402,9 @@ class ArtifactRejector:
                 inds, _scores = ica.find_bads_eog(raw_for_ica, threshold=2.5)
                 if inds:
                     eog_components = sorted(set(map(int, inds)))
-                    notes.append(f"eog_fallback_mne_auto=found_{len(inds)}")
+                    notes.append(f"[EOG] fallback_mne_auto\tfound={len(inds)}")
             except Exception as e:
-                notes.append(f"eog_fallback_failed={type(e).__name__}:{e}")
+                notes.append(f"[EOG] fallback_failed={type(e).__name__}: {e}")
 
         # ── Auto-detect artifact components ─ muscle noise ───────────────
         # find_bads_muscle uses topography + slope when sensor positions are
@@ -421,9 +419,9 @@ class ArtifactRejector:
                 inds, _scores = ica.find_bads_muscle(raw_for_ica)
                 muscle_components = sorted(set(map(int, inds)))
             elif not has_dig:
-                notes.append("skip_muscle_detection_no_sensor_positions")
+                notes.append("[MUSCLE] skipped\treason=no_sensor_positions")
         except Exception as e:
-            notes.append(f"find_bads_muscle_failed={type(e).__name__}:{e}")
+            notes.append(f"[MUSCLE] failed={type(e).__name__}: {e}")
 
         # ── Auto-detect artifact components ─ ECG (heartbeat) ─────────────
         ecg_components: List[int] = []
@@ -441,13 +439,13 @@ class ArtifactRejector:
                 if ecg_components:
                     ecg_channels_used = ["MNE_synthetic"]
         except Exception as e:
-            notes.append(f"find_bads_ecg_failed={type(e).__name__}:{e}")
+            notes.append(f"[ECG] failed={type(e).__name__}: {e}")
 
         excluded_components = sorted(set(eog_components + muscle_components + ecg_components))
         ica.exclude = excluded_components
 
         if not excluded_components:
-            notes.append("WARNING_no_components_excluded")
+            notes.append("[ICA] WARNING\tno_components_excluded")
 
         # Apply ICA to original raw (MNE subtracts excluded components from
         # the channels the ICA was trained on; other channels are untouched).
