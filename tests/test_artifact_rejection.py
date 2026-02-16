@@ -161,6 +161,13 @@ def test_find_eog_channels_prefers_io_over_fp():
     assert set(eog) == {"IO1", "IO2"}
 
 
+def test_find_eog_channels_combines_eog_and_io():
+    """When both EOG-named and IO channels exist, return the union of both."""
+    raw = _mock_raw(ch_names=["C3", "C4", "EOG1", "Fp1", "IO1", "IO2"])
+    eog = _find_eog_channels(raw)
+    assert set(eog) == {"EOG1", "IO1", "IO2"}
+
+
 def test_pick_eeg_indices_excludes_dc():
     """_pick_eeg_indices should exclude DC/AUX channels from epoch picks."""
     raw = _mock_raw(ch_names=["EEG1", "EEG2", "DC1", "Fp1"])

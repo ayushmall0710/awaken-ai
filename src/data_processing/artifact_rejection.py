@@ -59,6 +59,8 @@ class ICASummary:
     excluded: List[int]
     eog_channels_used: List[str]
     eog_components: List[int]
+    ecg_channels_used: List[str]
+    ecg_components: List[int]
     muscle_components: List[int]
     notes: List[str]
 
@@ -98,9 +100,9 @@ def _find_eog_channels(raw: mne.io.BaseRaw) -> List[str]:
 
     Priority order:
     1. Channels typed as EOG in the MNE info.
-    2. Channels whose name contains ``EOG``.
-    3. Infraorbital channels (IO1, IO2) — placed below the eyes for blink/movement.
-    4. Frontal channels Fp1/Fp2 as surrogate EOG (standard heuristic).
+    2. Union of name-based ``EOG`` channels **and** infraorbital (IO1, IO2)
+       — both can coexist in the same recording so we return all of them.
+    3. Frontal channels Fp1/Fp2 as surrogate EOG (standard heuristic).
     """
     # 1. Prefer explicitly-typed EOG channels.
     try:
@@ -110,15 +112,13 @@ def _find_eog_channels(raw: mne.io.BaseRaw) -> List[str]:
     except Exception:
         pass
 
-    # 2. Fallback to common naming conventions.
+    # 2 & 3. Collect both named EOG channels and infraorbital (IO1/IO2).
+    #   Both can coexist in the same recording — return the union.
     by_name = [ch for ch in raw.ch_names if "EOG" in ch.upper()]
-    if by_name:
-        return by_name
-
-    # 3. Infraorbital electrodes (IO1, IO2) — proper EOG reference if present.
     io_channels = [ch for ch in raw.ch_names if ch.upper() in {"IO1", "IO2"}]
-    if io_channels:
-        return io_channels
+    combined = by_name + [ch for ch in io_channels if ch not in by_name]
+    if combined:
+        return combined
 
     # 4. Heuristic: use Fp1/Fp2 as surrogate EOG (documented fallback).
     return [ch for ch in raw.ch_names if ch.upper() in {"FP1", "FP2"}]
@@ -182,12 +182,13 @@ class ArtifactRejector:
     def __init__(
         self,
         data_root: Optional[Path] = None,
+        loader: Optional[UnifiedDataLoader] = None,
         use_clipped: bool = True,
         ica_filter_hz: Tuple[float, float] = DEFAULT_ICA_FILTER_HZ,
         reject_ptp_percentile: float = DEFAULT_REJECT_PTP_PERCENTILE,
         verbose: bool = False,
     ):
-        self.loader = UnifiedDataLoader(data_root=data_root, verbose=verbose)
+        self.loader = loader or UnifiedDataLoader(data_root=data_root, verbose=verbose)
         self.use_clipped = use_clipped
         self.ica_filter_hz = ica_filter_hz
         self.reject_ptp_percentile = float(reject_ptp_percentile)
@@ -424,7 +425,25 @@ class ArtifactRejector:
         except Exception as e:
             notes.append(f"find_bads_muscle_failed={type(e).__name__}:{e}")
 
-        excluded_components = sorted(set(eog_components + muscle_components))
+        # ── Auto-detect artifact components ─ ECG (heartbeat) ─────────────
+        ecg_components: List[int] = []
+        ecg_channels_used: List[str] = []
+        ecg_candidates = [ch for ch in raw_for_ica.ch_names if any(k in ch.upper() for k in ("ECG", "EKG"))]
+        try:
+            if ecg_candidates:
+                inds, _scores = ica.find_bads_ecg(raw_for_ica, ch_name=ecg_candidates[0])
+                ecg_components = sorted(set(map(int, inds)))
+                ecg_channels_used = [ecg_candidates[0]]
+            else:
+                # Let MNE try to synthesise an ECG channel from magnetometers / EEG
+                inds, _scores = ica.find_bads_ecg(raw_for_ica)
+                ecg_components = sorted(set(map(int, inds)))
+                if ecg_components:
+                    ecg_channels_used = ["MNE_synthetic"]
+        except Exception as e:
+            notes.append(f"find_bads_ecg_failed={type(e).__name__}:{e}")
+
+        excluded_components = sorted(set(eog_components + muscle_components + ecg_components))
         ica.exclude = excluded_components
 
         if not excluded_components:
@@ -442,6 +461,8 @@ class ArtifactRejector:
             excluded=excluded_components,
             eog_channels_used=eog_channels_used,
             eog_components=eog_components,
+            ecg_channels_used=ecg_channels_used,
+            ecg_components=ecg_components,
             muscle_components=muscle_components,
             notes=notes,
         )

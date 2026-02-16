@@ -11,7 +11,7 @@ those heavy deps at package import time.
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .artifact_rejection import ArtifactRejector
-    from .timestamp_aligner import TimestampAligner
+    from src.data_processing.artifact_rejection import ArtifactRejector
+    from src.data_processing.timestamp_aligner import TimestampAligner
 
 __all__ = ["TimestampAligner", "ArtifactRejector"]

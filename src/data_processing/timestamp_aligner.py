@@ -145,7 +145,7 @@ class TimestampAligner:
         self.edf_start_unix = raw.info["meas_date"].timestamp()
 
         # Detect timezone offset
-        self.timezone_offset = self._detect_timezone_offset(raw, trials_df)
+        self.timezone_offset = detect_timezone_offset(raw, trials_df)
 
         events = []
         for _, trial in trials_df.iterrows():
@@ -170,21 +170,6 @@ class TimestampAligner:
     def _detect_dc_channel(self, raw: mne.io.Raw) -> str:
         """Auto-detect DC channel from EDF using signal_processing utility."""
         return utils.select_best_dc_channel(raw)
-
-    def _detect_timezone_offset(self, raw: mne.io.Raw, stimulus_df: pd.DataFrame) -> float:
-        """Detect timezone offset by comparing EDF start time with first trial.
-
-        Delegates to :func:`src.utils.time_utils.detect_timezone_offset`.
-        """
-        return detect_timezone_offset(raw, stimulus_df)
-
-    def _edf_to_unix(self, edf_time: float) -> float:
-        """Convert EDF-relative time to Unix timestamp."""
-        return edf_to_unix(edf_time, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset)
-
-    def _unix_to_edf(self, unix_time: float) -> float:
-        """Convert Unix timestamp to EDF-relative time."""
-        return unix_to_edf(unix_time, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset)
 
     def _compute_audio_match(
         self, dc_chunk: np.ndarray, audio_path: Path, min_score: float = 0.75
@@ -265,7 +250,9 @@ class TimestampAligner:
 
         # Convert relative offset to absolute times
         event_start_edf = search_start_buf + match.offset_seconds
-        event_start_unix = self._edf_to_unix(event_start_edf)
+        event_start_unix = edf_to_unix(
+            event_start_edf, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
 
         return AlignmentResult(
             event_start=event_start_unix,
@@ -281,8 +268,12 @@ class TimestampAligner:
             return pd.DataFrame()
 
         # Trial boundaries
-        trial_start_edf = self._unix_to_edf(trial["start_time"])
-        trial_end_edf = self._unix_to_edf(trial["end_time"])
+        trial_start_edf = unix_to_edf(
+            trial["start_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
+        trial_end_edf = unix_to_edf(
+            trial["end_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
         buffer = ALIGNMENT_CONFIG["search_buffer_sec"]
 
         enriched_events = []
@@ -311,7 +302,9 @@ class TimestampAligner:
                 # Convert dataclass to dict for update
                 enriched_event.update(asdict(result))
                 # Advance search head
-                current_search_start = self._unix_to_edf(result.event_end)
+                current_search_start = unix_to_edf(
+                    result.event_end, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+                )
 
             enriched_events.append(enriched_event)
 
@@ -330,8 +323,12 @@ class TimestampAligner:
             return pd.DataFrame()
 
         # 1. Align Prompt (Instruction)
-        trial_start = self._unix_to_edf(trial["start_time"])
-        trial_end = self._unix_to_edf(trial["end_time"])
+        trial_start = unix_to_edf(
+            trial["start_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
+        trial_end = unix_to_edf(
+            trial["end_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
         buffer = ALIGNMENT_CONFIG["search_buffer_sec"]
         prompt_path = config.PROMPTS_DIR / "motorcommandprompt.wav"
 
@@ -345,7 +342,9 @@ class TimestampAligner:
 
         if prompt_result:
             logger.info(f"Found prompt for {trial_type} trial (score={prompt_result.correlation_score:.2f})")
-            commands_search_start = self._unix_to_edf(prompt_result.event_end)
+            commands_search_start = unix_to_edf(
+                prompt_result.event_end, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+            )
         else:
             logger.warning(f"Prompt not found for {trial_type} trial. Using trial start.")
             commands_search_start = trial_start
@@ -381,7 +380,12 @@ class TimestampAligner:
                     enriched_events.append(event_dict)
 
                     # Advance cursor past this event to look for NEXT instance of SAME command
-                    current_cursor = self._unix_to_edf(res.event_end) + 0.5
+                    current_cursor = (
+                        unix_to_edf(
+                            res.event_end, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+                        )
+                        + 0.5
+                    )
                 else:
                     # Did not find 'Keep' in these 8s, it might be 'Stop' here.
                     # We need to jump over this segment to see if 'Keep' appears later.
@@ -399,8 +403,10 @@ class TimestampAligner:
         Align using peak detection.
         """
         trial_type = trial["trial_type"].lower()
-        t_start = self._unix_to_edf(trial["start_time"])
-        t_end = self._unix_to_edf(trial["end_time"])
+        t_start = unix_to_edf(
+            trial["start_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
+        t_end = unix_to_edf(trial["end_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset)
 
         # Extract DC signal chunk for this trial's time window
         start_idx = int(t_start * self.sr)
@@ -434,7 +440,9 @@ class TimestampAligner:
         peaks = peaks + search_start_idx
 
         # Step 5: Convert to timestamps and enrich events
-        peak_times_unix = self._edf_to_unix(t_start + (peaks / self.sr))
+        peak_times_unix = edf_to_unix(
+            t_start + (peaks / self.sr), edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+        )
         peak_amplitudes = dc_chunk[peaks]
         peak_durations = widths / self.sr
 

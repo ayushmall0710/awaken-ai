@@ -1,9 +1,5 @@
 """
 Shared time-conversion utilities for EDF ↔ Unix timestamp alignment.
-
-Used by:
-- ENG-02 (TimestampAligner)
-- ENG-03 (ArtifactRejector)
 """
 
 import logging
