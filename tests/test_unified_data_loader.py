@@ -9,8 +9,10 @@ Uses fixture-based dummy data for CI compatibility.
 import pandas as pd
 import pytest
 
-from src.data_loading.patient_data import PatientData
-from src.data_loading.unified_data_loader import (
+mne = pytest.importorskip("mne")  # UnifiedDataLoader depends on MNE; skip tests if not installed
+
+from src.data_loading.patient_data import PatientData  # noqa: E402
+from src.data_loading.unified_data_loader import (  # noqa: E402
     UnifiedDataLoader,
     UnifiedDataLoadingError,
 )

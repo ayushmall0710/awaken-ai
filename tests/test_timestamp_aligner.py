@@ -5,7 +5,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data_processing.timestamp_aligner import AudioMatch, TimestampAligner
+mne = pytest.importorskip("mne")  # ENG-02 depends on MNE; skip tests if not installed
+
+from src.data_processing.timestamp_aligner import AudioMatch, TimestampAligner  # noqa: E402
 
 
 @pytest.fixture
