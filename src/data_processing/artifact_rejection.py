@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -29,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import mne
 import numpy as np
 import pandas as pd
+from mne_icalabel import label_components
 
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
@@ -390,12 +392,6 @@ def _classify_components_iclabel(
     or classification fails.
     """
     try:
-        from mne_icalabel import label_components
-    except ImportError:
-        _note(notes, "[ICLABEL] mne_icalabel not installed\tfallback=correlation")
-        return None
-
-    try:
         result = label_components(raw_for_ica, ica, method="iclabel")
     except Exception as e:
         _note(notes, f"[ICLABEL] classification failed={type(e).__name__}: {e}\tfallback=correlation")
@@ -411,51 +407,114 @@ def _classify_components_iclabel(
         raw_probs = raw_probs[:, np.newaxis]  # (N,) → (N, 1)
     probs: List[List[float]] = raw_probs.tolist()
 
-    # ICLabel categories: brain, muscle, eye, heart, line_noise, channel_noise, other
-    eog: List[int] = []
-    ecg: List[int] = []
-    muscle: List[int] = []
-    line_noise: List[int] = []
-    channel_noise: List[int] = []
+    # ICLabel categories: brain, muscle, eye, heart, line_noise, channel_noise, other.
+    # Collect artifact component indices grouped by label.
+    _KEEP_LABELS = {"brain", "other"}
+    by_label: Dict[str, List[int]] = defaultdict(list)
     excluded: List[int] = []
 
     for idx, label in enumerate(labels):
-        max_prob = float(max(probs[idx]))
-        if label in ("brain", "other"):
+        if label in _KEEP_LABELS:
             continue
+        max_prob = float(max(probs[idx]))
         if max_prob < threshold:
             continue
         excluded.append(idx)
-        if label == "eye":
-            eog.append(idx)
-        elif label == "heart":
-            ecg.append(idx)
-        elif label == "muscle":
-            muscle.append(idx)
-        elif label == "line_noise":
-            line_noise.append(idx)
-        elif label == "channel_noise":
-            channel_noise.append(idx)
+        by_label[label].append(idx)
 
     _note(
         notes,
         f"[ICLABEL] excluded={len(excluded)} "
-        f"(eye={len(eog)}, heart={len(ecg)}, muscle={len(muscle)}, "
-        f"line_noise={len(line_noise)}, ch_noise={len(channel_noise)})",
+        f"(eye={len(by_label['eye'])}, heart={len(by_label['heart'])}, "
+        f"muscle={len(by_label['muscle'])}, line_noise={len(by_label['line_noise'])}, "
+        f"ch_noise={len(by_label['channel_noise'])})",
     )
 
     return {
         "excluded": sorted(excluded),
-        "eog_components": sorted(eog),
-        "ecg_components": sorted(ecg),
-        "muscle_components": sorted(muscle),
-        "line_noise_components": sorted(line_noise),
-        "channel_noise_components": sorted(channel_noise),
+        "eog_components": sorted(by_label["eye"]),
+        "ecg_components": sorted(by_label["heart"]),
+        "muscle_components": sorted(by_label["muscle"]),
+        "line_noise_components": sorted(by_label["line_noise"]),
+        "channel_noise_components": sorted(by_label["channel_noise"]),
         "iclabel_labels": labels,
         "iclabel_probs": probs,
         "eog_channels_used": [],
         "ecg_channels_used": [],
     }
+
+
+def _corr_find_eog(
+    raw: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    notes: List[str],
+) -> Tuple[List[int], List[str]]:
+    """Detect EOG-related ICA components via correlation."""
+    eog_channels = _find_eog_channels(raw)
+    components: List[int] = []
+    channels_used: List[str] = []
+
+    if eog_channels:
+        for ch in eog_channels:
+            try:
+                inds, _scores = ica.find_bads_eog(raw, ch_name=ch, threshold=2.5)
+                components.extend(list(inds))
+                channels_used.append(ch)
+            except Exception as e:
+                _note(notes, f"[EOG] find_bads ch={ch}\tfailed={type(e).__name__}: {e}")
+        components = sorted(set(components))
+    else:
+        _note(notes, "[EOG] no_eog_channels_detected")
+
+    # MNE auto-detect fallback when no EOG components were found.
+    if not components:
+        try:
+            inds, _scores = ica.find_bads_eog(raw, threshold=2.5)
+            if inds:
+                components = sorted(set(map(int, inds)))
+                _note(notes, f"[EOG] fallback_mne_auto\tfound={len(inds)}")
+        except Exception as e:
+            _note(notes, f"[EOG] fallback_failed={type(e).__name__}: {e}")
+
+    return components, channels_used
+
+
+def _corr_find_muscle(
+    raw: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    notes: List[str],
+) -> List[int]:
+    """Detect muscle-related ICA components via correlation."""
+    has_dig = bool(raw.info.get("dig"))
+    try:
+        if hasattr(ica, "find_bads_muscle") and has_dig:
+            inds, _scores = ica.find_bads_muscle(raw)
+            return sorted(set(map(int, inds)))
+        if not has_dig:
+            _note(notes, "[MUSCLE] skipped\treason=no_sensor_positions")
+    except Exception as e:
+        _note(notes, f"[MUSCLE] failed={type(e).__name__}: {e}")
+    return []
+
+
+def _corr_find_ecg(
+    raw: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    notes: List[str],
+) -> Tuple[List[int], List[str]]:
+    """Detect ECG-related ICA components via correlation."""
+    ecg_candidates = [ch for ch in raw.ch_names if any(k in ch.upper() for k in ("ECG", "EKG"))]
+    try:
+        if ecg_candidates:
+            inds, _scores = ica.find_bads_ecg(raw, ch_name=ecg_candidates[0])
+            return sorted(set(map(int, inds))), [ecg_candidates[0]]
+        inds, _scores = ica.find_bads_ecg(raw)
+        components = sorted(set(map(int, inds)))
+        channels_used = ["MNE_synthetic"] if components else []
+        return components, channels_used
+    except Exception as e:
+        _note(notes, f"[ECG] failed={type(e).__name__}: {e}")
+    return [], []
 
 
 def _classify_components_correlation(
@@ -467,63 +526,11 @@ def _classify_components_correlation(
 
     This is the fallback path when ICLabel cannot run.
     """
-    # ── EOG ──────────────────────────────────────────────────────────────
-    eog_channels = _find_eog_channels(raw_for_ica)
-    eog_components: List[int] = []
-    eog_channels_used: List[str] = []
-
-    if eog_channels:
-        for ch in eog_channels:
-            try:
-                inds, _scores = ica.find_bads_eog(raw_for_ica, ch_name=ch, threshold=2.5)
-                eog_components.extend(list(inds))
-                eog_channels_used.append(ch)
-            except Exception as e:
-                _note(notes, f"[EOG] find_bads ch={ch}\tfailed={type(e).__name__}: {e}")
-        eog_components = sorted(set(eog_components))
-    else:
-        _note(notes, "[EOG] no_eog_channels_detected")
-
-    if not eog_components:
-        try:
-            inds, _scores = ica.find_bads_eog(raw_for_ica, threshold=2.5)
-            if inds:
-                eog_components = sorted(set(map(int, inds)))
-                _note(notes, f"[EOG] fallback_mne_auto\tfound={len(inds)}")
-        except Exception as e:
-            _note(notes, f"[EOG] fallback_failed={type(e).__name__}: {e}")
-
-    # ── Muscle ───────────────────────────────────────────────────────────
-    muscle_components: List[int] = []
-    has_dig = bool(raw_for_ica.info.get("dig"))
-    try:
-        if hasattr(ica, "find_bads_muscle") and has_dig:
-            inds, _scores = ica.find_bads_muscle(raw_for_ica)
-            muscle_components = sorted(set(map(int, inds)))
-        elif not has_dig:
-            _note(notes, "[MUSCLE] skipped\treason=no_sensor_positions")
-    except Exception as e:
-        _note(notes, f"[MUSCLE] failed={type(e).__name__}: {e}")
-
-    # ── ECG ──────────────────────────────────────────────────────────────
-    ecg_components: List[int] = []
-    ecg_channels_used: List[str] = []
-    ecg_candidates = [ch for ch in raw_for_ica.ch_names if any(k in ch.upper() for k in ("ECG", "EKG"))]
-    try:
-        if ecg_candidates:
-            inds, _scores = ica.find_bads_ecg(raw_for_ica, ch_name=ecg_candidates[0])
-            ecg_components = sorted(set(map(int, inds)))
-            ecg_channels_used = [ecg_candidates[0]]
-        else:
-            inds, _scores = ica.find_bads_ecg(raw_for_ica)
-            ecg_components = sorted(set(map(int, inds)))
-            if ecg_components:
-                ecg_channels_used = ["MNE_synthetic"]
-    except Exception as e:
-        _note(notes, f"[ECG] failed={type(e).__name__}: {e}")
+    eog_components, eog_channels_used = _corr_find_eog(raw_for_ica, ica, notes)
+    muscle_components = _corr_find_muscle(raw_for_ica, ica, notes)
+    ecg_components, ecg_channels_used = _corr_find_ecg(raw_for_ica, ica, notes)
 
     excluded = sorted(set(eog_components + muscle_components + ecg_components))
-
     if not excluded:
         _note(notes, "[CORRELATION] WARNING\tno_components_excluded")
 

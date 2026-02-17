@@ -270,7 +270,7 @@ def test_apply_car_reference_handles_failure():
 
 
 def test_classify_iclabel_returns_dict_on_success():
-    """When mne_icalabel is available and works, should return a classification dict."""
+    """When label_components works, should return a classification dict."""
     raw = _mock_raw(ch_names=["Fp1", "C3", "O1"])
     ica = MagicMock()
     ica.get_components.return_value = np.eye(3)
@@ -286,10 +286,11 @@ def test_classify_iclabel_returns_dict_on_success():
         ),
     }
 
-    mock_module = MagicMock()
-    mock_module.label_components.return_value = mock_result
     notes: list = []
-    with patch.dict("sys.modules", {"mne_icalabel": mock_module}):
+    with patch(
+        "src.data_processing.artifact_rejection.label_components",
+        return_value=mock_result,
+    ):
         result = _classify_components_iclabel(raw, ica, notes, threshold=0.5)
 
     assert result is not None
@@ -299,18 +300,20 @@ def test_classify_iclabel_returns_dict_on_success():
     assert result["iclabel_labels"] == ["brain", "eye", "line_noise"]
 
 
-def test_classify_iclabel_returns_none_on_import_error():
-    """When mne_icalabel is not installed, should return None."""
+def test_classify_iclabel_returns_none_on_runtime_error():
+    """When label_components raises at runtime, should return None and log."""
     raw = _mock_raw()
     ica = MagicMock()
     notes: list = []
 
-    # Remove mne_icalabel from sys.modules to trigger ImportError
-    with patch.dict("sys.modules", {"mne_icalabel": None}):
+    with patch(
+        "src.data_processing.artifact_rejection.label_components",
+        side_effect=RuntimeError("ONNX backend error"),
+    ):
         result = _classify_components_iclabel(raw, ica, notes)
 
     assert result is None
-    assert any("not installed" in n or "fallback" in n for n in notes)
+    assert any("classification failed" in n for n in notes)
 
 
 # ── Correlation-based classification ─────────────────────────────────────────
