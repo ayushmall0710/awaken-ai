@@ -3,10 +3,12 @@
 import logging
 import warnings
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
-import mne
 import pandas as pd
+
+if TYPE_CHECKING:  # pragma: no cover
+    import mne
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,7 +58,7 @@ class PatientData:
             return {date: path.name for date, path in paths.items()}
         return paths.name
 
-    def get_raw(self, date: Optional[str] = None) -> Union[mne.io.Raw, Dict[str, mne.io.Raw]]:
+    def get_raw(self, date: Optional[str] = None) -> Union["mne.io.Raw", Dict[str, "mne.io.Raw"]]:
         """
         Get EEG data. Returns Raw for single/specified session, Dict[date, Raw] for multi-session.
 
@@ -66,7 +68,7 @@ class PatientData:
         return self._edf_loader(self.patient_id, date=date)
 
     @property
-    def raw(self) -> Union[mne.io.Raw, Dict[str, mne.io.Raw]]:
+    def raw(self) -> Union["mne.io.Raw", Dict[str, "mne.io.Raw"]]:
         """
         Lazy-load EEG data. Returns Raw for single session, Dict[date, Raw] for multi-session.
 

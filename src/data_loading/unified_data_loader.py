@@ -544,6 +544,60 @@ class UnifiedDataLoader:
         cols = ["patient_id"] + [c for c in df.columns if c != "patient_id"]
         return df[cols]
 
+    # ==================== Aligned Events (ENG-02 output) ====================
+
+    def load_aligned_events(self, patient_id: str) -> pd.DataFrame:
+        """Load aligned-events parquet produced by ENG-02 for *patient_id*.
+
+        Returns:
+            DataFrame with columns from the alignment stage (start_time, end_time,
+            trial_type, date, …).
+
+        Raises:
+            FileNotFoundError: If the aligned-events file does not exist.
+        """
+        path = config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet"
+        if not path.exists():
+            raise FileNotFoundError(f"Aligned events parquet not found: {path}")
+        return pd.read_parquet(path)
+
+    # ==================== Clean Epochs (ENG-03 output) ====================
+
+    @staticmethod
+    def load_clean_epochs(
+        patient_id: str,
+        date: str,
+        trial_type: str,
+    ) -> "mne.Epochs":
+        """Load cleaned EEG epochs produced by ENG-03 for a single trial type.
+
+        Parameters
+        ----------
+        patient_id : str
+            Patient identifier (e.g. ``"CON008"``).
+        date : str
+            Session date in ``YYYY-MM-DD`` format.
+        trial_type : str
+            Trial type name (e.g. ``"language"``, ``"oddball"``).
+
+        Returns
+        -------
+        mne.Epochs
+            Preloaded epochs object.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the ``.fif`` file does not exist in the epochs directory.
+        """
+        safe_tt = str(trial_type).lower().strip()
+        fif_path = config.EPOCHS_DIR / patient_id / date / f"{safe_tt}-epo.fif"
+        if not fif_path.exists():
+            raise FileNotFoundError(
+                f"Clean epochs not found: {fif_path}. Run ArtifactRejector.run_session('{patient_id}', '{date}') first."
+            )
+        return mne.read_epochs(fif_path, preload=True, verbose=False)
+
     # ==================== Metadata ====================
 
     def get_info(self) -> Dict:

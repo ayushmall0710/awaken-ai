@@ -5,7 +5,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data_processing.timestamp_aligner import AudioMatch, TimestampAligner
+mne = pytest.importorskip("mne")  # ENG-02 depends on MNE; skip tests if not installed
+
+from src.data_processing.timestamp_aligner import AudioMatch, TimestampAligner  # noqa: E402
+from src.utils.time_utils import detect_timezone_offset  # noqa: E402
 
 
 @pytest.fixture
@@ -19,27 +22,27 @@ def aligner(mock_loader):
 # -----------------------------------------------------------------------------
 
 
-def test_detect_timezone_offset_no_offset(aligner, mock_raw):
+def test_detect_timezone_offset_no_offset(mock_raw):
     """Test 0 offset case (same timezone)."""
     trials_df = pd.DataFrame({"start_time": [mock_raw.info["meas_date"].timestamp() + 1.0]})
-    offset = aligner._detect_timezone_offset(mock_raw, trials_df)
+    offset = detect_timezone_offset(mock_raw, trials_df)
     assert offset == 0.0
 
 
-def test_detect_timezone_offset_positive(aligner, mock_raw):
+def test_detect_timezone_offset_positive(mock_raw):
     """Test offset when trial is hours ahead (e.g. EDF=UTC, Trial=CET)."""
     # Logic: if trial > edf, offset is negative to bring trial back to edf time
     base_ts = mock_raw.info["meas_date"].timestamp()
     trials_df = pd.DataFrame({"start_time": [base_ts + 7201.0]})  # 2h + 1s difference
-    offset = aligner._detect_timezone_offset(mock_raw, trials_df)
+    offset = detect_timezone_offset(mock_raw, trials_df)
     assert offset == -7200.0
 
 
-def test_detect_timezone_offset_negative(aligner, mock_raw):
+def test_detect_timezone_offset_negative(mock_raw):
     """Test offset when trial is hours behind."""
     base_ts = mock_raw.info["meas_date"].timestamp()
     trials_df = pd.DataFrame({"start_time": [base_ts - 7200.0]})  # exact -2h
-    offset = aligner._detect_timezone_offset(mock_raw, trials_df)
+    offset = detect_timezone_offset(mock_raw, trials_df)
     assert offset == 7200.0
 
 

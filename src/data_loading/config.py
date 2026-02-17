@@ -33,6 +33,10 @@ EEG_DATA_DIR = LOCAL_DATA_ROOT / "EEG"
 PROCESSED_DATA_DIR = LOCAL_DATA_ROOT / "processed"
 ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 
+# ENG-03 outputs
+EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
+QC_DIR = PROCESSED_DATA_DIR / "qc"
+
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
 SENTENCES_DIR = AUDIO_DIR / "sentences"
