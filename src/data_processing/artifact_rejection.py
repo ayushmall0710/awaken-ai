@@ -11,13 +11,18 @@ Design constraints:
 - Save:
   - epochs/{patient_id}/{date}/{trial_type}-epo.fif
   - qc/{patient_id}/{date}/eng03_qc.parquet
+
+Classification strategy (Option B):
+- Primary: ICLabel neural-network classifier (7 artifact types).
+- Fallback: correlation-based (find_bads_eog / find_bads_ecg) when ICLabel
+  cannot run (e.g. montage setup fails).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,7 +33,7 @@ import pandas as pd
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
 from src.utils.signal_processing import exclude_non_eeg_channels
-from src.utils.time_utils import detect_timezone_offset, unix_to_edf
+from src.utils.time_utils import detect_timezone_offset
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +49,9 @@ WINDOW_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
     "right_command": 200.0,
 }
 
-DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (1.0, 40.0)
+DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (1.0, 100.0)
 DEFAULT_REJECT_PTP_PERCENTILE: float = 95.0
+DEFAULT_ICLABEL_THRESHOLD: float = 0.5
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -54,6 +60,7 @@ DEFAULT_REJECT_PTP_PERCENTILE: float = 95.0
 @dataclass(frozen=True)
 class ICASummary:
     method: str
+    classification_method: str
     n_components: int
     n_components_selected: Optional[int]
     excluded: List[int]
@@ -62,10 +69,20 @@ class ICASummary:
     ecg_channels_used: List[str]
     ecg_components: List[int]
     muscle_components: List[int]
-    notes: List[str]
+    line_noise_components: List[int] = field(default_factory=list)
+    channel_noise_components: List[int] = field(default_factory=list)
+    iclabel_labels: Optional[List[str]] = None
+    iclabel_probs: Optional[List[List[float]]] = None
+    notes: List[str] = field(default_factory=list)
 
 
 # ── Pure helpers (no class state) ────────────────────────────────────────────
+
+
+def _note(notes: List[str], msg: str) -> None:
+    """Append *msg* to the notes list **and** emit it via ``logger.debug``."""
+    notes.append(msg)
+    logger.debug(msg)
 
 
 def _json_default(obj: Any) -> Any:
@@ -113,7 +130,6 @@ def _find_eog_channels(raw: mne.io.BaseRaw) -> List[str]:
         pass
 
     # 2 & 3. Collect both named EOG channels and infraorbital (IO1/IO2).
-    #   Both can coexist in the same recording — return the union.
     by_name = [ch for ch in raw.ch_names if "EOG" in ch.upper()]
     io_channels = [ch for ch in raw.ch_names if ch.upper() in {"IO1", "IO2"}]
     combined = by_name + [ch for ch in io_channels if ch not in by_name]
@@ -125,11 +141,7 @@ def _find_eog_channels(raw: mne.io.BaseRaw) -> List[str]:
 
 
 def _epoch_ptp_uv(epochs: mne.Epochs) -> np.ndarray:
-    """
-    Per-epoch max peak-to-peak amplitude across channels (microvolts).
-
-    MNE stores EEG in Volts, so we multiply by 1e6.
-    """
+    """Per-epoch max peak-to-peak amplitude across channels (microvolts)."""
     data = epochs.get_data()  # (n_epochs, n_channels, n_times)
     if data.size == 0:
         return np.array([], dtype=float)
@@ -139,19 +151,14 @@ def _epoch_ptp_uv(epochs: mne.Epochs) -> np.ndarray:
 
 
 def _pick_eeg_indices(raw: mne.io.BaseRaw) -> np.ndarray:
-    """
-    Return channel indices for EEG-only picks, excluding non-EEG auxiliary channels.
+    """Return channel indices for EEG-only picks, excluding non-EEG auxiliary channels.
 
-    EDF files often label **all** channels as type ``eeg`` (the MNE default), so
-    relying on :func:`mne.pick_types` alone lets EMG, ECG, respiratory, and other
-    polysomnography channels leak into the EEG set.  We therefore **always** apply
-    the keyword-based exclusion list from
-    :data:`src.utils.signal_processing.NON_EEG_CHANNEL_KEYWORDS` on top of any
-    type-based picks.
+    EDF files often label **all** channels as type ``eeg``, so we **always**
+    apply the keyword-based exclusion from
+    :data:`src.utils.signal_processing.NON_EEG_CHANNEL_KEYWORDS`.
     """
     non_eeg_names = set(exclude_non_eeg_channels(raw))
 
-    # Start with typed EEG picks, then subtract keyword-matched non-EEG channels.
     try:
         typed_picks = mne.pick_types(raw.info, eeg=True, eog=False, stim=False, exclude="bads")
         picks = np.array(
@@ -163,19 +170,389 @@ def _pick_eeg_indices(raw: mne.io.BaseRaw) -> np.ndarray:
     except Exception:
         pass
 
-    # Fallback: all channels that are NOT in the non-EEG keyword list.
     return np.array(
         [i for i, ch in enumerate(raw.ch_names) if ch not in non_eeg_names],
         dtype=int,
     )
 
 
+# ── ICA sub-functions ────────────────────────────────────────────────────────
+
+
+def _prepare_ica_data(
+    raw: mne.io.BaseRaw,
+    ica_filter_hz: Tuple[float, float],
+    verbose: bool,
+) -> Tuple[mne.io.BaseRaw, np.ndarray, List[str]]:
+    """Copy raw, pick EEG indices, and bandpass-filter for ICA stability.
+
+    Returns ``(raw_for_ica, picks_eeg, notes)``.
+    """
+    notes: List[str] = []
+
+    non_eeg_names = exclude_non_eeg_channels(raw)
+    if non_eeg_names:
+        _note(notes, f"[CHANNELS] non_eeg_excluded={non_eeg_names}")
+
+    raw_for_ica = raw.copy()
+    picks_eeg = _pick_eeg_indices(raw_for_ica)
+    _note(notes, f"[CHANNELS] n_eeg={len(picks_eeg)}")
+
+    if len(picks_eeg) == 0:
+        _note(notes, "[CHANNELS] no_eeg_after_exclusion\tfallback=all")
+        picks_eeg = np.arange(len(raw_for_ica.ch_names))
+
+    l_freq, h_freq = ica_filter_hz
+    try:
+        raw_for_ica.filter(l_freq=l_freq, h_freq=h_freq, picks=picks_eeg, verbose=verbose)
+    except Exception as e:
+        _note(notes, f"[FILTER] failed={type(e).__name__}: {e}")
+
+    return raw_for_ica, picks_eeg, notes
+
+
+def _fit_ica(raw_for_ica: mne.io.BaseRaw, picks_eeg: np.ndarray) -> mne.preprocessing.ICA:
+    """Create and fit an ICA object using extended infomax."""
+    ica = mne.preprocessing.ICA(
+        n_components=0.99,
+        method="infomax",
+        fit_params=dict(extended=True),
+        max_iter="auto",
+        random_state=97,
+    )
+    ica.fit(raw_for_ica, picks=picks_eeg)
+    return ica
+
+
+# ── Standard 10-20 electrode names (upper-cased) for montage mapping ────────
+_STANDARD_1020_UPPER = {
+    "FP1",
+    "FPZ",
+    "FP2",
+    "AF9",
+    "AF7",
+    "AF5",
+    "AF3",
+    "AFZ",
+    "AF4",
+    "AF6",
+    "AF8",
+    "AF10",
+    "F9",
+    "F7",
+    "F5",
+    "F3",
+    "FZ",
+    "F4",
+    "F6",
+    "F8",
+    "F10",
+    "FT9",
+    "FT7",
+    "FC5",
+    "FC3",
+    "FC1",
+    "FCZ",
+    "FC2",
+    "FC4",
+    "FC6",
+    "FT8",
+    "FT10",
+    "T9",
+    "T7",
+    "C5",
+    "C3",
+    "C1",
+    "CZ",
+    "C2",
+    "C4",
+    "C6",
+    "T8",
+    "T10",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "TP9",
+    "TP7",
+    "CP5",
+    "CP3",
+    "CP1",
+    "CPZ",
+    "CP2",
+    "CP4",
+    "CP6",
+    "TP8",
+    "TP10",
+    "P9",
+    "P7",
+    "P5",
+    "P3",
+    "PZ",
+    "P4",
+    "P6",
+    "P8",
+    "P10",
+    "PO9",
+    "PO7",
+    "PO5",
+    "PO3",
+    "POZ",
+    "PO4",
+    "PO6",
+    "PO8",
+    "PO10",
+    "O1",
+    "OZ",
+    "O2",
+    "IZ",
+    "I1",
+    "I2",
+    "A1",
+    "A2",
+}
+
+
+def _try_set_montage(raw: mne.io.BaseRaw, notes: List[str]) -> bool:
+    """Attempt to set a standard 10-20 montage on EEG channels.
+
+    Strips common prefixes (``EEG ``, ``EEG-``) and checks if channel names
+    match the standard 10-20 set.  Returns ``True`` when the montage is
+    successfully applied, ``False`` otherwise.
+    """
+    montage = mne.channels.make_standard_montage("standard_1020")
+    montage_names_upper = {n.upper() for n in montage.ch_names}
+
+    rename_map: Dict[str, str] = {}
+    for ch in raw.ch_names:
+        stripped = ch
+        for prefix in ("EEG ", "EEG-", "eeg ", "eeg-"):
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix) :]
+                break
+        if stripped.upper() in montage_names_upper and stripped != ch:
+            rename_map[ch] = stripped
+
+    if rename_map:
+        raw.rename_channels(rename_map)
+        _note(notes, f"[MONTAGE] renamed_channels={rename_map}")
+
+    eeg_picks = _pick_eeg_indices(raw)
+    eeg_names = [raw.ch_names[i] for i in eeg_picks]
+    matched = [n for n in eeg_names if n.upper() in montage_names_upper]
+
+    if len(matched) < 5:
+        _note(notes, f"[MONTAGE] skipped\tonly {len(matched)}/{len(eeg_names)} channels match 10-20")
+        return False
+
+    # Set channel types so only matched channels get the montage.
+    try:
+        raw.set_channel_types({ch: "eeg" for ch in matched})
+        raw.set_montage(montage, on_missing="warn")
+        _note(notes, f"[MONTAGE] set\tmatched={len(matched)}/{len(eeg_names)}")
+        return True
+    except Exception as e:
+        _note(notes, f"[MONTAGE] failed={type(e).__name__}: {e}")
+        return False
+
+
+def _classify_components_iclabel(
+    raw_for_ica: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    notes: List[str],
+    threshold: float = DEFAULT_ICLABEL_THRESHOLD,
+) -> Optional[Dict[str, Any]]:
+    """Classify ICA components using ICLabel.
+
+    Returns a dict with keys ``excluded``, ``eog_components``, ``ecg_components``,
+    ``muscle_components``, ``line_noise_components``, ``channel_noise_components``,
+    ``iclabel_labels``, ``iclabel_probs``, or ``None`` if ICLabel is unavailable
+    or classification fails.
+    """
+    try:
+        from mne_icalabel import label_components
+    except ImportError:
+        _note(notes, "[ICLABEL] mne_icalabel not installed\tfallback=correlation")
+        return None
+
+    try:
+        result = label_components(raw_for_ica, ica, method="iclabel")
+    except Exception as e:
+        _note(notes, f"[ICLABEL] classification failed={type(e).__name__}: {e}\tfallback=correlation")
+        return None
+
+    labels: List[str] = list(result["labels"])
+    probs: List[List[float]] = [list(row) for row in result["y_pred_proba"]]
+
+    # ICLabel categories: brain, muscle, eye, heart, line_noise, channel_noise, other
+    eog: List[int] = []
+    ecg: List[int] = []
+    muscle: List[int] = []
+    line_noise: List[int] = []
+    channel_noise: List[int] = []
+    excluded: List[int] = []
+
+    for idx, label in enumerate(labels):
+        max_prob = float(max(probs[idx]))
+        if label in ("brain", "other"):
+            continue
+        if max_prob < threshold:
+            continue
+        excluded.append(idx)
+        if label == "eye":
+            eog.append(idx)
+        elif label == "heart":
+            ecg.append(idx)
+        elif label == "muscle":
+            muscle.append(idx)
+        elif label == "line_noise":
+            line_noise.append(idx)
+        elif label == "channel_noise":
+            channel_noise.append(idx)
+
+    _note(
+        notes,
+        f"[ICLABEL] excluded={len(excluded)} "
+        f"(eye={len(eog)}, heart={len(ecg)}, muscle={len(muscle)}, "
+        f"line_noise={len(line_noise)}, ch_noise={len(channel_noise)})",
+    )
+
+    return {
+        "excluded": sorted(excluded),
+        "eog_components": sorted(eog),
+        "ecg_components": sorted(ecg),
+        "muscle_components": sorted(muscle),
+        "line_noise_components": sorted(line_noise),
+        "channel_noise_components": sorted(channel_noise),
+        "iclabel_labels": labels,
+        "iclabel_probs": probs,
+        "eog_channels_used": [],
+        "ecg_channels_used": [],
+    }
+
+
+def _classify_components_correlation(
+    raw_for_ica: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    notes: List[str],
+) -> Dict[str, Any]:
+    """Classify ICA components via correlation (EOG, ECG, muscle).
+
+    This is the fallback path when ICLabel cannot run.
+    """
+    # ── EOG ──────────────────────────────────────────────────────────────
+    eog_channels = _find_eog_channels(raw_for_ica)
+    eog_components: List[int] = []
+    eog_channels_used: List[str] = []
+
+    if eog_channels:
+        for ch in eog_channels:
+            try:
+                inds, _scores = ica.find_bads_eog(raw_for_ica, ch_name=ch, threshold=2.5)
+                eog_components.extend(list(inds))
+                eog_channels_used.append(ch)
+            except Exception as e:
+                _note(notes, f"[EOG] find_bads ch={ch}\tfailed={type(e).__name__}: {e}")
+        eog_components = sorted(set(eog_components))
+    else:
+        _note(notes, "[EOG] no_eog_channels_detected")
+
+    if not eog_components:
+        try:
+            inds, _scores = ica.find_bads_eog(raw_for_ica, threshold=2.5)
+            if inds:
+                eog_components = sorted(set(map(int, inds)))
+                _note(notes, f"[EOG] fallback_mne_auto\tfound={len(inds)}")
+        except Exception as e:
+            _note(notes, f"[EOG] fallback_failed={type(e).__name__}: {e}")
+
+    # ── Muscle ───────────────────────────────────────────────────────────
+    muscle_components: List[int] = []
+    has_dig = bool(raw_for_ica.info.get("dig"))
+    try:
+        if hasattr(ica, "find_bads_muscle") and has_dig:
+            inds, _scores = ica.find_bads_muscle(raw_for_ica)
+            muscle_components = sorted(set(map(int, inds)))
+        elif not has_dig:
+            _note(notes, "[MUSCLE] skipped\treason=no_sensor_positions")
+    except Exception as e:
+        _note(notes, f"[MUSCLE] failed={type(e).__name__}: {e}")
+
+    # ── ECG ──────────────────────────────────────────────────────────────
+    ecg_components: List[int] = []
+    ecg_channels_used: List[str] = []
+    ecg_candidates = [ch for ch in raw_for_ica.ch_names if any(k in ch.upper() for k in ("ECG", "EKG"))]
+    try:
+        if ecg_candidates:
+            inds, _scores = ica.find_bads_ecg(raw_for_ica, ch_name=ecg_candidates[0])
+            ecg_components = sorted(set(map(int, inds)))
+            ecg_channels_used = [ecg_candidates[0]]
+        else:
+            inds, _scores = ica.find_bads_ecg(raw_for_ica)
+            ecg_components = sorted(set(map(int, inds)))
+            if ecg_components:
+                ecg_channels_used = ["MNE_synthetic"]
+    except Exception as e:
+        _note(notes, f"[ECG] failed={type(e).__name__}: {e}")
+
+    excluded = sorted(set(eog_components + muscle_components + ecg_components))
+
+    if not excluded:
+        _note(notes, "[CORRELATION] WARNING\tno_components_excluded")
+
+    return {
+        "excluded": excluded,
+        "eog_components": eog_components,
+        "ecg_components": ecg_components,
+        "muscle_components": muscle_components,
+        "line_noise_components": [],
+        "channel_noise_components": [],
+        "iclabel_labels": None,
+        "iclabel_probs": None,
+        "eog_channels_used": eog_channels_used,
+        "ecg_channels_used": ecg_channels_used,
+    }
+
+
+def _apply_and_summarize(
+    raw: mne.io.BaseRaw,
+    ica: mne.preprocessing.ICA,
+    classification: Dict[str, Any],
+    classification_method: str,
+    notes: List[str],
+) -> Tuple[mne.io.BaseRaw, ICASummary]:
+    """Apply ICA exclusions and build the summary dataclass."""
+    excluded = classification["excluded"]
+    ica.exclude = excluded
+
+    raw_clean = raw.copy()
+    ica.apply(raw_clean)
+
+    summary = ICASummary(
+        method="infomax",
+        classification_method=classification_method,
+        n_components=int(getattr(ica, "n_components_", len(ica.get_components()))),
+        n_components_selected=None,
+        excluded=excluded,
+        eog_channels_used=classification["eog_channels_used"],
+        eog_components=classification["eog_components"],
+        ecg_channels_used=classification["ecg_channels_used"],
+        ecg_components=classification["ecg_components"],
+        muscle_components=classification["muscle_components"],
+        line_noise_components=classification.get("line_noise_components", []),
+        channel_noise_components=classification.get("channel_noise_components", []),
+        iclabel_labels=classification.get("iclabel_labels"),
+        iclabel_probs=classification.get("iclabel_probs"),
+        notes=notes,
+    )
+    return raw_clean, summary
+
+
 # ── Main class ───────────────────────────────────────────────────────────────
 
 
 class ArtifactRejector:
-    """
-    ENG-03 driver: run ICA artifact rejection per session and export
+    """ENG-03 driver: run ICA artifact rejection per session and export
     fixed-window EEG-only epochs + QC metadata.
     """
 
@@ -186,12 +563,14 @@ class ArtifactRejector:
         use_clipped: bool = True,
         ica_filter_hz: Tuple[float, float] = DEFAULT_ICA_FILTER_HZ,
         reject_ptp_percentile: float = DEFAULT_REJECT_PTP_PERCENTILE,
+        iclabel_threshold: float = DEFAULT_ICLABEL_THRESHOLD,
         verbose: bool = False,
     ):
         self.loader = loader or UnifiedDataLoader(data_root=data_root, verbose=verbose)
         self.use_clipped = use_clipped
         self.ica_filter_hz = ica_filter_hz
         self.reject_ptp_percentile = float(reject_ptp_percentile)
+        self.iclabel_threshold = float(iclabel_threshold)
         self.verbose = verbose
 
         if not verbose:
@@ -200,11 +579,10 @@ class ArtifactRejector:
     # ── Public API ───────────────────────────────────────────────────────
 
     def run(self, patient_ids: List[str], save: bool = True) -> Dict[Tuple[str, str], Dict[str, Path]]:
-        """
-        Run ENG-03 for a list of patients.
+        """Run ENG-03 for a list of patients.
 
         Returns:
-            Mapping of ``(patient_id, date) → {trial_type: epochs_fif_path}``.
+            Mapping of ``(patient_id, date) -> {trial_type: epochs_fif_path}``.
         """
         out: Dict[Tuple[str, str], Dict[str, Path]] = {}
         for patient_id in patient_ids:
@@ -214,106 +592,57 @@ class ArtifactRejector:
         return out
 
     def run_session(self, patient_id: str, date: str, save: bool = True) -> Dict[str, Path]:
+        """Run ENG-03 for a single patient session.
+
+        Steps: load -> ICA -> epoch per trial_type -> auto-reject -> save.
         """
-        Run ENG-03 for a single patient session.
-
-        Steps:
-        1. Load EDF + aligned events for this session.
-        2. Apply session-level ICA (EEG channels only).
-        3. Build fixed-window, EEG-only epochs per trial type.
-        4. Auto-reject noisy epochs (percentile-based PTP).
-        5. Save ``.fif`` epochs + QC ``.parquet``.
-        """
-        # ── 1. Load inputs ───────────────────────────────────────────────
-        raw = self.loader.load_edf(patient_id, date=date, use_clipped=self.use_clipped)
-
-        aligned_df = self._load_aligned_events(patient_id)
-        session_df = aligned_df[aligned_df["date"] == date].copy()
-        if session_df.empty:
-            raise FileNotFoundError(
-                f"No aligned events found for {patient_id} date={date}. "
-                f"Expected {config.ALIGNED_EVENTS_DIR / f'{patient_id}_events.parquet'}"
-            )
-
-        # Reuse shared time-utils (same logic as ENG-02 TimestampAligner)
-        timezone_offset = detect_timezone_offset(raw, session_df)
-        edf_start_unix = raw.info["meas_date"].timestamp() if raw.info.get("meas_date") is not None else 0.0
-
-        # ── 2. Session-level ICA ─────────────────────────────────────────
+        raw, session_df, edf_start_unix, timezone_offset = self._load_session_inputs(patient_id, date)
         raw_clean, ica_summary = self._apply_ica(raw)
 
-        # ── 3 & 4. Build epochs per trial type ──────────────────────────
         saved_paths: Dict[str, Path] = {}
         qc_rows: List[Dict[str, Any]] = []
 
         for trial_type, tt_df in session_df.groupby(session_df["trial_type"].astype(str).str.lower()):
-            epochs = self._build_fixed_window_epochs(
+            epochs, qc_row = self._process_trial_type(
                 raw_clean,
                 tt_df,
                 trial_type=trial_type,
+                patient_id=patient_id,
+                date=date,
                 edf_start_unix=edf_start_unix,
                 timezone_offset=timezone_offset,
+                ica_summary=ica_summary,
             )
+            qc_rows.append(qc_row)
 
-            if epochs is None or len(epochs) == 0:
-                qc_rows.append(
-                    self._qc_row(
-                        patient_id=patient_id,
-                        date=date,
-                        trial_type=trial_type,
-                        n_total=0,
-                        n_dropped=0,
-                        threshold_uv=None,
-                        ica_summary=ica_summary,
-                        notes=["no_epochs"],
-                    )
-                )
-                continue
-
-            n_total_before = len(epochs)
-            ptp_uv_before = _epoch_ptp_uv(epochs)
-            ptp_stats = self._ptp_stats(ptp_uv_before)
-            epochs, threshold_uv, dropped = self._auto_reject_epochs(epochs)
-            n_dropped = int(len(dropped))
-
-            qc_rows.append(
-                self._qc_row(
-                    patient_id=patient_id,
-                    date=date,
-                    trial_type=trial_type,
-                    n_total=n_total_before,
-                    n_dropped=n_dropped,
-                    threshold_uv=threshold_uv,
-                    ica_summary=ica_summary,
-                    notes=[],
-                    ptp_stats=ptp_stats,
-                    drop_reason=(
-                        f"ENG03_PTP_GT_P{self.reject_ptp_percentile:g}"
-                        if (dropped and threshold_uv is not None)
-                        else None
-                    ),
-                )
-            )
-
-            # ── 5. Save ──────────────────────────────────────────────────
-            if save:
+            if save and epochs is not None and len(epochs) > 0:
                 fif_path = self._epochs_output_path(patient_id, date, trial_type)
                 fif_path.parent.mkdir(parents=True, exist_ok=True)
                 epochs.save(fif_path, overwrite=True)
                 saved_paths[trial_type] = fif_path
 
         if save:
-            qc_path = self._qc_output_path(patient_id, date)
-            qc_path.parent.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(qc_rows).to_parquet(qc_path, index=False)
+            self._save_qc(qc_rows, patient_id, date)
 
         return saved_paths
 
     # ── I/O helpers ──────────────────────────────────────────────────────
 
-    def _load_aligned_events(self, patient_id: str) -> pd.DataFrame:
-        """Delegate to UnifiedDataLoader so the logic is shared."""
-        return self.loader.load_aligned_events(patient_id)
+    def _load_session_inputs(self, patient_id: str, date: str) -> Tuple[mne.io.BaseRaw, pd.DataFrame, float, float]:
+        """Load EDF, aligned events, and compute time-conversion constants."""
+        raw = self.loader.load_edf(patient_id, date=date, use_clipped=self.use_clipped)
+        aligned_df = self.loader.load_aligned_events(patient_id)
+        session_df = aligned_df[aligned_df["date"] == date].copy()
+
+        if session_df.empty:
+            raise FileNotFoundError(
+                f"No aligned events found for {patient_id} date={date}. "
+                f"Expected {config.ALIGNED_EVENTS_DIR / f'{patient_id}_events.parquet'}"
+            )
+
+        timezone_offset = detect_timezone_offset(raw, session_df)
+        edf_start_unix = raw.info["meas_date"].timestamp() if raw.info.get("meas_date") is not None else 0.0
+        return raw, session_df, edf_start_unix, timezone_offset
 
     @staticmethod
     def _epochs_output_path(patient_id: str, date: str, trial_type: str) -> Path:
@@ -321,150 +650,92 @@ class ArtifactRejector:
         return config.EPOCHS_DIR / patient_id / date / f"{safe_tt}-epo.fif"
 
     @staticmethod
-    def _qc_output_path(patient_id: str, date: str) -> Path:
-        return config.QC_DIR / patient_id / date / "eng03_qc.parquet"
+    def _save_qc(qc_rows: List[Dict[str, Any]], patient_id: str, date: str) -> None:
+        qc_path = config.QC_DIR / patient_id / date / "eng03_qc.parquet"
+        qc_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(qc_rows).to_parquet(qc_path, index=False)
 
     # ── Core processing ──────────────────────────────────────────────────
 
     def _apply_ica(self, raw: mne.io.BaseRaw) -> Tuple[mne.io.BaseRaw, ICASummary]:
-        """
-        Fit ICA on **EEG-only** channels of a bandpass-filtered copy, then apply
-        artifact-component subtraction to the original (unfiltered) Raw.
+        """Fit ICA, classify components (ICLabel primary, correlation fallback),
+        and subtract artifact components from the raw signal."""
+        raw_for_ica, picks_eeg, notes = _prepare_ica_data(raw, self.ica_filter_hz, self.verbose)
+        ica = _fit_ica(raw_for_ica, picks_eeg)
 
-        Key design decisions
-        --------------------
-        * We keep *all* channels in ``raw_for_ica`` so that dedicated EOG channels
-          (IO1/IO2, or Fp1/Fp2 as surrogates) remain available as reference for
-          ``find_bads_eog``.  Only the ``picks_eeg`` subset is used for ICA fitting
-          and filtering.
-        * ``find_bads_eog`` uses ``threshold=2.5`` (lower than the MNE default of
-          3.0) because surrogate-EOG channels produce weaker cross-correlations
-          than dedicated EOG electrodes.
-        """
-        notes: List[str] = []
+        # Primary path: ICLabel (requires montage for topographic features).
+        montage_ok = _try_set_montage(raw_for_ica, notes)
+        classification: Optional[Dict[str, Any]] = None
+        method = "correlation"
 
-        # Identify non-EEG channels for diagnostic logging.
-        non_eeg_names = exclude_non_eeg_channels(raw)
-        if non_eeg_names:
-            notes.append(f"[CHANNELS] non_eeg_excluded={non_eeg_names}")
+        if montage_ok:
+            classification = _classify_components_iclabel(
+                raw_for_ica,
+                ica,
+                notes,
+                threshold=self.iclabel_threshold,
+            )
+            if classification is not None:
+                method = "iclabel"
 
-        # Full copy — we do NOT drop channels so that EOG reference channels
-        # (IO1/IO2, Fp1/Fp2) remain available for find_bads_eog.
-        raw_for_ica = raw.copy()
+        # Fallback: correlation-based detection.
+        if classification is None:
+            classification = _classify_components_correlation(raw_for_ica, ica, notes)
 
-        # Pick EEG-only channels (keyword exclusion is always applied).
-        picks_eeg = _pick_eeg_indices(raw_for_ica)
-        notes.append(f"[CHANNELS] n_eeg={len(picks_eeg)}")
-        if len(picks_eeg) == 0:
-            notes.append("[CHANNELS] no_eeg_after_exclusion\tfallback=all")
-            picks_eeg = np.arange(len(raw_for_ica.ch_names))
+        return _apply_and_summarize(raw, ica, classification, method, notes)
 
-        # Bandpass filter EEG channels only (for ICA stability).
-        l_freq, h_freq = self.ica_filter_hz
-        try:
-            raw_for_ica.filter(l_freq=l_freq, h_freq=h_freq, picks=picks_eeg, verbose=self.verbose)
-        except Exception as e:
-            notes.append(f"[FILTER] failed={type(e).__name__}: {e}")
-
-        # Fit ICA on EEG-only picks.
-        ica = mne.preprocessing.ICA(
-            n_components=0.99,
-            method="fastica",
-            max_iter="auto",
-            random_state=97,
+    def _process_trial_type(
+        self,
+        raw_clean: mne.io.BaseRaw,
+        tt_df: pd.DataFrame,
+        *,
+        trial_type: str,
+        patient_id: str,
+        date: str,
+        edf_start_unix: float,
+        timezone_offset: float,
+        ica_summary: ICASummary,
+    ) -> Tuple[Optional[mne.Epochs], Dict[str, Any]]:
+        """Build epochs for one trial type, auto-reject, and return a QC row."""
+        epochs = self._build_fixed_window_epochs(
+            raw_clean,
+            tt_df,
+            trial_type=trial_type,
+            edf_start_unix=edf_start_unix,
+            timezone_offset=timezone_offset,
         )
-        ica.fit(raw_for_ica, picks=picks_eeg)
 
-        # ── Auto-detect artifact components ─ EOG (eye blinks) ──────────
-        eog_channels = _find_eog_channels(raw_for_ica)
-        eog_components: List[int] = []
-        eog_channels_used: List[str] = []
+        if epochs is None or len(epochs) == 0:
+            return None, self._qc_row(
+                patient_id=patient_id,
+                date=date,
+                trial_type=trial_type,
+                n_total=0,
+                n_dropped=0,
+                threshold_uv=None,
+                ica_summary=ica_summary,
+                notes=["no_epochs"],
+            )
 
-        if eog_channels:
-            for ch in eog_channels:
-                try:
-                    inds, _scores = ica.find_bads_eog(
-                        raw_for_ica,
-                        ch_name=ch,
-                        threshold=2.5,
-                    )
-                    eog_components.extend(list(inds))
-                    eog_channels_used.append(ch)
-                except Exception as e:
-                    notes.append(f"[EOG] find_bads ch={ch}\tfailed={type(e).__name__}: {e}")
-            eog_components = sorted(set(eog_components))
-        else:
-            notes.append("[EOG] no_eog_channels_detected")
+        n_total_before = len(epochs)
+        ptp_stats = self._ptp_stats(_epoch_ptp_uv(epochs))
+        epochs, threshold_uv, dropped = self._auto_reject_epochs(epochs)
 
-        # Fallback: let MNE try its own EOG-channel synthesis if we found nothing.
-        if not eog_components:
-            try:
-                inds, _scores = ica.find_bads_eog(raw_for_ica, threshold=2.5)
-                if inds:
-                    eog_components = sorted(set(map(int, inds)))
-                    notes.append(f"[EOG] fallback_mne_auto\tfound={len(inds)}")
-            except Exception as e:
-                notes.append(f"[EOG] fallback_failed={type(e).__name__}: {e}")
-
-        # ── Auto-detect artifact components ─ muscle noise ───────────────
-        # find_bads_muscle uses topography + slope when sensor positions are
-        # available, but falls back to slope-only when they aren't (common with
-        # clinical EDF files).  The slope-only criterion tends to be
-        # over-aggressive, so we skip muscle detection when no digitization is
-        # present to avoid discarding legitimate brain signal.
-        muscle_components: List[int] = []
-        has_dig = bool(raw_for_ica.info.get("dig"))
-        try:
-            if hasattr(ica, "find_bads_muscle") and has_dig:
-                inds, _scores = ica.find_bads_muscle(raw_for_ica)
-                muscle_components = sorted(set(map(int, inds)))
-            elif not has_dig:
-                notes.append("[MUSCLE] skipped\treason=no_sensor_positions")
-        except Exception as e:
-            notes.append(f"[MUSCLE] failed={type(e).__name__}: {e}")
-
-        # ── Auto-detect artifact components ─ ECG (heartbeat) ─────────────
-        ecg_components: List[int] = []
-        ecg_channels_used: List[str] = []
-        ecg_candidates = [ch for ch in raw_for_ica.ch_names if any(k in ch.upper() for k in ("ECG", "EKG"))]
-        try:
-            if ecg_candidates:
-                inds, _scores = ica.find_bads_ecg(raw_for_ica, ch_name=ecg_candidates[0])
-                ecg_components = sorted(set(map(int, inds)))
-                ecg_channels_used = [ecg_candidates[0]]
-            else:
-                # Let MNE try to synthesise an ECG channel from magnetometers / EEG
-                inds, _scores = ica.find_bads_ecg(raw_for_ica)
-                ecg_components = sorted(set(map(int, inds)))
-                if ecg_components:
-                    ecg_channels_used = ["MNE_synthetic"]
-        except Exception as e:
-            notes.append(f"[ECG] failed={type(e).__name__}: {e}")
-
-        excluded_components = sorted(set(eog_components + muscle_components + ecg_components))
-        ica.exclude = excluded_components
-
-        if not excluded_components:
-            notes.append("[ICA] WARNING\tno_components_excluded")
-
-        # Apply ICA to original raw (MNE subtracts excluded components from
-        # the channels the ICA was trained on; other channels are untouched).
-        raw_clean = raw.copy()
-        ica.apply(raw_clean)
-
-        summary = ICASummary(
-            method="fastica",
-            n_components=int(getattr(ica, "n_components_", len(ica.get_components()))),
-            n_components_selected=None,
-            excluded=excluded_components,
-            eog_channels_used=eog_channels_used,
-            eog_components=eog_components,
-            ecg_channels_used=ecg_channels_used,
-            ecg_components=ecg_components,
-            muscle_components=muscle_components,
-            notes=notes,
+        qc = self._qc_row(
+            patient_id=patient_id,
+            date=date,
+            trial_type=trial_type,
+            n_total=n_total_before,
+            n_dropped=len(dropped),
+            threshold_uv=threshold_uv,
+            ica_summary=ica_summary,
+            notes=[],
+            ptp_stats=ptp_stats,
+            drop_reason=(
+                f"ENG03_PTP_GT_P{self.reject_ptp_percentile:g}" if (dropped and threshold_uv is not None) else None
+            ),
         )
-        return raw_clean, summary
+        return epochs, qc
 
     def _build_fixed_window_epochs(
         self,
@@ -475,12 +746,7 @@ class ArtifactRejector:
         edf_start_unix: float,
         timezone_offset: float,
     ) -> Optional[mne.Epochs]:
-        """
-        Create fixed-length, **EEG-only** epochs aligned to trial start times.
-
-        Uses the shared :func:`unix_to_edf` from ``src.utils.time_utils`` for
-        timestamp conversion (same formula as ENG-02).
-        """
+        """Create fixed-length, EEG-only epochs using vectorized time conversion."""
         if trials_df.empty:
             return None
 
@@ -489,45 +755,29 @@ class ArtifactRejector:
             return None
 
         sfreq = float(raw.info["sfreq"])
-
-        # Pick EEG-only channels for the epoch (no DC/AUX in output).
+        max_time = float(raw.times[-1])
         picks_eeg = _pick_eeg_indices(raw)
 
-        events_list: List[List[int]] = []
-        metadata_rows: List[Dict[str, Any]] = []
+        # Vectorized time conversion (replaces iterrows).
+        start_unix = trials_df["start_time"].values.astype(float)
+        valid_mask = ~np.isnan(start_unix)
+        start_edf = start_unix[valid_mask] - edf_start_unix + timezone_offset
+        in_range = (start_edf >= 0) & (start_edf + window_sec <= max_time)
+        start_edf = start_edf[in_range]
 
-        for idx, row in trials_df.reset_index(drop=True).iterrows():
-            start_unix = row.get("start_time")
-            if start_unix is None or (isinstance(start_unix, float) and np.isnan(start_unix)):
-                continue
-
-            # Reuse shared time conversion (same as ENG-02 TimestampAligner._unix_to_edf)
-            start_edf = unix_to_edf(float(start_unix), edf_start_unix=edf_start_unix, timezone_offset=timezone_offset)
-            if start_edf < 0:
-                continue
-
-            start_samp = int(round(start_edf * sfreq))
-            end_edf = start_edf + float(window_sec)
-            if end_edf > raw.times[-1]:
-                continue
-
-            events_list.append([start_samp, 0, 1])
-            metadata_rows.append(
-                {
-                    "trial_idx": int(idx),
-                    "start_time_unix": float(start_unix),
-                    "end_time_unix": float(row.get("end_time")) if row.get("end_time") is not None else None,
-                    "duration_log_sec": float(row.get("duration")) if row.get("duration") is not None else None,
-                    "source_file": row.get("source_file"),
-                }
-            )
-
-        if not events_list:
+        if len(start_edf) == 0:
             return None
 
-        events_arr = np.array(events_list, dtype=int)
-        event_id = {str(trial_type).lower().strip(): 1}
+        start_samps = np.round(start_edf * sfreq).astype(int)
+        events_arr = np.column_stack(
+            [
+                start_samps,
+                np.zeros(len(start_samps), dtype=int),
+                np.ones(len(start_samps), dtype=int),
+            ]
+        )
 
+        event_id = {str(trial_type).lower().strip(): 1}
         epochs = mne.Epochs(
             raw,
             events_arr,
@@ -542,18 +792,24 @@ class ArtifactRejector:
             verbose=self.verbose,
         )
 
+        # Build metadata for the valid rows.
+        valid_df = trials_df.iloc[np.where(valid_mask)[0][in_range]].reset_index(drop=True)
         try:
-            epochs.metadata = pd.DataFrame(metadata_rows)
+            epochs.metadata = pd.DataFrame(
+                {
+                    "start_time_unix": valid_df["start_time"].values.astype(float),
+                    "end_time_unix": valid_df["end_time"].values.astype(float) if "end_time" in valid_df else np.nan,
+                    "duration_log_sec": valid_df["duration"].values.astype(float) if "duration" in valid_df else np.nan,
+                    "source_file": valid_df["source_file"].values if "source_file" in valid_df else None,
+                }
+            )
         except Exception:
             pass
 
         return epochs
 
     def _auto_reject_epochs(self, epochs: mne.Epochs) -> Tuple[mne.Epochs, Optional[float], List[int]]:
-        """
-        Drop epochs whose max peak-to-peak amplitude (µV) exceeds the
-        configured percentile threshold across all epochs.
-        """
+        """Drop epochs whose max PTP (uV) exceeds the configured percentile."""
         if len(epochs) == 0:
             return epochs, None, []
 
