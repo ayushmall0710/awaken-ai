@@ -195,6 +195,13 @@ def _prepare_ica_data(
         _note(notes, f"[CHANNELS] non_eeg_excluded={non_eeg_names}")
 
     raw_for_ica = raw.copy()
+
+    # Set non-EEG channels to "misc" so that CAR / montage only touch EEG.
+    if non_eeg_names:
+        type_map = {ch: "misc" for ch in non_eeg_names if ch in raw_for_ica.ch_names}
+        if type_map:
+            raw_for_ica.set_channel_types(type_map)
+
     picks_eeg = _pick_eeg_indices(raw_for_ica)
     _note(notes, f"[CHANNELS] n_eeg={len(picks_eeg)}")
 
@@ -356,6 +363,19 @@ def _try_set_montage(raw: mne.io.BaseRaw, notes: List[str]) -> bool:
         return False
 
 
+def _apply_car_reference(raw: mne.io.BaseRaw, notes: List[str]) -> None:
+    """Apply Common Average Reference (CAR) to EEG channels.
+
+    ICLabel was trained on CAR-referenced data, so applying CAR before
+    fitting ICA and running ICLabel improves classification accuracy.
+    """
+    try:
+        raw.set_eeg_reference("average", projection=False, verbose=False)
+        _note(notes, "[REFERENCE] CAR applied")
+    except Exception as e:
+        _note(notes, f"[REFERENCE] CAR failed={type(e).__name__}: {e}")
+
+
 def _classify_components_iclabel(
     raw_for_ica: mne.io.BaseRaw,
     ica: mne.preprocessing.ICA,
@@ -382,7 +402,14 @@ def _classify_components_iclabel(
         return None
 
     labels: List[str] = list(result["labels"])
-    probs: List[List[float]] = [list(row) for row in result["y_pred_proba"]]
+
+    # y_pred_proba is normally (n_components, n_classes).
+    # Some versions / edge cases return a 1D array — reshape so the first
+    # axis always equals len(labels).
+    raw_probs = np.asarray(result["y_pred_proba"])
+    if raw_probs.ndim == 1:
+        raw_probs = raw_probs[:, np.newaxis]  # (N,) → (N, 1)
+    probs: List[List[float]] = raw_probs.tolist()
 
     # ICLabel categories: brain, muscle, eye, heart, line_noise, channel_noise, other
     eog: List[int] = []
@@ -659,12 +686,21 @@ class ArtifactRejector:
 
     def _apply_ica(self, raw: mne.io.BaseRaw) -> Tuple[mne.io.BaseRaw, ICASummary]:
         """Fit ICA, classify components (ICLabel primary, correlation fallback),
-        and subtract artifact components from the raw signal."""
+        and subtract artifact components from the raw signal.
+
+        The recommended ICLabel workflow is:
+        filter → montage → CAR → fit ICA → classify → apply.
+        """
         raw_for_ica, picks_eeg, notes = _prepare_ica_data(raw, self.ica_filter_hz, self.verbose)
+
+        # Set montage + CAR *before* fitting ICA (matches ICLabel training pipeline).
+        montage_ok = _try_set_montage(raw_for_ica, notes)
+        if montage_ok:
+            _apply_car_reference(raw_for_ica, notes)
+
         ica = _fit_ica(raw_for_ica, picks_eeg)
 
         # Primary path: ICLabel (requires montage for topographic features).
-        montage_ok = _try_set_montage(raw_for_ica, notes)
         classification: Optional[Dict[str, Any]] = None
         method = "correlation"
 

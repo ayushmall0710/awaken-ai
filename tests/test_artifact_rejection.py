@@ -12,6 +12,7 @@ mne = pytest.importorskip("mne")  # ENG-03 depends on MNE; skip tests if not ins
 from src.data_processing.artifact_rejection import (  # noqa: E402
     WINDOW_SEC_BY_TRIAL_TYPE,
     ArtifactRejector,
+    _apply_car_reference,
     _classify_components_correlation,
     _classify_components_iclabel,
     _find_eog_channels,
@@ -241,6 +242,28 @@ def test_try_set_montage_strips_eeg_prefix():
     _try_set_montage(raw, notes)
     rename_notes = [n for n in notes if "renamed_channels" in n]
     assert len(rename_notes) > 0
+
+
+# ── CAR reference ────────────────────────────────────────────────────────────
+
+
+def test_apply_car_reference_records_note():
+    """_apply_car_reference should call set_eeg_reference and log a note."""
+    raw = _mock_raw(ch_names=["C3", "C4", "O1", "O2", "Fz"])
+    raw.set_eeg_reference = MagicMock()
+    notes: list = []
+    _apply_car_reference(raw, notes)
+    raw.set_eeg_reference.assert_called_once()
+    assert any("[REFERENCE]" in n and "CAR" in n for n in notes)
+
+
+def test_apply_car_reference_handles_failure():
+    """_apply_car_reference should log a note when CAR fails."""
+    raw = _mock_raw(ch_names=["C3", "C4"])
+    raw.set_eeg_reference = MagicMock(side_effect=RuntimeError("CAR error"))
+    notes: list = []
+    _apply_car_reference(raw, notes)
+    assert any("CAR failed" in n for n in notes)
 
 
 # ── ICLabel classification ───────────────────────────────────────────────────
