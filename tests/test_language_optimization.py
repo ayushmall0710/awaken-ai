@@ -220,8 +220,12 @@ def test_extract_itpc_metrics_structure(itpc_epochs):
     metrics = processor.extract_itpc_metrics(itpc_data)
 
     expected_keys = {
-        "itpc_sentence", "itpc_word", "ratio_sent_word",
-        "freq_sentence_hz", "freq_word_hz", "idx_sentence",
+        "itpc_sentence",
+        "itpc_word",
+        "ratio_sent_word",
+        "freq_sentence_hz",
+        "freq_word_hz",
+        "idx_sentence",
     }
 
     assert expected_keys.issubset(metrics.keys())

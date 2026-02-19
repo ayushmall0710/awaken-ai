@@ -254,9 +254,7 @@ class LanguageProcessor:
         )
         return itc.data, itc
 
-    def compute_itpc_dft(
-        self, epochs: mne.Epochs
-    ):
+    def compute_itpc_dft(self, epochs: mne.Epochs):
         """
         Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
 

@@ -61,8 +61,25 @@ def verify_patient(patient_id="CON008"):
         print("[PASS] All LH priority channels present")
 
     clinical_20 = {
-        "Fp1", "Fp2", "Fz", "F3", "F4", "F7", "F8", "Cz", "C3", "C4",
-        "T7", "T8", "Pz", "P3", "P4", "P7", "P8", "O1", "O2",
+        "Fp1",
+        "Fp2",
+        "Fz",
+        "F3",
+        "F4",
+        "F7",
+        "F8",
+        "Cz",
+        "C3",
+        "C4",
+        "T7",
+        "T8",
+        "Pz",
+        "P3",
+        "P4",
+        "P7",
+        "P8",
+        "O1",
+        "O2",
     }
     clinical_found = clinical_20.intersection(selected_channels)
     print(f"Clinical 20 channels found: {len(clinical_found)}/19 expected")

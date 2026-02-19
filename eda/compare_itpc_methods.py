@@ -119,11 +119,7 @@ def compare_patient(processor, patient_id, focus="LH"):
         f"{morlet_metrics['itpc_sentence']:>10.4f} "
         f"{dft_metrics['itpc_sentence']:>10.4f}"
     )
-    print(
-        f"{'Word ITPC (0.77 Hz)':<30} "
-        f"{morlet_metrics['itpc_word']:>10.4f} "
-        f"{dft_metrics['itpc_word']:>10.4f}"
-    )
+    print(f"{'Word ITPC (0.77 Hz)':<30} {morlet_metrics['itpc_word']:>10.4f} {dft_metrics['itpc_word']:>10.4f}")
     print(
         f"{'Ratio (Sentence/Word)':<30} "
         f"{morlet_metrics['ratio_sent_word']:>10.2f} "
@@ -131,9 +127,7 @@ def compare_patient(processor, patient_id, focus="LH"):
     )
     sent_morlet_gt = morlet_metrics["itpc_sentence"] > morlet_metrics["itpc_word"]
     sent_dft_gt = dft_metrics["itpc_sentence"] > dft_metrics["itpc_word"]
-    print(
-        f"{'Sentence > Word?':<30} {str(sent_morlet_gt):>10} {str(sent_dft_gt):>10}"
-    )
+    print(f"{'Sentence > Word?':<30} {str(sent_morlet_gt):>10} {str(sent_dft_gt):>10}")
 
     return {
         "patient_id": patient_id,
