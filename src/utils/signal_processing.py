@@ -5,7 +5,7 @@ Helper functions for signal processing: peak detection, resampling, normalizatio
 """
 
 import logging
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import scipy.signal
@@ -206,7 +206,12 @@ def cross_correlate(recording: np.ndarray, template: np.ndarray) -> Tuple[int, f
 
 def audio_envelope(audio: np.ndarray, sample_rate: float = None, smooth_ms: float = 20) -> np.ndarray:
     """
-    Compute audio amplitude envelope using Hilbert transform.
+    Compute audio amplitude envelope using Hilbert transform (linear scale).
+
+    Difference from compute_band_envelope:
+    - No bandpass filter (broadband).
+    - Returns linear amplitude (abs(analytic)).
+    - Uniform smoothing.
 
     The envelope representation often correlates better with DC channel signals
     than raw audio waveforms, as DC channels may record amplitude-modulated signals.
@@ -226,6 +231,29 @@ def audio_envelope(audio: np.ndarray, sample_rate: float = None, smooth_ms: floa
         window_samples = max(1, int(sample_rate * smooth_ms / 1000))
         envelope = uniform_filter1d(envelope, size=window_samples)
 
+    return envelope
+
+
+def compute_band_envelope(
+    data: np.ndarray, sfreq: float, band: Tuple[float, float], smooth_sec: float = 0.5
+) -> np.ndarray:
+    """Compute smoothed band power envelope using Hilbert transform (squared).
+
+    Difference from audio_envelope:
+    - Bandpass filtered.
+    - Returns POWER envelope (squared).
+    - Convolution smoothing.
+    """
+    nyq = sfreq / 2
+    b, a = scipy.signal.butter(4, [band[0] / nyq, band[1] / nyq], btype="band")
+    filtered = scipy.signal.filtfilt(b, a, data)
+    envelope = np.abs(scipy.signal.hilbert(filtered)) ** 2
+
+    # Vectorized smoothing using convolution
+    window = int(smooth_sec * sfreq)
+    if window > 1:
+        kernel = np.ones(window) / window
+        envelope = np.convolve(envelope, kernel, mode="same")
     return envelope
 
 
@@ -250,3 +278,84 @@ def highpass_filter(signal_data: np.ndarray, sfreq: float, cutoff_hz: float = 50
 
     b, a = scipy.signal.butter(order, cutoff / nyq, btype="high")
     return scipy.signal.filtfilt(b, a, signal_data)
+
+
+def compute_welch_psd(
+    data: np.ndarray,
+    sfreq: float,
+    n_per_seg: int = None,
+    n_overlap: int = None,
+    fmin: float = 0.0,
+    fmax: float = np.inf,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute Power Spectral Density (PSD) using Welch's method.
+    Fully vectorized for (n_channels, n_times) or (n_epochs, n_channels, n_times) arrays.
+
+    Args:
+        data: Input data array. Shape (n_channels, n_times) or (n_epochs, n_channels, n_times).
+        sfreq: Sampling frequency in Hz.
+        n_per_seg: Length of each Welch segment in samples. Defaults to 2s if None.
+        n_overlap: Overlap between segments. Defaults to 50% if None.
+        fmin: Minimum frequency of interest (for output cropping).
+        fmax: Maximum frequency of interest (for output cropping).
+
+    Returns:
+        freqs: Frequency array of shape (n_freqs,)
+        psd: PSD array of shape (..., n_freqs) matching input batch dimensions.
+    """
+    if n_per_seg is None:
+        n_per_seg = int(sfreq * 2)  # Default 2 second window
+
+    if n_overlap is None:
+        n_overlap = n_per_seg // 2
+
+    # Scipy's welch is already vectorized over the last axis if specified (axis=-1)
+    freqs, psd = scipy.signal.welch(data, fs=sfreq, nperseg=n_per_seg, noverlap=n_overlap, axis=-1)
+
+    # Vectorized frequency masking (no loops)
+    mask = (freqs >= fmin) & (freqs <= fmax)
+    return freqs[mask], psd[..., mask]
+
+
+def calculate_band_power(
+    psd: np.ndarray,
+    freqs: np.ndarray,
+    bands: Dict[str, Tuple[float, float]],
+    relative: bool = False,
+) -> Dict[str, np.ndarray]:
+    """
+    Compute average power in specific frequency bands.
+
+    Args:
+        psd: PSD array of shape (..., n_freqs).
+        freqs: Frequency array of shape (n_freqs,).
+        bands: Dictionary of {band_name: (low, high)}.
+        relative: If True, normalize by total power (sum over all frequencies).
+
+    Returns:
+        Dictionary where keys are band names and values are arrays of power values.
+    """
+    # Pre-calculate frequency resolution (assuming uniform spacing)
+    if len(freqs) > 1:
+        dx = freqs[1] - freqs[0]
+    else:
+        dx = 1.0
+
+    total_power = np.sum(psd, axis=-1, keepdims=True) * dx if relative else 1.0
+
+    results = {}
+    for band_name, (low, high) in bands.items():
+        mask = (freqs >= low) & (freqs <= high)
+
+        # Integration via sum * dx (trapezoidal approximation)
+        band_power = np.sum(psd[..., mask], axis=-1) * dx
+
+        if relative:
+            band_power = band_power / total_power
+            if isinstance(total_power, np.ndarray) and total_power.ndim > band_power.ndim:
+                band_power = band_power.squeeze()
+
+        results[band_name] = band_power
+
+    return results

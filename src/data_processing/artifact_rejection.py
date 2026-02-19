@@ -147,7 +147,7 @@ def _epoch_ptp_uv(epochs: mne.Epochs) -> np.ndarray:
     data = epochs.get_data()  # (n_epochs, n_channels, n_times)
     if data.size == 0:
         return np.array([], dtype=float)
-    ptp_v = data.ptp(axis=2)  # (n_epochs, n_channels)
+    ptp_v = np.ptp(data, axis=2)  # (n_epochs, n_channels)
     max_ptp_v = ptp_v.max(axis=1)  # (n_epochs,)
     return max_ptp_v * 1e6
 
@@ -832,6 +832,7 @@ class ArtifactRejector:
             preload=True,
             reject=None,
             flat=None,
+            event_repeated="drop",
             verbose=self.verbose,
         )
 
