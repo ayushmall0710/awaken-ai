@@ -6,6 +6,14 @@ This document provides a detailed implementation plan for adding `session_id` an
 
 **Timeline Estimate:** 3-4 weeks (includes testing and validation)
 
+**Key Design Decision - Feature Granularity:**
+The ERP pipeline currently aggregates all trials of the same type (e.g., multiple oddball trials) into ONE feature row per session. The deduplication key `["patient_id", "session_id", "trial_type", "processing_timestamp"]` supports this by:
+- Allowing multiple trial types per session (oddball, language, command)
+- Using `processing_timestamp` to track analysis reruns  
+- Adding `rare_event_trial_ids` field to maintain trial-level traceability (e.g., "1,3,5,7")
+
+Alternative per-trial features can be implemented later with deduplication key `["patient_id", "session_id", "trial_id"]` if needed.
+
 ---
 
 ## 1. Data Pipeline & Unification (`src/data_processing/pipeline.py`)
@@ -706,6 +714,50 @@ def _process_session(
     # ... rest of method
 ```
 
+#### Important Design Decision: Feature Granularity
+
+**Current ERP Pipeline Design:**
+The existing `_process_session()` aggregates ALL oddball trials in a session:
+1. Extracts rare events from all oddball trials
+2. Creates epochs from all rare events
+3. Averages epochs into ONE ERP
+4. Generates ONE feature row per session
+
+**This means:**
+- Multiple oddball trials in a session → ONE aggregated feature row
+- `trial_type` = "oddball" identifies what was analyzed
+- `rare_event_trial_ids` tracks which specific trials contributed (e.g., "1,3,5")
+
+**Deduplication Key Considerations:**
+
+**Option A (Recommended - Session-level aggregation):**
+```python
+Key: ["patient_id", "session_id", "trial_type", "processing_timestamp"]
+```
+- Supports current aggregated design
+- `trial_type` distinguishes oddball vs. language vs. command features
+- `processing_timestamp` allows tracking analysis reruns
+- `rare_event_trial_ids` provides trial traceability
+
+**Option B (Future - Per-trial features):**
+```python
+Key: ["patient_id", "session_id", "trial_id"]
+```
+- Would require redesigning `_process_session()` to loop over individual trials
+- Each oddball trial gets its own feature row
+- More flexible but requires more storage
+- Example: Session with 5 oddball trials → 5 feature rows instead of 1
+
+**Recommendation:**
+- Use Option A for initial implementation (matches current design)
+- Add `rare_event_trial_ids` to maintain traceability
+- Option B can be implemented later if per-trial analysis is needed
+
+The user's concern about multiple trials of the same type is valid. With Option A, we handle this by:
+1. Aggregating them into one feature row (current behavior)
+2. Tracking contributing trials via `rare_event_trial_ids = "1,3,5,7"`
+3. Using `processing_timestamp` to distinguish analysis reruns
+
 #### Task 4.2: Update _extract_rare_events()
 **File:** `src/data_processing/erp_pipeline.py`  
 **Lines:** 312-365
@@ -776,6 +828,9 @@ features = {
 
 **New:**
 ```python
+# First, extract unique trial_ids from rare_events
+unique_trial_ids = sorted(set(event["trial_id"] for event in rare_events))
+
 features = {
     "patient_id": patient_id,
     "session_id": session_id,     # NEW
@@ -785,12 +840,19 @@ features = {
     "processing_timestamp": datetime.now().isoformat(),
     # ... P300 metrics
     
-    # NEW: Event tracking
+    # NEW: Trial-level tracking for session-level aggregation
     "n_total_oddball_trials": len(aligned_trials),
+    "n_trials_with_rare_events": len(unique_trial_ids),
     "n_rare_events_extracted": len(rare_events),
-    "rare_event_trial_ids": ",".join(map(str, unique_trial_ids)),  # Which trials contributed
+    "rare_event_trial_ids": ",".join(map(str, unique_trial_ids)),  # e.g., "1,3,5,7"
 }
 ```
+
+**Explanation:**
+- `rare_event_trial_ids` contains comma-separated trial_ids that contributed rare events
+- Example: If session has oddball trials [1, 2, 3, 4, 5] but only trials [1, 3, 5] had rare events, then `rare_event_trial_ids = "1,3,5"`
+- This provides full traceability: which specific trials were used to create the aggregated ERP
+
 
 #### Task 4.4: Update Master Feature Table Deduplication
 **File:** `src/data_processing/erp_pipeline.py`  
@@ -815,8 +877,23 @@ def _update_master_feature_table(self, incoming_features: pd.DataFrame) -> pd.Da
     """
     Upsert session features into master table.
     
-    Deduplication key: (patient_id, session_id, trial_type)
-    This allows multiple trial types per session to coexist.
+    Deduplication key options:
+    
+    **Option A (Recommended): Session-level aggregation**
+    Key: (patient_id, session_id, trial_type, processing_timestamp)
+    - One feature row per session per trial type
+    - Aggregates all trials of same type (e.g., all oddball trials → one P300 feature)
+    - Uses processing_timestamp to track analysis reruns
+    - Suitable for current ERP pipeline design
+    
+    **Option B: Trial-level granularity**
+    Key: (patient_id, session_id, trial_id)
+    - One feature row per individual trial
+    - Requires redesigning _process_session to loop over trials
+    - More flexible for per-trial analysis
+    - Higher storage requirements
+    
+    Current implementation uses Option A with trial tracking via rare_event_trial_ids.
     """
     master_path = self.output_dir / "features" / "p300_features.parquet"
     
@@ -826,11 +903,19 @@ def _update_master_feature_table(self, incoming_features: pd.DataFrame) -> pd.Da
     else:
         combined = incoming_features.copy()
     
-    # NEW deduplication key: patient_id + session_id + trial_type
+    # Option A: Deduplicate by session + trial_type + processing_timestamp
+    # This allows multiple oddball trials in a session to be aggregated
+    # Use processing_timestamp to track different analysis runs
     combined = combined.drop_duplicates(
-        subset=["patient_id", "session_id", "trial_type"], 
+        subset=["patient_id", "session_id", "trial_type", "processing_timestamp"], 
         keep="last"
     )
+    
+    # Alternative (Option B): For per-trial features, use trial_id
+    # combined = combined.drop_duplicates(
+    #     subset=["patient_id", "session_id", "trial_id"], 
+    #     keep="last"
+    # )
     
     combined.to_parquet(master_path)
     logger.info(f"Updated master feature table: {master_path} ({len(combined)} rows)")
@@ -873,31 +958,55 @@ epochs.info["description"] = f"session_id={session_id}"
 
 **Feature Integrity Checks:**
 ```python
-def validate_feature_table(features_df: pd.DataFrame) -> Dict[str, bool]:
-    """Validate P300 feature table integrity."""
+def validate_feature_table(features_df: pd.DataFrame, granularity: str = "session") -> Dict[str, bool]:
+    """
+    Validate P300 feature table integrity.
+    
+    Args:
+        features_df: Feature table to validate
+        granularity: Either "session" (aggregated) or "trial" (per-trial features)
+    """
     results = {
-        "no_duplicate_sessions": True,
+        "no_duplicate_entries": True,
         "all_have_session_id": True,
         "trial_id_tracking": True,
+        "timestamp_monotonic": True,
     }
     
-    # Check 1: No duplicate (patient_id, session_id, trial_type)
-    key_cols = ["patient_id", "session_id", "trial_type"]
-    if features_df.duplicated(subset=key_cols).any():
-        duplicates = features_df[features_df.duplicated(subset=key_cols, keep=False)]
-        logger.error(f"Found {len(duplicates)} duplicate sessions in feature table")
-        results["no_duplicate_sessions"] = False
+    # Check 1: No duplicate entries based on chosen granularity
+    if granularity == "session":
+        # For session-level: patient + session + trial_type + processing_timestamp
+        key_cols = ["patient_id", "session_id", "trial_type", "processing_timestamp"]
+        if features_df.duplicated(subset=key_cols).any():
+            duplicates = features_df[features_df.duplicated(subset=key_cols, keep=False)]
+            logger.error(f"Found {len(duplicates)} duplicate session-level features")
+            results["no_duplicate_entries"] = False
+    elif granularity == "trial":
+        # For trial-level: patient + session + trial_id
+        key_cols = ["patient_id", "session_id", "trial_id"]
+        if features_df.duplicated(subset=key_cols).any():
+            duplicates = features_df[features_df.duplicated(subset=key_cols, keep=False)]
+            logger.error(f"Found {len(duplicates)} duplicate trial-level features")
+            results["no_duplicate_entries"] = False
     
     # Check 2: All rows have session_id
     if features_df["session_id"].isna().any():
         results["all_have_session_id"] = False
     
-    # Check 3: rare_event_trial_ids field populated
-    if "rare_event_trial_ids" in features_df.columns:
+    # Check 3: rare_event_trial_ids field populated (for session-level aggregation)
+    if granularity == "session" and "rare_event_trial_ids" in features_df.columns:
         null_tracking = features_df["rare_event_trial_ids"].isna().sum()
         if null_tracking > 0:
             logger.warning(f"{null_tracking} features lack trial_id tracking")
             results["trial_id_tracking"] = False
+    
+    # Check 4: processing_timestamp increases with time (no old data overwriting new)
+    if "processing_timestamp" in features_df.columns:
+        for (patient, session), group in features_df.groupby(["patient_id", "session_id"]):
+            timestamps = pd.to_datetime(group["processing_timestamp"])
+            if not timestamps.is_monotonic_increasing:
+                results["timestamp_monotonic"] = False
+                logger.warning(f"{patient}/{session} has non-monotonic processing timestamps")
     
     return results
 ```
