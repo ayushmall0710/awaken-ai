@@ -275,23 +275,25 @@ class LanguageProcessor:
 
     def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
         """
-        Generate and save ITPC plots (Topomap and TFR).
+        Generate and save enhanced ITPC plots (Topomap and TFR).
 
         Args:
             itc: MNE AverageTFR object.
             patient_id: Patient ID string.
             output_dir: Path to save outputs.
-            metrics: Metrics dictionary from extract_itpc_metrics (to get indices).
+            metrics: Metrics dictionary from extract_itpc_metrics.
         """
         from pathlib import Path
+
         import matplotlib.pyplot as plt
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         target_freq = metrics["freq_sentence_hz"]
+        word_freq = metrics["freq_word_hz"]
 
-        # 1. Topomap
+        # 1. Topomap at Sentence Rate
         fig_topo, ax_topo = plt.subplots(1, 1, figsize=(10, 8))
         itc.plot_topomap(
             tmin=0,
@@ -299,22 +301,75 @@ class LanguageProcessor:
             fmin=target_freq - 0.01,
             fmax=target_freq + 0.01,
             baseline=None,
-            mode="logratio",
+            mode=None,  # Plot raw ITPC values (0-1)
             axes=ax_topo,
             show=False,
-            cmap="RdBu_r",
+            cmap="viridis",
+            colorbar=True,
+            vlim=(0, 0.3),  # Fix scale for comparability across subjects
         )
-        ax_topo.set_title(f"ITPC Topomap @ {target_freq:.3f} Hz ({patient_id})")
+        ax_topo.set_title(
+            f"ITPC Topomap @ {target_freq:.3f} Hz (Sentence Rate)\n{patient_id}",
+            fontsize=14,
+            fontweight="bold",
+        )
         topo_path = output_dir / f"{patient_id}_language_ITPC_topomap.png"
-        fig_topo.savefig(topo_path)
+        fig_topo.savefig(topo_path, dpi=300, bbox_inches="tight")
         plt.close(fig_topo)
-        logger.info(f"Saved Topomap to {topo_path}")
+        logger.info(f"Saved enhanced Topomap to {topo_path}")
 
         # 2. Time-Frequency Plot
-        fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(12, 6))
-        itc.plot(baseline=None, mode="logratio", axes=ax_tfr, show=False, combine="mean", cmap="RdBu_r")
-        ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - All Channels")
+        fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(14, 8))
+        # Plot TFR
+        itc.plot(
+            baseline=None,
+            mode=None,  # Plot raw ITPC
+            axes=ax_tfr,
+            show=False,
+            combine="mean",
+            cmap="viridis",
+            vlim=(0, 0.3),  # Cap at 0.3 to see low-value variations clearly
+            colorbar=True,
+        )
+
+        # Add markers for specific frequencies
+        ax_tfr.axhline(
+            y=target_freq,
+            color="white",
+            linestyle="--",
+            linewidth=2,
+            label=f"Sentence ({target_freq:.3f} Hz)",
+        )
+        ax_tfr.text(
+            itc.times[0],
+            target_freq,
+            " Sentence",
+            color="white",
+            verticalalignment="bottom",
+            fontweight="bold",
+        )
+
+        ax_tfr.axhline(
+            y=word_freq,
+            color="white",
+            linestyle=":",
+            linewidth=2,
+            label=f"Word ({word_freq:.3f} Hz)",
+        )
+        ax_tfr.text(
+            itc.times[0],
+            word_freq,
+            " Word",
+            color="white",
+            verticalalignment="bottom",
+            fontweight="bold",
+        )
+
+        ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - Mean of Channels", fontsize=16)
+        ax_tfr.set_xlabel("Time (s)", fontsize=12)
+        ax_tfr.set_ylabel("Frequency (Hz)", fontsize=12)
+
         tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
-        fig_tfr.savefig(tfr_path)
+        fig_tfr.savefig(tfr_path, dpi=300, bbox_inches="tight")
         plt.close(fig_tfr)
-        logger.info(f"Saved TFR plot to {tfr_path}")
+        logger.info(f"Saved enhanced TFR plot to {tfr_path}")

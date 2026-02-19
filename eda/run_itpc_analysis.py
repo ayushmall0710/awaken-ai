@@ -2,13 +2,14 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+
 import pandas as pd
 
 # Ensure src is in path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from src.data_processing.language_optimization import LanguageProcessor
 import src.data_loading.config as config
+from src.data_processing.language_optimization import LanguageProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
@@ -52,9 +53,10 @@ def analyze_patient(processor, patient_id, focus="LH"):
     metrics["patient_id"] = patient_id
     metrics["n_trials"] = len(epochs)
 
-    logger.info(
-        f"[{patient_id}] Sentence: {metrics['itpc_sentence']:.4f} | Word: {metrics['itpc_word']:.4f} | Ratio: {metrics['ratio_sent_word']:.2f}"
-    )
+    sent = metrics["itpc_sentence"]
+    word = metrics["itpc_word"]
+    ratio = metrics["ratio_sent_word"]
+    logger.info(f"[{patient_id}] Sentence: {sent:.4f} | Word: {word:.4f} | Ratio: {ratio:.2f}")
 
     return metrics
 
