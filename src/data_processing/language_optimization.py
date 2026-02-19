@@ -61,6 +61,11 @@ class LanguageProcessor:
     HIGHPASS_FREQ = 0.5
     LOWPASS_FREQ = 30.0
 
+    # Downsampling target. Source EDFs record at 512 Hz; for ITPC targeting
+    # 0.05-2.0 Hz, 256 Hz is sufficient (Nyquist = 128 Hz >> 30 Hz low-pass)
+    # and halves TFR computation time. Matches Sokoliuk 2021 methodology.
+    TARGET_SFREQ = 256.0
+
     # ITPC Constants
     # Frequencies: 0.05 Hz (very slow) to 2.0 Hz (covering word rate ~0.77 Hz)
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
@@ -179,25 +184,39 @@ class LanguageProcessor:
         logger.info(f"Selected {len(picks)} channels for {focus} focus.")
         return epochs.copy().pick(picks)
 
-    def preprocess_signal(self, epochs: mne.Epochs) -> mne.Epochs:
+    def preprocess_signal(self, epochs: mne.Epochs, target_sfreq: Optional[float] = None) -> mne.Epochs:
         """
-        Apply signal processing filters.
+        Apply bandpass filtering and downsample.
 
-        Ref: docs/language_tracking.md "High-pass: 0.5 Hz, Low-pass: ~30 Hz"
+        Applies 0.5-30 Hz bandpass filter (preserving Delta band for sentence-rate
+        analysis) and downsamples to TARGET_SFREQ (default 256 Hz).
 
-        Note: The upstream ArtifactRejector (ENG-03) has been updated to use a 0.5 Hz
-        high-pass filter (previously 1 Hz) to preserve Delta band information.
-        We apply the 0.5-30 Hz bandpass here to enforce the specific language analysis range.
+        Source EDFs record at 512 Hz. Downsampling to 256 Hz halves TFR computation
+        time while preserving all frequencies of interest with large margin
+        (Nyquist = 128 Hz >> 30 Hz low-pass). Matches Sokoliuk 2021 methodology.
+
+        Args:
+            epochs: MNE Epochs object.
+            target_sfreq: Target sampling frequency after downsampling. Defaults to
+                TARGET_SFREQ (256.0 Hz). Set to None to skip downsampling.
         """
-        epochs_filtered = epochs.copy()
+        if target_sfreq is None:
+            target_sfreq = self.TARGET_SFREQ
 
-        if not epochs_filtered.preload:
-            epochs_filtered.load_data()
+        epochs_processed = epochs.copy()
+
+        if not epochs_processed.preload:
+            epochs_processed.load_data()
 
         logger.info(f"Applying bandpass filter: {self.HIGHPASS_FREQ}-{self.LOWPASS_FREQ} Hz")
-        epochs_filtered.filter(l_freq=self.HIGHPASS_FREQ, h_freq=self.LOWPASS_FREQ, method="iir", verbose=False)
+        epochs_processed.filter(l_freq=self.HIGHPASS_FREQ, h_freq=self.LOWPASS_FREQ, method="iir", verbose=False)
 
-        return epochs_filtered
+        current_sfreq = epochs_processed.info["sfreq"]
+        if target_sfreq is not None and current_sfreq > target_sfreq:
+            logger.info(f"Downsampling from {current_sfreq:.0f} Hz to {target_sfreq:.0f} Hz")
+            epochs_processed.resample(target_sfreq, verbose=False)
+
+        return epochs_processed
 
     def compute_itpc(
         self, epochs: mne.Epochs, freqs: Optional[np.ndarray] = None, n_cycles: Optional[np.ndarray] = None
@@ -234,6 +253,77 @@ class LanguageProcessor:
             average=True,
         )
         return itc.data, itc
+
+    def compute_itpc_dft(
+        self, epochs: mne.Epochs
+    ):
+        """
+        Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
+
+        For each trial and electrode, computes the FFT, extracts the phase at each
+        frequency bin, then averages unit phase vectors across trials. This provides
+        a single ITPC spectrum (no time dimension) suitable for cross-validating the
+        Morlet wavelet approach.
+
+        Frequency resolution = 1 / epoch_duration Hz. For 16s epochs this yields
+        ~0.0625 Hz resolution, comparable to Sokoliuk's 0.07 Hz.
+
+        Args:
+            epochs: Preprocessed MNE Epochs object.
+
+        Returns:
+            itpc_spectrum (np.ndarray): ITPC values, shape (n_channels, n_freqs).
+            freqs (np.ndarray): Frequency axis in Hz.
+        """
+        data = epochs.get_data()  # (n_trials, n_channels, n_times)
+        n_trials, n_channels, n_times = data.shape
+        sfreq = epochs.info["sfreq"]
+
+        # FFT of each trial and channel
+        spectra = np.fft.rfft(data, axis=2)  # (n_trials, n_channels, n_freqs)
+        freqs = np.fft.rfftfreq(n_times, d=1.0 / sfreq)
+
+        # Extract unit phase vectors and average across trials
+        unit_vectors = np.exp(1j * np.angle(spectra))  # (n_trials, n_channels, n_freqs)
+        itpc_spectrum = np.abs(np.mean(unit_vectors, axis=0))  # (n_channels, n_freqs)
+
+        logger.info(
+            f"DFT ITPC computed: {n_trials} trials, {n_channels} channels, "
+            f"freq resolution={freqs[1] - freqs[0]:.4f} Hz, max_freq={freqs[-1]:.1f} Hz"
+        )
+        return itpc_spectrum, freqs
+
+    def extract_itpc_metrics_dft(self, itpc_spectrum: np.ndarray, freqs: np.ndarray) -> dict:
+        """
+        Extract sentence-rate and word-rate ITPC from a DFT ITPC spectrum.
+
+        Args:
+            itpc_spectrum: DFT ITPC array, shape (n_channels, n_freqs).
+            freqs: Frequency axis from compute_itpc_dft.
+
+        Returns:
+            dict with same keys as extract_itpc_metrics for direct comparison.
+        """
+        target_sent = 0.065
+        idx_sent = np.argmin(np.abs(freqs - target_sent))
+        actual_sent = freqs[idx_sent]
+        itpc_sent_val = float(np.mean(itpc_spectrum[:, idx_sent]))
+
+        target_word = 0.77
+        idx_word = np.argmin(np.abs(freqs - target_word))
+        actual_word = freqs[idx_word]
+        itpc_word_val = float(np.mean(itpc_spectrum[:, idx_word]))
+
+        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+
+        return {
+            "itpc_sentence": itpc_sent_val,
+            "itpc_word": itpc_word_val,
+            "ratio_sent_word": ratio,
+            "freq_sentence_hz": actual_sent,
+            "freq_word_hz": actual_word,
+            "idx_sentence": idx_sent,
+        }
 
     def extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
         """

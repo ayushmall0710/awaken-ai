@@ -57,11 +57,26 @@ We validated the pipeline on two subjects: `CON008` (Aug 14, 2025) and `CON009` 
 ![CON009 Topomap](CON009_language_ITPC_topomap.png)
 ![CON009 TFR](CON009_language_ITPC_tfr.png)
 
-## 4. Execution Steps
-1.  **Script**: `eda/run_itpc_analysis.py` orchestrates the batch analysis.
-2.  **Logic**: `LanguageProcessor.compute_itpc` handles the wavelet transform.
-3.  **Visualization**: Plots are saved to `data/outputs/{patient_id}`.
+## 4. Methodology Notes (vs. Sokoliuk 2021)
 
-## 5. Next Steps
-- **Group Statistics**: As N increases, run cluster-based permutation tests on the group level.
-- **Clinical Correlation**: Correlate the "Hierarchical Ratio" with patient recovery outcomes.
+The analysis is inspired by Sokoliuk et al. (2021). The following intentional divergences apply:
+
+| Sokoliuk Step | Our Approach | Reason |
+| :--- | :--- | :--- |
+| **Band-pass 0.01-100 Hz** | 0.5-100 Hz upstream (ENG-03), then 0.5-30 Hz in `LanguageProcessor` | 0.5 Hz high-pass improves ICA stability while still capturing 0.065 Hz sentence rate; 30 Hz low-pass scopes analysis to language frequencies |
+| **Notch 48-52, 98-102 Hz** | Not applied | The 30 Hz low-pass already eliminates all power-line noise; notch filtering is redundant |
+| **Downsample to 256 Hz** | Applied in `preprocess_signal` | Source EDFs record at 512 Hz; downsampling to 256 Hz (Nyquist 128 Hz >> 30 Hz cut-off) halves ITPC computation time |
+| **Discard first 2.28 s** | Not applied | Sokoliuk epochs at `tmin=-1.0` (1 s pre-stimulus) with 16.36 s total. Our epochs start at `tmin=0.0` (stimulus onset) with 16 s window -- no pre-stimulus period to discard |
+| **ITPC via DFT** | Morlet primary; DFT available via `compute_itpc_dft` | Morlet provides time-frequency resolution; DFT method added for direct cross-validation with Sokoliuk |
+| **Spearman / Bootstrap / Regression** | Deferred | Requires larger N; planned for group-level analysis |
+
+## 5. Execution Steps
+1.  **Full analysis (Morlet + DFT)**: `eda/run_itpc_analysis.py --patients CON008 CON009`
+2.  **Method comparison**: `eda/compare_itpc_methods.py --patients CON008 CON009` -- produces bar chart comparing sentence/word ITPC across both methods.
+3.  **Core logic**: `LanguageProcessor.compute_itpc` (Morlet), `LanguageProcessor.compute_itpc_dft` (DFT).
+4.  **Plots** saved to `data/outputs/{patient_id}/`.
+
+## 6. Next Steps
+- **Group Statistics**: As N increases, run cluster-based permutation tests.
+- **Clinical Correlation**: Correlate the Hierarchical Ratio with patient recovery outcomes.
+- **Re-analysis**: Run improved pipeline (256 Hz + DFT cross-validation) to refresh quantitative results.

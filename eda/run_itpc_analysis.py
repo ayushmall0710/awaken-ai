@@ -1,3 +1,10 @@
+"""
+Re-analysis of ITPC using both Morlet wavelet and DFT methods.
+
+Updates run_itpc_analysis.py results with both Morlet ITPC (existing) and
+DFT ITPC (Sokoliuk 2021 method) to allow cross-method comparison.
+"""
+
 import argparse
 import logging
 import sys
@@ -5,65 +12,79 @@ from pathlib import Path
 
 import pandas as pd
 
-# Ensure src is in path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import src.data_loading.config as config
 from src.data_processing.language_optimization import LanguageProcessor
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 
 def analyze_patient(processor, patient_id, focus="LH"):
-    """Run analysis for a single patient."""
+    """Run full ITPC analysis for a patient using both Morlet and DFT methods."""
+    import mne
+
     logger.info(f"Processing {patient_id}...")
 
-    # 1. Load Data
     epochs = processor.process_patient(patient_id, focus=focus)
     if epochs is None:
         logger.warning(f"Skipping {patient_id}: No data found.")
         return None
 
-    # Note: Montage is now handled better if applied early, but processor.plot_itpc_results
-    # handles the plotting. However, topomap needs montage on the info.
-    # We should ensure montage is set. get_data() or compute_itpc() doesn't need it,
-    # but plot_topomap does. LanguageProcessor.process_patient doesn't set montage explicitly
-    # unless we add it there. For now, we set it here to be safe as before.
     try:
-        import mne
-
         montage = mne.channels.make_standard_montage("standard_1020")
         epochs.set_montage(montage, on_missing="warn")
     except Exception as e:
         logger.warning(f"Montage error for {patient_id}: {e}")
 
-    # 2. Compute ITPC (uses default frequencies/cycles from class)
+    # --- Morlet ITPC ---
+    logger.info(f"[{patient_id}] Computing Morlet ITPC...")
     itpc_data, itc_obj = processor.compute_itpc(epochs)
+    morlet_metrics = processor.extract_itpc_metrics(itpc_data)
 
-    # 3. Extract Metrics
-    metrics = processor.extract_itpc_metrics(itpc_data)
-
-    # 4. Plotting
     output_dir = config.LOCAL_DATA_ROOT / "outputs" / patient_id
-    processor.plot_itpc_results(itc_obj, patient_id, output_dir, metrics)
+    processor.plot_itpc_results(itc_obj, patient_id, output_dir, morlet_metrics)
 
-    # Add metadata to metrics
-    metrics["patient_id"] = patient_id
-    metrics["n_trials"] = len(epochs)
+    # --- DFT ITPC ---
+    logger.info(f"[{patient_id}] Computing DFT ITPC...")
+    itpc_spectrum, dft_freqs = processor.compute_itpc_dft(epochs)
+    dft_metrics = processor.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
 
-    sent = metrics["itpc_sentence"]
-    word = metrics["itpc_word"]
-    ratio = metrics["ratio_sent_word"]
-    logger.info(f"[{patient_id}] Sentence: {sent:.4f} | Word: {word:.4f} | Ratio: {ratio:.2f}")
+    # Build combined result
+    result = {
+        "patient_id": patient_id,
+        "n_trials": len(epochs),
+        "sfreq": epochs.info["sfreq"],
+        # Morlet
+        "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
+        "morlet_itpc_word": morlet_metrics["itpc_word"],
+        "morlet_ratio_sent_word": morlet_metrics["ratio_sent_word"],
+        "morlet_freq_sentence_hz": morlet_metrics["freq_sentence_hz"],
+        "morlet_freq_word_hz": morlet_metrics["freq_word_hz"],
+        # DFT
+        "dft_itpc_sentence": dft_metrics["itpc_sentence"],
+        "dft_itpc_word": dft_metrics["itpc_word"],
+        "dft_ratio_sent_word": dft_metrics["ratio_sent_word"],
+        "dft_freq_sentence_hz": dft_metrics["freq_sentence_hz"],
+        "dft_freq_word_hz": dft_metrics["freq_word_hz"],
+    }
 
-    return metrics
+    logger.info(
+        f"[{patient_id}] Morlet -- Sentence: {morlet_metrics['itpc_sentence']:.4f} | "
+        f"Word: {morlet_metrics['itpc_word']:.4f} | Ratio: {morlet_metrics['ratio_sent_word']:.2f}"
+    )
+    logger.info(
+        f"[{patient_id}] DFT    -- Sentence: {dft_metrics['itpc_sentence']:.4f} | "
+        f"Word: {dft_metrics['itpc_word']:.4f} | Ratio: {dft_metrics['ratio_sent_word']:.2f}"
+    )
+
+    return result
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run ITPC Analysis (Batch)")
-    parser.add_argument("--patients", nargs="+", required=True, help="List of patient IDs (e.g., CON008 CON009)")
+    parser = argparse.ArgumentParser(description="Run ITPC Analysis (Morlet + DFT)")
+    parser.add_argument("--patients", nargs="+", required=True, help="Patient IDs (e.g., CON008 CON009)")
     parser.add_argument("--focus", type=str, default="LH", choices=["LH", "Clinical"], help="Channel focus")
     args = parser.parse_args()
 
@@ -77,10 +98,24 @@ def main():
 
     if results:
         df = pd.DataFrame(results)
-        print("\n=== Analysis Summary ===")
-        print(df[["patient_id", "itpc_sentence", "itpc_word", "ratio_sent_word"]])
 
-        # Save Summary
+        print("\n=== ITPC Analysis Summary (Morlet vs DFT) ===")
+        print(
+            df[
+                [
+                    "patient_id",
+                    "n_trials",
+                    "sfreq",
+                    "morlet_itpc_sentence",
+                    "morlet_itpc_word",
+                    "morlet_ratio_sent_word",
+                    "dft_itpc_sentence",
+                    "dft_itpc_word",
+                    "dft_ratio_sent_word",
+                ]
+            ].to_string(index=False)
+        )
+
         out_path = config.LOCAL_DATA_ROOT / "processed" / "features" / "language_itpc_summary.csv"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(out_path, index=False)
