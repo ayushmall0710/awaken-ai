@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 import mne
+import numpy as np
 
 from src.data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
 from src.utils.signal_processing import normalize_channel_names
@@ -59,6 +60,12 @@ class LanguageProcessor:
     # Filter constants
     HIGHPASS_FREQ = 0.5
     LOWPASS_FREQ = 30.0
+
+    # ITPC Constants
+    # Frequencies: 0.05 Hz (very slow) to 2.0 Hz (covering word rate ~0.77 Hz)
+    ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
+    # Adaptive cycles: 0.5 minimum for low freq
+    ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
     def __init__(self, loader: Optional[UnifiedDataLoader] = None):
         """
@@ -191,3 +198,133 @@ class LanguageProcessor:
         epochs_filtered.filter(l_freq=self.HIGHPASS_FREQ, h_freq=self.LOWPASS_FREQ, method="iir", verbose=False)
 
         return epochs_filtered
+
+    def compute_itpc(
+        self,
+        epochs: mne.Epochs,
+        freqs: Optional[np.ndarray] = None,
+        n_cycles: Optional[np.ndarray] = None
+    ):
+        """
+        Compute Inter-Trial Phase Coherence (ITPC).
+
+        Args:
+            epochs (mne.Epochs): Preprocessed epochs.
+            freqs (np.array, optional): Frequencies of interest. Defaults to class ITPC_FREQS.
+            n_cycles (np.array or int, optional): Number of cycles. Defaults to class ITPC_CYCLES.
+
+        Returns:
+            itpc (np.ndarray): ITPC data (n_channels, n_freqs, n_times).
+            tfr (mne.time_frequency.AverageTFR): TFR object containing ITPC.
+        """
+        from mne.time_frequency import tfr_morlet
+
+        if freqs is None:
+            freqs = self.ITPC_FREQS
+        if n_cycles is None:
+            n_cycles = self.ITPC_CYCLES
+
+        logger.info(f"Computing TFR and ITPC ({freqs[0]:.2f}-{freqs[-1]:.2f} Hz)...")
+        # return_itc=True returns (power, itc). We strictly want ITC (ITPC).
+        power, itc = tfr_morlet(
+            epochs,
+            freqs=freqs,
+            n_cycles=n_cycles,
+            use_fft=True,
+            return_itc=True,
+            decim=1,
+            n_jobs=1,
+            average=True,
+        )
+        return itc.data, itc
+
+    def extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
+        """
+        Extract ITPC metrics at Sentence (0.065 Hz) and Word (0.77 Hz) rates.
+
+        Args:
+            itpc_data (np.ndarray): ITPC data array.
+            freqs (np.ndarray, optional): Frequencies corresponding to ITPC data. Defaults to class ITPC_FREQS.
+
+        Returns:
+            dict: Dictionary containing sentence_mean, word_mean, ratio, and actual frequencies.
+        """
+        if freqs is None:
+            freqs = self.ITPC_FREQS
+
+        # A. Sentence Rate (~0.065 Hz)
+        target_sent = 0.065
+        idx_sent = np.argmin(np.abs(freqs - target_sent))
+        actual_sent = freqs[idx_sent]
+        itpc_sent_val = np.mean(itpc_data[:, idx_sent, :])
+
+        # B. Word Rate (~0.77 Hz)
+        target_word = 0.77
+        idx_word = np.argmin(np.abs(freqs - target_word))
+        actual_word = freqs[idx_word]
+        itpc_word_val = np.mean(itpc_data[:, idx_word, :])
+
+        # C. Ratio
+        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+
+        return {
+            "itpc_sentence": itpc_sent_val,
+            "itpc_word": itpc_word_val,
+            "ratio_sent_word": ratio,
+            "freq_sentence_hz": actual_sent,
+            "freq_word_hz": actual_word,
+            "idx_sentence": idx_sent
+        }
+        
+    def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
+        """
+        Generate and save ITPC plots (Topomap and TFR).
+
+        Args:
+            itc: MNE AverageTFR object.
+            patient_id: Patient ID string.
+            output_dir: Path to save outputs.
+            metrics: Metrics dictionary from extract_itpc_metrics (to get indices).
+        """
+        from pathlib import Path
+        import matplotlib.pyplot as plt
+        
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_freq = metrics["freq_sentence_hz"]
+
+        # 1. Topomap
+        fig_topo, ax_topo = plt.subplots(1, 1, figsize=(10, 8))
+        itc.plot_topomap(
+            tmin=0,
+            tmax=None,
+            fmin=target_freq - 0.01,
+            fmax=target_freq + 0.01,
+            baseline=None,
+            mode="logratio",
+            axes=ax_topo,
+            show=False,
+            cmap="RdBu_r",
+        )
+        ax_topo.set_title(f"ITPC Topomap @ {target_freq:.3f} Hz ({patient_id})")
+        topo_path = output_dir / f"{patient_id}_language_ITPC_topomap.png"
+        fig_topo.savefig(topo_path)
+        plt.close(fig_topo)
+        logger.info(f"Saved Topomap to {topo_path}")
+
+        # 2. Time-Frequency Plot
+        fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(12, 6))
+        itc.plot(
+            baseline=None,
+            mode="logratio",
+            axes=ax_tfr,
+            show=False,
+            combine="mean",
+            cmap="RdBu_r"
+        )
+        ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - All Channels")
+        tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
+        fig_tfr.savefig(tfr_path)
+        plt.close(fig_tfr)
+        logger.info(f"Saved TFR plot to {tfr_path}")

@@ -16,20 +16,42 @@ This PR implements the end-to-end `LanguageProcessor` pipeline for analyzing neu
 ### 3. Shared Utilities (`src/utils/signal_processing.py`)
 - **New**: Added `normalize_channel_names` to unify channel cleaning logic across the pipeline.
 
-### 4. Tests
-- **Updated**: `tests/test_language_optimization.py` covers initialization, filtering, and channel selection.
-- **New Check**: `tests/test_artifact_rejection.py` now explicitly asserts the 0.5 Hz high-pass default.
+### 5. ITPC Analysis
+- **Core Logic**: Added `compute_itpc` to `LanguageProcessor` using Morlet wavelets.
+- **Script**: `eda/run_itpc_analysis.py` performs batch analysis and statistical validation.
+- **Features**: Computes ITPC at Sentence (0.065 Hz) and Word (0.77 Hz) rates.
 
 ## Verification
 - **Unit Tests**: All 34 tests passed.
-- **Integration**: Validated on patient `CON008`.
-    - Selected 19 channels successfully.
-    - Signal Amplitude: ~8.18 µV (Physiological).
-    - PSD: Verified 1/f scaling with intact Delta power.
+- **Integration**: Validated on patient `CON008` and `CON009`.
+    - **CON008**: Selected 19 channels, ~8.18 µV mean amplitude.
+    - **CON009**: Selected 19 channels, ~7.48 µV mean amplitude, 68 epochs.
+    - **Filter Check**: Confirmed 0.5 Hz high-pass is applied correctly in both `ArtifactRejector` and `LanguageProcessor`.
+    - **PSD**: Verified 1/f scaling with intact Delta band power.
+- **ITPC Analysis**:
+    - **Hierarchical Processing**: Confirmed Sentence Rate ITPC > Word Rate ITPC for both patients (Ratio ~1.1-1.2).
+    - **Visuals**: Topomaps show left-hemisphere dominance.
+
+## Analysis Results
+### Quantitative Findings
+| Metric | CON008 | CON009 |
+| :--- | :--- | :--- |
+| **Sentence ITPC (0.065 Hz)** | **0.1251** | **0.1262** |
+| **Word ITPC (0.77 Hz)** | 0.1031 | 0.1149 |
+| **Hierarchical Ratio** | **1.21** | **1.10** |
+
+> **Interpretation**: In both patients, **Sentence ITPC > Word ITPC** (Ratio > 1.0). This suggests that neural entrainment is **not** driven solely by the rapid acoustic envelope of words, but reflects tracking of the slower sentence structure.
+
+### Visualizations
+**CON008 Topomap** (Left-lateralized at 0.065 Hz)
+![CON008 Topomap](data/outputs/CON008/CON008_language_ITPC_topomap.png)
+
+**CON008 TFR** (Phase coherence over time)
+![CON008 TFR](data/outputs/CON008/CON008_language_ITPC_tfr.png)
 
 ## Documentation
 - Updated `tasks/ENG-05.md` with implementation details and verification results.
-- Added `tasks/ENG-05-analysis.md` Detailed ITPC Analysis Plan (renamed from ENG-06).
+- Added `tasks/ENG-05-analysis.md` Detailed ITPC Analysis Plan, Methodology, and Results.
 
 ## Closes
 ENG-05

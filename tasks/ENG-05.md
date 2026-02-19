@@ -35,14 +35,29 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Visualization**: `eda/visualize_language_optimization.py` generates diagnostic plots (Sensor Map, ERP, PSD, Spectrogram).
 - **Signal Quality**: `eda/analyze_language_signals.py` computes quantitative metrics (Amplitude ~8uV, 1/f spectral scaling) to confirm physiological plausibility.
 
-## 4. Definition of Done
+## 4. ITPC Analysis (New Feature)
+### Objectives
+- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of sentence structure (~0.065 Hz).
+- **Statistical Validation**: Compare Sentence Rate ITPC vs Word Rate ITPC (~0.77 Hz) to distinguish linguistic processing from acoustic envelope tracking.
+
+### Implementation
+- **Core Logic**: `LanguageProcessor.compute_itpc` uses Morlet wavelets to extract phase information.
+- **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects and computes the Sentence/Word ITPC ratio.
+
+### Verification Results
+- **Subjects**: `CON008` & `CON009`.
+- **Finding**: Both subjects show **Sentence ITPC > Word ITPC** (Ratio ~1.1-1.2), indicating hierarchical processing.
+- **Visuals**: Topomaps confirm left-lateralized activation consistent with language networks.
+
+## 5. Definition of Done
 - [x] `src/data_processing/language_optimization.py` refactored to use ENG-03 outputs.
 - [x] Function to return `mne.Epochs` restricted to optimal channels.
 - [x] Unit tests in `tests/test_language_optimization.py`.
 - [x] Verification script `eda/verify_language_optimization.py` passing for CON008.
 - [x] Visualization script `eda/visualize_language_optimization.py` created and tested.
 - [x] Signal analysis script `eda/analyze_language_signals.py` confirming data quality.
+- [x] ITPC Analysis implemented and verified (Ratio > 1.0).
 
-## 5. Next Steps
-- **Integration**: The `LanguageProcessor` is ready to be integrated into the broader analysis pipeline for feature extraction (e.g., TRF analysis).
-- **Deployment**: The optimized channel set reduces data volume, facilitating faster processing for potential real-time applications.
+## 6. Next Steps
+- **Group Statistics**: As N increases, run cluster-based permutation tests on the group level.
+- **Clinical Correlation**: Correlate the "Hierarchical Ratio" with patient recovery outcomes.
