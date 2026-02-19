@@ -200,10 +200,7 @@ class LanguageProcessor:
         return epochs_filtered
 
     def compute_itpc(
-        self,
-        epochs: mne.Epochs,
-        freqs: Optional[np.ndarray] = None,
-        n_cycles: Optional[np.ndarray] = None
+        self, epochs: mne.Epochs, freqs: Optional[np.ndarray] = None, n_cycles: Optional[np.ndarray] = None
     ):
         """
         Compute Inter-Trial Phase Coherence (ITPC).
@@ -273,9 +270,9 @@ class LanguageProcessor:
             "ratio_sent_word": ratio,
             "freq_sentence_hz": actual_sent,
             "freq_word_hz": actual_word,
-            "idx_sentence": idx_sent
+            "idx_sentence": idx_sent,
         }
-        
+
     def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
         """
         Generate and save ITPC plots (Topomap and TFR).
@@ -288,10 +285,10 @@ class LanguageProcessor:
         """
         from pathlib import Path
         import matplotlib.pyplot as plt
-        
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         target_freq = metrics["freq_sentence_hz"]
 
         # 1. Topomap
@@ -315,14 +312,7 @@ class LanguageProcessor:
 
         # 2. Time-Frequency Plot
         fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(12, 6))
-        itc.plot(
-            baseline=None,
-            mode="logratio",
-            axes=ax_tfr,
-            show=False,
-            combine="mean",
-            cmap="RdBu_r"
-        )
+        itc.plot(baseline=None, mode="logratio", axes=ax_tfr, show=False, combine="mean", cmap="RdBu_r")
         ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - All Channels")
         tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
         fig_tfr.savefig(tfr_path)

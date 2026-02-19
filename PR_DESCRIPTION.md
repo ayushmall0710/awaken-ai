@@ -44,10 +44,10 @@ This PR implements the end-to-end `LanguageProcessor` pipeline for analyzing neu
 
 ### Visualizations
 **CON008 Topomap** (Left-lateralized at 0.065 Hz)
-![CON008 Topomap](data/outputs/CON008/CON008_language_ITPC_topomap.png)
+![CON008 Topomap](https://raw.githubusercontent.com/ayushmall0710/awaken-ai/feature/ENG-05-refactor/data/outputs/CON008/CON008_language_ITPC_topomap.png)
 
 **CON008 TFR** (Phase coherence over time)
-![CON008 TFR](data/outputs/CON008/CON008_language_ITPC_tfr.png)
+![CON008 TFR](https://raw.githubusercontent.com/ayushmall0710/awaken-ai/feature/ENG-05-refactor/data/outputs/CON008/CON008_language_ITPC_tfr.png)
 
 ## Documentation
 - Updated `tasks/ENG-05.md` with implementation details and verification results.
