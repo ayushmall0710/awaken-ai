@@ -32,7 +32,10 @@ To distinguish high-level comprehension from basic acoustic processing, we compa
 ## 3. Verification Results
 
 ### Quantitative Findings
-We validated the pipeline on two subjects: `CON008` (Aug 14, 2025) and `CON009` (Aug 26, 2025).
+
+Re-analysis at 256 Hz on two subjects: `CON008` (Aug 14, 2025) and `CON009` (Aug 26, 2025). 68 trials each, 19 LH channels.
+
+**Morlet Wavelet (primary)**
 
 | Metric | CON008 | CON009 |
 | :--- | :--- | :--- |
@@ -40,9 +43,16 @@ We validated the pipeline on two subjects: `CON008` (Aug 14, 2025) and `CON009` 
 | **Word ITPC (0.77 Hz)** | 0.1031 | 0.1149 |
 | **Hierarchical Ratio** | **1.21** | **1.10** |
 
+**DFT / FFT (Sokoliuk 2021 cross-validation)**
+
+| Metric | CON008 | CON009 |
+| :--- | :--- | :--- |
+| **Sentence ITPC (0.065 Hz)** | **0.1646** | **0.1595** |
+| **Word ITPC (0.77 Hz)** | 0.1243 | 0.1176 |
+| **Hierarchical Ratio** | **1.32** | **1.36** |
+
 > [!IMPORTANT]
-> **Interpretation**: In both patients, **Sentence ITPC > Word ITPC** (Ratio > 1.0).
-> This suggests that neural entrainment is **not** driven solely by the rapid acoustic envelope of words (which is close to the noise floor ~0.10-0.11), but reflects tracking of the slower sentence structure. A ratio > 1.1 is a positive indicator of hierarchical processing.
+> **Cross-method agreement**: Both Morlet and DFT independently confirm **Sentence ITPC > Word ITPC** (Ratio > 1.0 in all cases). The DFT ratios (1.32, 1.36) are stronger than Morlet (1.21, 1.10), consistent with DFT being a narrower-band estimator at 0.0625 Hz resolution. This cross-validation strengthens confidence in the hierarchical processing finding.
 
 ### Visualizations
 
