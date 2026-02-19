@@ -849,6 +849,7 @@ class ArtifactRejector:
             preload=True,
             reject=None,
             flat=None,
+            event_repeated="drop",
             verbose=self.verbose,
         )
 
