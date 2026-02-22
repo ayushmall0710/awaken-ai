@@ -128,13 +128,9 @@ class LanguageProcessor:
         available_chs = epochs.ch_names
 
         if focus == "LH":
-            primary = set(config.LH_FOCUS_CHANNELS)
-            remainder = set(config.CLINICAL_20) - primary
-            target_chs = primary | remainder
+            target_chs = set(config.LH_FOCUS_CHANNELS + config.CLINICAL_20)
         elif focus == "RH":
-            primary = set(config.RH_FOCUS_CHANNELS)
-            remainder = set(config.CLINICAL_20) - primary
-            target_chs = primary | remainder
+            target_chs = set(config.RH_FOCUS_CHANNELS + config.CLINICAL_20)
         else:
             target_chs = set(config.CLINICAL_20)
 
