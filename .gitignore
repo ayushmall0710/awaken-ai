@@ -218,3 +218,9 @@ reports/*.csv
 reports/*.md
 !reports/.gitkeep
 # tasks/
+
+# Local Archives
+*.zip
+
+# Exploratory Data Analysis artifacts
+eda/*.parquet

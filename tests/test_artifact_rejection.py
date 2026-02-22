@@ -21,7 +21,7 @@ from src.data_processing.artifact_rejection import (  # noqa: E402
     _trial_type_window_sec,
     _try_set_montage,
 )
-from src.utils.signal_processing import exclude_non_eeg_channels  # noqa: E402
+from src.utils.signal_processing import exclude_non_eeg_channels, normalize_channel_names  # noqa: E402
 from src.utils.time_utils import detect_timezone_offset  # noqa: E402
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -236,12 +236,19 @@ def test_try_set_montage_skips_non_standard_names():
 
 def test_try_set_montage_strips_eeg_prefix():
     """Channels with 'EEG ' prefix should be renamed and matched."""
+    # This now relies on normalize_channel_names internally
     raw = _mock_raw(ch_names=["EEG Fp1", "EEG Fp2", "EEG C3", "EEG C4", "EEG O1", "EEG O2"])
     notes: list = []
-    # rename_channels is called on the mock; just verify the attempt.
     _try_set_montage(raw, notes)
     rename_notes = [n for n in notes if "renamed_channels" in n]
     assert len(rename_notes) > 0
+
+
+def test_normalize_channel_names_utility():
+    """Verify the utility function directly (since we imported it)."""
+    raw_names = ["EEG Fp1", "EEG-Fp2", "C3-Ref", "O1", "ECG"]
+    normalized = normalize_channel_names(raw_names)
+    assert normalized == ["Fp1", "Fp2", "C3", "O1", "ECG"]
 
 
 # ── CAR reference ────────────────────────────────────────────────────────────
@@ -404,3 +411,10 @@ def test_qc_ptp_stats_non_empty():
     assert "ptp_uv_p95" in stats
     assert "ptp_uv_p99" in stats
     assert stats["ptp_uv_max"] == 100.0
+
+
+def test_default_ica_filter_is_0_5hz():
+    """Ensure the default high-pass filter is set to 0.5 Hz for sentence analysis."""
+    from src.data_processing.artifact_rejection import DEFAULT_ICA_FILTER_HZ
+
+    assert DEFAULT_ICA_FILTER_HZ == (0.5, 100.0)

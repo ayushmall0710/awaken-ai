@@ -47,3 +47,52 @@ COMMAND_AUDIO_FILE = "motorcommandprompt.wav"
 
 # Unified Parquet File Path
 UNIFIED_PARQUET_PATH = EEG_DATA_DIR / "unified_stimulus_results.parquet"
+
+# --- Sensor Configurations ---
+
+# Standard 10-20 system electrodes generally available across datasets
+# Reference: ENG-05 methodology documentation (docs/language_tracking.md)
+CLINICAL_20 = [
+    "Fp1",
+    "Fp2",
+    "Fz",
+    "F3",
+    "F4",
+    "F7",
+    "F8",
+    "Cz",
+    "C3",
+    "C4",
+    "Pz",
+    "P3",
+    "P4",
+    "P7",
+    "P8",
+    "O1",
+    "O2",
+    "T7",
+    "T8",
+]
+
+# Left Hemisphere channels for Language Tracking paradigm
+# Reference: Sokoliuk et al. 2021 (https://doi.org/10.1523/JNEUROSCI.2260-20.2021)
+# Selected for spatial coverage over typical left-lateralized language areas.
+LH_FOCUS_CHANNELS = [
+    "F7",
+    "T7",
+    "P7",  # Inferior/Lateral Left
+    "F3",
+    "C3",
+    "P3",  # Superior/Medial Left
+]
+
+# Right Hemisphere counterpart channels for Language Tracking
+# Included for lateralization analysis and symmetry.
+RH_FOCUS_CHANNELS = [
+    "F8",
+    "T8",
+    "P8",  # Inferior/Lateral Right
+    "F4",
+    "C4",
+    "P4",  # Superior/Medial Right
+]

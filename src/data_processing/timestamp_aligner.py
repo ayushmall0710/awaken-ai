@@ -440,8 +440,9 @@ class TimestampAligner:
         peaks = peaks + search_start_idx
 
         # Step 5: Convert to timestamps and enrich events
+        peak_times_edf = t_start + (peaks / self.sr)
         peak_times_unix = edf_to_unix(
-            t_start + (peaks / self.sr), edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
+            peak_times_edf, edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
         )
         peak_amplitudes = dc_chunk[peaks]
         peak_durations = widths / self.sr

@@ -250,3 +250,31 @@ def highpass_filter(signal_data: np.ndarray, sfreq: float, cutoff_hz: float = 50
 
     b, a = scipy.signal.butter(order, cutoff / nyq, btype="high")
     return scipy.signal.filtfilt(b, a, signal_data)
+
+
+def normalize_channel_names(ch_names: List[str]) -> List[str]:
+    """
+    Normalize channel names by stripping common prefixes.
+
+    Removes prefixes like 'EEG ', 'EEG-', and suffixes like '-Ref'.
+    Useful for unifying channel names across different recording systems.
+
+    Args:
+        ch_names: List of original channel names.
+
+    Returns:
+        List of normalized channel names.
+    """
+    normalized = []
+    for ch in ch_names:
+        clean = ch
+        clean_folded = clean.casefold()
+        # Strip prefixes case-insensitively
+        for prefix in ("eeg ", "eeg-"):
+            if clean_folded.startswith(prefix):
+                clean = clean[len(prefix) :]
+                break
+        # Strip suffixes/extra info
+        clean = clean.replace("-Ref", "").split("-")[0]
+        normalized.append(clean)
+    return normalized

@@ -34,7 +34,7 @@ from mne_icalabel import label_components
 
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
-from src.utils.signal_processing import exclude_non_eeg_channels
+from src.utils.signal_processing import exclude_non_eeg_channels, normalize_channel_names
 from src.utils.time_utils import detect_timezone_offset
 
 logger = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ WINDOW_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
     "right_command": 200.0,
 }
 
-DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (1.0, 100.0)
+DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (0.5, 100.0)
 DEFAULT_REJECT_PTP_PERCENTILE: float = 95.0
 DEFAULT_ICLABEL_THRESHOLD: float = 0.5
 
@@ -147,7 +147,7 @@ def _epoch_ptp_uv(epochs: mne.Epochs) -> np.ndarray:
     data = epochs.get_data()  # (n_epochs, n_channels, n_times)
     if data.size == 0:
         return np.array([], dtype=float)
-    ptp_v = data.ptp(axis=2)  # (n_epochs, n_channels)
+    ptp_v = np.ptp(data, axis=2)  # (n_epochs, n_channels)
     max_ptp_v = ptp_v.max(axis=1)  # (n_epochs,)
     return max_ptp_v * 1e6
 
@@ -333,14 +333,11 @@ def _try_set_montage(raw: mne.io.BaseRaw, notes: List[str]) -> bool:
     montage_names_upper = {n.upper() for n in montage.ch_names}
 
     rename_map: Dict[str, str] = {}
-    for ch in raw.ch_names:
-        stripped = ch
-        for prefix in ("EEG ", "EEG-", "eeg ", "eeg-"):
-            if stripped.startswith(prefix):
-                stripped = stripped[len(prefix) :]
-                break
-        if stripped.upper() in montage_names_upper and stripped != ch:
-            rename_map[ch] = stripped
+    normalized_names = normalize_channel_names(raw.ch_names)
+
+    for ch, clean in zip(raw.ch_names, normalized_names):
+        if clean.upper() in montage_names_upper and clean != ch:
+            rename_map[ch] = clean
 
     if rename_map:
         raw.rename_channels(rename_map)
