@@ -15,6 +15,7 @@ from typing import Optional
 import mne
 import numpy as np
 
+from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
 from src.utils.signal_processing import normalize_channel_names
 
@@ -27,35 +28,13 @@ class LanguageProcessor:
 
     Attributes:
         loader (UnifiedDataLoader): Instance of UnifiedDataLoader.
-        CLINICAL_20 (List[str]): Standard 10-20 system electrodes (Ref: ENG-05.md).
-        LH_FOCUS_CHANNELS (List[str]): Left Hemisphere channels for language tracking (Ref: docs/language_tracking.md).
+        CLINICAL_20 (List[str]): Standard 10-20 system electrodes.
+        LH_FOCUS_CHANNELS (List[str]): Left Hemisphere channels for language tracking.
     """
 
-    # Ref: ENG-05.md "Recommended Electrode Set"
-    CLINICAL_20 = [
-        "Fp1",
-        "Fp2",
-        "Fz",
-        "F3",
-        "F4",
-        "F7",
-        "F8",
-        "Cz",
-        "C3",
-        "C4",
-        "T7",
-        "T8",
-        "Pz",
-        "P3",
-        "P4",
-        "P7",
-        "P8",
-        "O1",
-        "O2",
-    ]
-
-    # Ref: docs/language_tracking.md "Electrode Selection (Left-Hemisphere Focus)"
-    LH_FOCUS_CHANNELS = ["F7", "T7", "P7", "F3", "C3", "P3"]
+    # Backward compatibility pointing to centralized configs
+    CLINICAL_20 = config.CLINICAL_20
+    LH_FOCUS_CHANNELS = config.LH_FOCUS_CHANNELS
 
     # Filter constants
     HIGHPASS_FREQ = 0.5
@@ -149,11 +128,15 @@ class LanguageProcessor:
         available_chs = epochs.ch_names
 
         if focus == "LH":
-            primary = set(self.LH_FOCUS_CHANNELS)
-            remainder = set(self.CLINICAL_20) - primary
+            primary = set(config.LH_FOCUS_CHANNELS)
+            remainder = set(config.CLINICAL_20) - primary
+            target_chs = primary | remainder
+        elif focus == "RH":
+            primary = set(config.RH_FOCUS_CHANNELS)
+            remainder = set(config.CLINICAL_20) - primary
             target_chs = primary | remainder
         else:
-            target_chs = set(self.CLINICAL_20)
+            target_chs = set(config.CLINICAL_20)
 
         # Build map of clean_name -> original_name for robust matching
         # Uses shared logic from utils to strip prefixes (EEG-, etc)

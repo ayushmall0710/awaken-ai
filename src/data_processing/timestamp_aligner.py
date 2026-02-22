@@ -54,7 +54,6 @@ class AlignmentResult:
     event_end: float
     event_duration: float
     correlation_score: float
-    event_start_edf: float = 0.0
 
 
 class TimestampAligner:
@@ -260,7 +259,6 @@ class TimestampAligner:
             event_end=event_start_unix + match.duration_seconds,
             event_duration=match.duration_seconds,
             correlation_score=match.score,
-            event_start_edf=event_start_edf,
         )
 
     def _align_sentence_trials(self, trial: pd.Series) -> pd.DataFrame:
@@ -459,7 +457,6 @@ class TimestampAligner:
                 enriched_event.update(
                     {
                         "event_start": event_start,
-                        "event_start_edf": float(peak_times_edf[idx]),
                         "event_end": (event_start + beep_duration if beep_duration else event_start),
                         "event_duration": beep_duration,
                         "peak_amplitude": float(peak_amplitudes[idx]),

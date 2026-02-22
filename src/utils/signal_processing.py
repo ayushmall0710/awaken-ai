@@ -268,9 +268,10 @@ def normalize_channel_names(ch_names: List[str]) -> List[str]:
     normalized = []
     for ch in ch_names:
         clean = ch
-        # Strip prefixes
-        for prefix in ("EEG ", "EEG-", "eeg ", "eeg-"):
-            if clean.startswith(prefix):
+        clean_folded = clean.casefold()
+        # Strip prefixes case-insensitively
+        for prefix in ("eeg ", "eeg-"):
+            if clean_folded.startswith(prefix):
                 clean = clean[len(prefix) :]
                 break
         # Strip suffixes/extra info
