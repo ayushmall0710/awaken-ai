@@ -25,7 +25,7 @@ import logging
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import mne
 import numpy as np
@@ -622,10 +622,28 @@ class ArtifactRejector:
                 out[(patient_id, date)] = self.run_session(patient_id, date, save=save)
         return out
 
-    def run_session(self, patient_id: str, date: str, save: bool = True) -> Dict[str, Path]:
+    def run_session(
+        self,
+        patient_id: str,
+        date: str,
+        save: bool = True,
+        return_raw_clean: bool = False,
+    ) -> Union[Dict[str, Path], Tuple[Dict[str, Path], mne.io.BaseRaw]]:
         """Run ENG-03 for a single patient session.
 
         Steps: load -> ICA -> epoch per trial_type -> auto-reject -> save.
+
+        Args:
+            patient_id: Patient identifier.
+            date: Session date (YYYY-MM-DD).
+            save: Whether to save epochs and QC parquet to disk.
+            return_raw_clean: If True, return (saved_paths, raw_clean) where raw_clean
+                is the ICA-cleaned raw EEG before epoch creation. If False, return only
+                saved_paths.
+
+        Returns:
+            saved_paths: Mapping of trial_type -> epochs .fif path.
+            raw_clean (optional): ICA-cleaned raw when return_raw_clean=True.
         """
         raw, session_df, edf_start_unix, timezone_offset = self._load_session_inputs(patient_id, date)
         raw_clean, ica_summary = self._apply_ica(raw)
@@ -655,6 +673,8 @@ class ArtifactRejector:
         if save:
             self._save_qc(qc_rows, patient_id, date)
 
+        if return_raw_clean:
+            return saved_paths, raw_clean
         return saved_paths
 
     # ── I/O helpers ──────────────────────────────────────────────────────
