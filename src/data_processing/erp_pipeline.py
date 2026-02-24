@@ -19,6 +19,7 @@ from tqdm import tqdm
 
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
+from src.data_processing.artifact_rejection import ArtifactRejector
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +178,23 @@ class OddballERPPipeline:
         logger.info(f"Processing session: {patient_id} - {date}")
 
         try:
-            # Load EDF for this session
-            raw = self.loader.load_edf(patient_id, date=date, use_clipped=True)
+            # Load ICA-cleaned EEG from ENG-03 (required)
+            logger.info(f"Loading artifact-cleaned EEG from ENG-03 for {patient_id} - {date}")
+            rejector = ArtifactRejector(loader=self.loader, verbose=self.verbose)
+            try:
+                _, raw = rejector.run_session(
+                    patient_id=patient_id,
+                    date=date,
+                    save=False,  # Don't save epochs (ENG-03 already did)
+                    return_raw_clean=True,  # Get artifact-cleaned continuous raw
+                )
+            except Exception as e:
+                error_msg = (
+                    f"Failed to load artifact-cleaned EEG for {patient_id} - {date}. "
+                    f"ENG-03 must be run before ENG-02b. Error: {type(e).__name__}: {e}"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg) from e
 
             # Extract rare events from oddball trials
             rare_events = self._extract_rare_events(aligned_trials)

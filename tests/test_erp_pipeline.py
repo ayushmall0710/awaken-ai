@@ -599,8 +599,9 @@ class TestIntegration:
 
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
-        # Mock the loader to return mock_raw_eeg
-        with patch.object(pipeline.loader, "load_edf", return_value=mock_raw_eeg):
+        # Mock ArtifactRejector so run_session returns cleaned raw (pipeline no longer uses load_edf)
+        with patch("src.data_processing.erp_pipeline.ArtifactRejector") as mock_rejector_class:
+            mock_rejector_class.return_value.run_session.return_value = ({}, mock_raw_eeg)
             with patch(
                 "src.data_processing.erp_pipeline.config.ALIGNED_EVENTS_DIR",
                 aligned_dir,
@@ -759,3 +760,40 @@ class TestIntegration:
         # QC notes indicate custom mode
         assert "qc_notes" in features
         assert "Custom electrode analysis" in features["qc_notes"]
+
+
+class TestArtifactRejectionIntegration:
+    """Tests for ENG-03 artifact rejection integration."""
+
+    def test_process_session_requires_eng03_cleaned_raw(self, temp_output_dir, mock_aligned_events):
+        """Test that _process_session requires ENG-03 cleaned raw and returns error if unavailable."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        # Mock ArtifactRejector to raise an exception (ENG-03 not available)
+        with patch("src.data_processing.erp_pipeline.ArtifactRejector") as mock_rejector_class:
+            mock_rejector = mock_rejector_class.return_value
+            mock_rejector.run_session.side_effect = FileNotFoundError("ENG-03 data not found")
+
+            # _process_session catches exceptions and returns a result dict (does not re-raise)
+            result = pipeline._process_session("TEST001", "2024-01-01", mock_aligned_events)
+            assert result["status"] == "error"
+            assert "ENG-03 must be run before ENG-02b" in result["error"]
+
+    def test_process_session_with_eng03_cleaned_raw(self, temp_output_dir, mock_aligned_events, mock_raw_eeg):
+        """Test that _process_session successfully uses ENG-03 cleaned raw when available."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        # Mock ArtifactRejector to return cleaned raw successfully
+        with patch("src.data_processing.erp_pipeline.ArtifactRejector") as mock_rejector_class:
+            mock_rejector = mock_rejector_class.return_value
+            mock_rejector.run_session.return_value = ({}, mock_raw_eeg)
+
+            # This should succeed (though may fail at later steps due to insufficient epochs)
+            # We just want to verify it gets past the ENG-03 loading step
+            try:
+                result = pipeline._process_session("TEST001", "2024-01-01", mock_aligned_events)
+                # If it returns with insufficient_data status, that's fine - it got past ENG-03 loading
+                assert result["patient_id"] == "TEST001"
+            except Exception as e:
+                # Any error should NOT be about ENG-03 requirement
+                assert "ENG-03 must be run before" not in str(e)

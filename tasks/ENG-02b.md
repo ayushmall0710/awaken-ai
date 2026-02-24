@@ -10,6 +10,15 @@
 
 ERP analysis pipeline for oddball trials. It extracts EEG epochs around rare beep events, computes averaged ERPs, quantifies P300 features across midline electrodes, and generates plots and QC reports. It supports default analysis (Pz/Cz/Fz) and custom electrode sets.
 
+### Artifact Rejection Integration
+
+The pipeline requires ICA-cleaned EEG from ENG-03:
+- Loads artifact-cleaned continuous raw via `ArtifactRejector.run_session(return_raw_clean=True)`
+- **Dependency**: ENG-03 must be run before ENG-02b
+- Fails with clear error if ENG-03 hasn't processed the session
+
+This ensures all P300 measurements use artifact-cleaned data with eye blinks, heartbeat, and muscle artifacts removed before epoch creation.
+
 ## Implementation Summary
 
 The `OddballERPPipeline` class in `src/data_processing/erp_pipeline.py` provides:
@@ -241,6 +250,35 @@ python scripts/run_erp_pipeline.py --patient CON008 --electrodes "T5,T6"
 # Verbose output
 python scripts/run_erp_pipeline.py --patient CON008 --verbose
 ```
+
+### Testing with real data locally
+
+1. **Prerequisites**
+   - **ENG-02** must be run first so aligned events exist: `data/processed/aligned_events/{patient_id}_events.parquet`. Each parquet must contain oddball trials with `sentences` (rare/standard events).
+   - **EDF files** must be available where `UnifiedDataLoader` expects them (e.g. under `data/` or `ONEDRIVE_ROOT` per `src/data_loading/config.py`).
+   - **Environment**: From repo root, activate the same env used for ENG-02/ENG-03 (e.g. `capstone`), ensure `mne` and `mne-icalabel` are installed (`pip install -e .` in `awaken-ai`).
+
+2. **Order of operations**
+   - There is no separate “run ENG-03” step. When you run the ERP pipeline, it calls `ArtifactRejector.run_session(..., return_raw_clean=True)`, which loads the EDF, runs ICA artifact rejection, and returns the cleaned continuous EEG. If that fails (missing EDF, missing aligned events, or ICA error), the pipeline raises a `RuntimeError` with a message that ENG-03 must be run first (i.e. the artifact-rejection step failed).
+
+3. **Commands (from `awaken-ai/`)**
+   ```bash
+   cd awaken-ai
+
+   # See which patients have oddball data
+   python scripts/run_erp_pipeline.py --list
+
+   # Run on one patient (uses ICA-cleaned EEG internally)
+   python scripts/run_erp_pipeline.py --patient CON008 --verbose
+
+   # Optional: restrict to one session date
+   python scripts/run_erp_pipeline.py --patient CON008 --date 2025-08-14 --verbose
+   ```
+
+4. **What to check**
+   - Logs should show: `Loading artifact-cleaned EEG from ENG-03 for CON008 - 2025-08-14` then epoch extraction and P300 quantification.
+   - Outputs under `data/processed/`: `features/*.parquet`, `plots/erp/*.png`, `erps/*-ave.fif`, `epochs/*-epo.fif`.
+   - If you see `Failed to load artifact-cleaned EEG ... ENG-03 must be run before ENG-02b`, fix the underlying cause (e.g. missing aligned events parquet, missing EDF, or bad paths in `config.py` / `ONEDRIVE_ROOT`).
 
 ### Python API
 
