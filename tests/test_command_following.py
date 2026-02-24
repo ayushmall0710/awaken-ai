@@ -144,9 +144,9 @@ class TestCommandFollowingAnalysis:
                     keep=keep_epoch,
                     stop=stop_epoch,
                     side="left",
+                    trial_idx=i,  # important for mixed model indexing
                     keep_start=0,
                     stop_start=10,
-                    trial_idx=i,  # important for mixed model indexing
                 )
             )
 
@@ -206,7 +206,7 @@ class TestCommandFollowingAnalysis:
         keep = mne.EpochsArray(np.zeros((1, 2, 200)), info, tmin=0, verbose=False)
         stop = mne.EpochsArray(np.zeros((1, 2, 200)), info, tmin=0, verbose=False)
 
-        pair = CommandPair(keep, stop, 0, "left", 0, 0)
+        pair = CommandPair(keep, stop, "left", 0, 0, 0)
         analysis_instance.pairs = [pair]
         analysis_instance.patient_id = "TEST"
 
@@ -216,7 +216,9 @@ class TestCommandFollowingAnalysis:
         with patch("matplotlib.pyplot.subplots") as mock_subplots:
             mock_fig = MagicMock()
             mock_ax = MagicMock()
-            mock_subplots.return_value = (mock_fig, np.array([[mock_ax, mock_ax], [mock_ax, mock_ax]]))
+            mock_axes = MagicMock()
+            mock_axes.__getitem__.return_value = mock_ax
+            mock_subplots.return_value = (mock_fig, mock_axes)
 
             # Mock mne.viz.plot_topomap to avoid actual plotting
             with patch("mne.viz.plot_topomap"):

@@ -479,7 +479,7 @@ class CommandFollowingAnalysis:
                         "channel": ch,
                         "band": band_name,
                         "erd_dB": mean_erd,
-                        "erd_std": np.std(erd_per_pair, ddof=1),
+                        "erd_std": np.std(erd_per_pair, ddof=1) if len(pairs) > 1 else np.nan,
                         "n_pairs": len(pairs),
                         "p_value_raw": p_val,
                         "cohens_d": d,
@@ -515,6 +515,7 @@ class CommandFollowingAnalysis:
             return result.pvalues["Intercept"]
         except Exception:
             logger.debug("Mixed model failed to converge, returning NaN")
+            return np.nan
 
     def generate_summary(
         self,
@@ -522,7 +523,7 @@ class CommandFollowingAnalysis:
         d_threshold: float = 0.5,
     ) -> Dict[str, Any]:
         """Generate classification summary from ERD results."""
-        if self.erd_results is None:
+        if self.erd_results is None or self.erd_results.empty:
             return {
                 "cmd_status": "ERROR: No results",
                 "n_pairs": 0,
@@ -695,7 +696,12 @@ class CommandFollowingAnalysis:
             motor_ch = "C3" if motor_ch == "C4" else "C4"  # Fallback
 
         # Get data
-        dc_data = raw_trial.get_data(picks=[dc_ch])[0] if dc_ch else np.zeros_like(times)
+        if dc_ch:
+            dc_data = raw_trial.get_data(picks=[dc_ch])[0]
+        else:
+            logger.warning(f"No DC channel found for trial {trial_idx}, plotting flatline.")
+            dc_data = np.zeros_like(times)
+
         motor_data = raw_trial.get_data(picks=[motor_ch])[0]
 
         # Compute envelopes
