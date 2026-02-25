@@ -185,7 +185,7 @@ For each ~12.4s segment, Welch's method provides stable power estimates by avera
 ## Usage
 
 ```python
-from src.pipelines.command_following_analysis import CommandFollowingAnalysis
+from src.pipelines.command_following import CommandFollowingAnalysis
 
 analysis = CommandFollowingAnalysis()
 

@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.pipelines.command_following_analysis import CommandFollowingAnalysis, CommandPair, deduplicate_and_label
+from src.pipelines.command_following import CommandFollowingAnalysis, CommandPair, deduplicate_and_label
 
 
 class TestDeduplicateAndLabel:
@@ -89,7 +89,7 @@ class TestCommandFollowingAnalysis:
         assert analysis_instance.pairs == []
         assert analysis_instance.patient_id is None
 
-    @patch("src.pipelines.command_following_analysis.CommandFollowingAnalysis._find_matching_epoch")
+    @patch("src.pipelines.command_following.CommandFollowingAnalysis._find_matching_epoch")
     def test_load_epochs_logic(self, mock_find, analysis_instance, mock_epochs, mock_loader):
         """Test the logic of pairing Keep/Stop epochs."""
         # Mock dataframe returned by load_unified_data
@@ -236,7 +236,7 @@ class TestCommandFollowingAnalysis:
         values = np.array([0.5])
 
         # Mock logger to suppress warnings
-        with patch("src.pipelines.command_following_analysis.logger"):
+        with patch("src.pipelines.command_following.logger"):
             # Mock mne.viz.plot_topomap
             with patch("mne.viz.plot_topomap"):
                 try:
