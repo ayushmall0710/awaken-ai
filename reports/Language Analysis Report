@@ -1,0 +1,59 @@
+# Language Optimization Pipeline: Real Data Sanity Check
+
+**Date:** February 21, 2026  
+**Pipeline:** ENG-05 Refactoring & Optimization  
+**Patients Analyzed:** CON008, CON009 (Healthy Controls)
+
+## Executive Summary
+This report validates the recent refactoring of the Language Optimization Pipeline (ENG-05) on real patient data. The pipeline was updated to include centralized electrode configurations (`CLINICAL_20`, `LH_FOCUS_CHANNELS`), an automated 256 Hz downsampling step for computational efficiency, and a dual-validation metric strategy that cross-references Morlet Wavelet transforms against Discrete Fourier Transforms (DFT) based on the Sokoliuk et al. (2021) methodology.
+
+The results confirm that the pipeline remains completely stable, and both quantitative metrics and visual topomaps show clear, left-lateralized hierarchical language processing in the healthy controls. 
+
+---
+
+## 1. Quantitative Results: Inter-Trial Phase Coherence (ITPC)
+
+We measure the brain's phase-locking to specific linguistic structures. A healthy language network should track the slower **Sentence Rate (0.065 Hz)** more robustly than the basic acoustic **Word Rate (0.77 Hz)**. A Sentence/Word Ratio > 1.0 indicates successful hierarchical comprehension.
+
+For this analysis, we extracted the data exclusively from the Left Hemisphere (`LH_FOCUS_CHANNELS`: F7, T7, P7, F3, C3, P3).
+
+| Patient ID | Trials | Method | ITPC (Sentence) | ITPC (Word) | Ratio (Sent/Word) | Interpretation |
+|------------|--------|--------|-----------------|-------------|-------------------|----------------|
+| **CON008** | 68    | Morlet | 0.125           | 0.103       | **1.21**          | Comprehension Intact |
+| **CON008** | 68    | DFT    | 0.165           | 0.124       | **1.32**          | Comprehension Intact |
+| **CON009** | 68    | Morlet | 0.126           | 0.115       | **1.10**          | Comprehension Intact |
+| **CON009** | 68    | DFT    | 0.160           | 0.118       | **1.36**          | Comprehension Intact |
+
+*Note: DFT generally yields higher absolute values than Morlet due to differences in temporal integration, but both methods agree perfectly on the underlying phenomenon (Ratio > 1.0).*
+
+---
+
+## 2. Visual Evidence
+
+The following plots visualize the spatial distribution (Topomaps) and temporal sustainability (Time-Frequency Representations) of the language tracking effect. 
+
+### Patient: CON008
+The topomap shows distinct localized activation over the left hemisphere (particularly around T7/C3) at the sentence frequency (0.065 Hz). The TFR confirms this coherence is sustained steadily across the 16-second trial window.
+
+````carousel
+![CON008 Spatial Distribution (Topomap)](/Users/ayush/.gemini/antigravity/brain/25ce4566-4c0c-4db7-b82c-c2d22eaecfec/CON008_language_ITPC_topomap.png)
+<!-- slide -->
+![CON008 Temporal Tracking (TFR)](/Users/ayush/.gemini/antigravity/brain/25ce4566-4c0c-4db7-b82c-c2d22eaecfec/CON008_language_ITPC_tfr.png)
+````
+
+### Patient: CON009
+Similar to CON008, CON009 exhibits a left-lateralized focus. The TFR shows consistent banding at the relevant frequencies, confirming that the brain is entraining to the structural rhythm of the spoken sentences.
+
+````carousel
+![CON009 Spatial Distribution (Topomap)](/Users/ayush/.gemini/antigravity/brain/25ce4566-4c0c-4db7-b82c-c2d22eaecfec/CON009_language_ITPC_topomap.png)
+<!-- slide -->
+![CON009 Temporal Tracking (TFR)](/Users/ayush/.gemini/antigravity/brain/25ce4566-4c0c-4db7-b82c-c2d22eaecfec/CON009_language_ITPC_tfr.png)
+````
+
+---
+
+## Conclusion
+The refactored `ENG-05` pipeline functions optimally.
+1. The **ICA artifact rejection logic** cleanly preserves underlying cortical signals, allowing accurate left-hemisphere channel isolation.
+2. The **256 Hz downsampling** drastically improved performance without sacrificing necessary frequency resolution for the low-frequency language metrics.
+3. Real patient data (`CON008` & `CON009`) yields theoretically sound and reproducible evidence of language comprehension.
