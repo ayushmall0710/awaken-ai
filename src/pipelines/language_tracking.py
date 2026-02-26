@@ -73,7 +73,7 @@ class LanguageTrackingAnalysis:
 
         Args:
             patient_id: Patient ID (e.g., 'CON008').
-            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
+            focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
 
         Returns:
             Dictionary of ITPC metrics or None if processing fails.
@@ -143,7 +143,7 @@ class LanguageTrackingAnalysis:
 
         Args:
             patient_id: Patient ID (e.g., 'CON008').
-            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
+            focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
             filter_signal: Whether to apply bandpass filtering.
 
         Returns:
@@ -187,7 +187,7 @@ class LanguageTrackingAnalysis:
 
         Args:
             epochs: MNE Epochs object.
-            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
+            focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
 
         Returns:
             New Epochs object (copied) with picked channels.
@@ -201,8 +201,14 @@ class LanguageTrackingAnalysis:
                 target_chs = set(config.LH_FOCUS_CHANNELS)
             elif focus == "RH":
                 target_chs = set(config.RH_FOCUS_CHANNELS)
-            else:
+            elif focus == "Clinical":
                 target_chs = set(config.CLINICAL_20)
+            else:
+                raise ValueError(
+                    f"Invalid focus string: '{focus}'. "
+                    "Valid options are 'LH', 'RH', or 'Clinical'. "
+                    "Alternatively, provide an iterable of channel names."
+                )
         else:
             target_chs = set(focus)
 
