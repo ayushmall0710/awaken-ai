@@ -50,6 +50,11 @@ class LanguageTrackingAnalysis:
     TARGET_SFREQ = 256.0
 
     # ITPC Constants
+    # Target frequencies based on Sokoliuk 2021 methodology:
+    # Sentence-rate (~0.0625 - 0.065 Hz) and Word-rate (~0.77 Hz)
+    TARGET_SENTENCE_FREQ = 0.065
+    TARGET_WORD_FREQ = 0.77
+
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
@@ -339,12 +344,12 @@ class LanguageTrackingAnalysis:
         Returns:
             dict with same keys as extract_itpc_metrics for direct comparison.
         """
-        target_sent = 0.065
+        target_sent = self.TARGET_SENTENCE_FREQ
         idx_sent = np.argmin(np.abs(freqs - target_sent))
         actual_sent = freqs[idx_sent]
         itpc_sent_val = float(np.mean(itpc_spectrum[:, idx_sent]))
 
-        target_word = 0.77
+        target_word = self.TARGET_WORD_FREQ
         idx_word = np.argmin(np.abs(freqs - target_word))
         actual_word = freqs[idx_word]
         itpc_word_val = float(np.mean(itpc_spectrum[:, idx_word]))
@@ -374,12 +379,12 @@ class LanguageTrackingAnalysis:
         if freqs is None:
             freqs = self.ITPC_FREQS
 
-        target_sent = 0.065
+        target_sent = self.TARGET_SENTENCE_FREQ
         idx_sent = np.argmin(np.abs(freqs - target_sent))
         actual_sent = freqs[idx_sent]
         itpc_sent_val = np.mean(itpc_data[:, idx_sent, :])
 
-        target_word = 0.77
+        target_word = self.TARGET_WORD_FREQ
         idx_word = np.argmin(np.abs(freqs - target_word))
         actual_word = freqs[idx_word]
         itpc_word_val = np.mean(itpc_data[:, idx_word, :])
