@@ -12,7 +12,7 @@ References:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional, Union
 
 import mne
 import numpy as np
@@ -67,18 +67,19 @@ class LanguageTrackingAnalysis:
         """
         self.loader = loader if loader else UnifiedDataLoader()
 
-    def run(self, patient_id: str, focus: str = "LH") -> Optional[Dict[str, Any]]:
+    def run(self, patient_id: str, focus: Union[str, Iterable[str]] = "LH") -> Optional[Dict[str, Any]]:
         """
         Execute the full language tracking pipeline for a given patient.
 
         Args:
             patient_id: Patient ID (e.g., 'CON008').
-            focus: Hemisphere focus ('LH' or 'RH').
+            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
 
         Returns:
             Dictionary of ITPC metrics or None if processing fails.
         """
-        logger.info(f"Running Language Tracking Pipeline for {patient_id} (Focus: {focus})")
+        focus_name = focus if isinstance(focus, str) else "Custom"
+        logger.info(f"Running Language Tracking Pipeline for {patient_id} (Focus: {focus_name})")
 
         # 1. Process Patient Data (Load, Select Channels, Filter)
         epochs = self.process_patient(patient_id, focus=focus)
@@ -111,7 +112,7 @@ class LanguageTrackingAnalysis:
             "patient_id": patient_id,
             "n_trials": len(epochs),
             "sfreq": epochs.info["sfreq"],
-            "focus": focus,
+            "focus": focus_name,
             # Morlet
             "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
             "morlet_itpc_word": morlet_metrics["itpc_word"],
@@ -127,14 +128,14 @@ class LanguageTrackingAnalysis:
         }
 
         logger.info(
-            f"Pipeline complete for {patient_id} ({focus}). Morlet Ratio: {result['morlet_ratio_sent_word']:.2f}"
+            f"Pipeline complete for {patient_id} ({focus_name}). Morlet Ratio: {result['morlet_ratio_sent_word']:.2f}"
         )
         return result
 
     def process_patient(
         self,
         patient_id: str,
-        focus: str = "LH",
+        focus: Union[str, Iterable[str]] = "LH",
         filter_signal: bool = True,
     ) -> Optional[mne.Epochs]:
         """
@@ -142,7 +143,7 @@ class LanguageTrackingAnalysis:
 
         Args:
             patient_id: Patient ID (e.g., 'CON008').
-            focus: Hemisphere focus ('LH' or 'RH').
+            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
             filter_signal: Whether to apply bandpass filtering.
 
         Returns:
@@ -180,13 +181,13 @@ class LanguageTrackingAnalysis:
 
         return epochs
 
-    def select_optimal_channels(self, epochs: mne.Epochs, focus: str = "LH") -> mne.Epochs:
+    def select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:
         """
         Select subset of channels based on focus strategy.
 
         Args:
             epochs: MNE Epochs object.
-            focus: Hemisphere focus ('LH' or 'RH').
+            focus: Hemisphere focus ('LH' or 'RH') or a custom iterable of channels.
 
         Returns:
             New Epochs object (copied) with picked channels.
@@ -195,12 +196,15 @@ class LanguageTrackingAnalysis:
 
         # NOTE: We DO NOT add CLINICAL_20 here to prevent signal dilution during global averaging
         # in downstream ITPC calculations. Only the targeted hemisphere channels are used.
-        if focus == "LH":
-            target_chs = set(config.LH_FOCUS_CHANNELS)
-        elif focus == "RH":
-            target_chs = set(config.RH_FOCUS_CHANNELS)
+        if isinstance(focus, str):
+            if focus == "LH":
+                target_chs = set(config.LH_FOCUS_CHANNELS)
+            elif focus == "RH":
+                target_chs = set(config.RH_FOCUS_CHANNELS)
+            else:
+                target_chs = set(config.CLINICAL_20)
         else:
-            target_chs = set(config.CLINICAL_20)
+            target_chs = set(focus)
 
         normalized_names = normalize_channel_names(available_chs)
         clean_map = {clean.upper(): orig for orig, clean in zip(available_chs, normalized_names)}
@@ -218,13 +222,15 @@ class LanguageTrackingAnalysis:
                 missing.append(target)
 
         if missing:
-            logger.warning(f"Missing channels for {focus} montage: {missing}")
+            focus_name = focus if isinstance(focus, str) else "Custom"
+            logger.warning(f"Missing channels for {focus_name} montage: {missing}")
 
         if not picks:
             logger.error("No valid channels found from target set. Returning original epochs.")
             return epochs
 
-        logger.info(f"Selected {len(picks)} channels for {focus} focus.")
+        focus_name = focus if isinstance(focus, str) else "Custom"
+        logger.info(f"Selected {len(picks)} channels for {focus_name} focus.")
         return epochs.copy().pick(picks)
 
     def preprocess_signal(self, epochs: mne.Epochs, target_sfreq: Optional[float] = None) -> mne.Epochs:
