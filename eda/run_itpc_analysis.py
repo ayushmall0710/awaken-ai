@@ -15,84 +15,30 @@ import pandas as pd
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import src.data_loading.config as config
-from src.data_processing.language_optimization import LanguageProcessor
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", force=True)
 logger = logging.getLogger(__name__)
 
 
-def analyze_patient(processor, patient_id, focus="LH"):
-    """Run full ITPC analysis for a patient using both Morlet and DFT methods."""
-    import mne
-
-    logger.info(f"Processing {patient_id}...")
-
-    epochs = processor.process_patient(patient_id, focus=focus)
-    if epochs is None:
-        logger.warning(f"Skipping {patient_id}: No data found.")
-        return None
-
-    try:
-        montage = mne.channels.make_standard_montage("standard_1020")
-        epochs.set_montage(montage, on_missing="warn")
-    except Exception as e:
-        logger.warning(f"Montage error for {patient_id}: {e}")
-
-    # --- Morlet ITPC ---
-    logger.info(f"[{patient_id}] Computing Morlet ITPC...")
-    itpc_data, itc_obj = processor.compute_itpc(epochs)
-    morlet_metrics = processor.extract_itpc_metrics(itpc_data)
-
-    output_dir = config.LOCAL_DATA_ROOT / "outputs" / patient_id
-    processor.plot_itpc_results(itc_obj, patient_id, output_dir, morlet_metrics)
-
-    # --- DFT ITPC ---
-    logger.info(f"[{patient_id}] Computing DFT ITPC...")
-    itpc_spectrum, dft_freqs = processor.compute_itpc_dft(epochs)
-    dft_metrics = processor.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
-
-    # Build combined result
-    result = {
-        "patient_id": patient_id,
-        "n_trials": len(epochs),
-        "sfreq": epochs.info["sfreq"],
-        # Morlet
-        "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
-        "morlet_itpc_word": morlet_metrics["itpc_word"],
-        "morlet_ratio_sent_word": morlet_metrics["ratio_sent_word"],
-        "morlet_freq_sentence_hz": morlet_metrics["freq_sentence_hz"],
-        "morlet_freq_word_hz": morlet_metrics["freq_word_hz"],
-        # DFT
-        "dft_itpc_sentence": dft_metrics["itpc_sentence"],
-        "dft_itpc_word": dft_metrics["itpc_word"],
-        "dft_ratio_sent_word": dft_metrics["ratio_sent_word"],
-        "dft_freq_sentence_hz": dft_metrics["freq_sentence_hz"],
-        "dft_freq_word_hz": dft_metrics["freq_word_hz"],
-    }
-
-    logger.info(
-        f"[{patient_id}] Morlet -- Sentence: {morlet_metrics['itpc_sentence']:.4f} | "
-        f"Word: {morlet_metrics['itpc_word']:.4f} | Ratio: {morlet_metrics['ratio_sent_word']:.2f}"
-    )
-    logger.info(
-        f"[{patient_id}] DFT    -- Sentence: {dft_metrics['itpc_sentence']:.4f} | "
-        f"Word: {dft_metrics['itpc_word']:.4f} | Ratio: {dft_metrics['ratio_sent_word']:.2f}"
-    )
-
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run ITPC Analysis (Morlet + DFT)")
     parser.add_argument("--patients", nargs="+", required=True, help="Patient IDs (e.g., CON008 CON009)")
-    parser.add_argument("--focus", type=str, default="LH", choices=["LH", "Clinical"], help="Channel focus")
+
+    # TODO: Currently defaulting to "LH" purely. We should implement an auto-lateralization
+    # check (comparing LH vs RH) pending review from the Professor.
+    #
+    # TODO: We are strictly using focus="LH" (without adding CLINICAL_20 channels) to prevent
+    # the signal dilution bug we observed when computing global ITPC averages. We will keep it pure
+    # LH until we get clarity from the Professor on whether CLINICAL_20 should be included.
+    parser.add_argument("--focus", type=str, default="LH", choices=["LH", "RH", "Clinical"], help="Channel focus")
     args = parser.parse_args()
 
-    processor = LanguageProcessor()
+    pipeline = LanguageTrackingAnalysis()
     results = []
 
     for pid in args.patients:
-        res = analyze_patient(processor, pid, focus=args.focus)
+        res = pipeline.run(patient_id=pid, focus=args.focus)
         if res:
             results.append(res)
 
@@ -106,6 +52,7 @@ def main():
                     "patient_id",
                     "n_trials",
                     "sfreq",
+                    "focus",
                     "morlet_itpc_sentence",
                     "morlet_itpc_word",
                     "morlet_ratio_sent_word",
