@@ -18,7 +18,7 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Data Loading**: Uses `UnifiedDataLoader.load_clean_epochs` to fetch pre-cleaned data from ENG-03.
 - **Language Processor**: `src/data_processing/language_optimization.py`
     - **Input**: Expects `ArtifactRejector` to have been run first (generates `-epo.fif` files).
-    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3).
+    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3) and strictly validates focus inputs (`LH`, `RH`, `Clinical`).
     - **Filtering**: Applies 0.5-30Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
     - **Output**: Returns `mne.Epochs` restricted to optimal channels.
 

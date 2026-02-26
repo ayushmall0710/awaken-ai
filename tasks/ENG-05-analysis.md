@@ -17,7 +17,7 @@ Patients with disorders of consciousness may still process language. Validating 
 - **Source**: `LanguageProcessor` (utilizing `ArtifactRejector` clean epochs).
 - **Filter**: 0.5 - 30 Hz (Preserves low-frequency Delta band).
 - **Montage**: Standard 10-20.
-- **Channels**: Left Hemisphere Focus (19 channels selected, e.g., F7, T7, P7).
+- **Channels**: Left Hemisphere Focus (6 channels, e.g., F7, T7, P7) is default, with explicit validation of focus parameter (`LH`, `RH`, or `Clinical`).
 - **Epochs**: ~16s segments covering full sentence duration.
 
 ### Time-Frequency Analysis
