@@ -54,7 +54,12 @@ class LanguageTrackingAnalysis:
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
     def __init__(self, loader: Optional[UnifiedDataLoader] = None):
-        """Initialize the pipeline."""
+        """
+        Initialize the LanguageTrackingAnalysis.
+
+        Args:
+            loader: Optional UnifiedDataLoader instance. If None, creates a new one.
+        """
         self.loader = loader if loader else UnifiedDataLoader()
 
     def run(self, patient_id: str, focus: str = "LH") -> Optional[Dict[str, Any]]:
@@ -128,7 +133,18 @@ class LanguageTrackingAnalysis:
         filter_signal: bool = True,
     ) -> Optional[mne.Epochs]:
         """
-        Load and preprocess data for a single patient using pre-cleaned epochs.
+        End-to-end processing for a single patient using pre-cleaned epochs (ENG-03).
+
+        Args:
+            patient_id: Patient ID (e.g., 'CON008').
+            focus: Hemisphere focus ('LH' or 'RH').
+            filter_signal: Whether to apply bandpass filtering.
+
+        Returns:
+            mne.Epochs object containing processed language trial segments.
+
+        Raises:
+            UnifiedDataLoadingError: If data loading fails.
         """
         try:
             sessions = self.loader.get_patient_sessions(patient_id)
@@ -162,6 +178,13 @@ class LanguageTrackingAnalysis:
     def select_optimal_channels(self, epochs: mne.Epochs, focus: str = "LH") -> mne.Epochs:
         """
         Select subset of channels based on focus strategy.
+
+        Args:
+            epochs: MNE Epochs object.
+            focus: Hemisphere focus ('LH' or 'RH').
+
+        Returns:
+            New Epochs object (copied) with picked channels.
         """
         available_chs = epochs.ch_names
 
@@ -200,6 +223,24 @@ class LanguageTrackingAnalysis:
         return epochs.copy().pick(picks)
 
     def preprocess_signal(self, epochs: mne.Epochs, target_sfreq: Optional[float] = None) -> mne.Epochs:
+        """
+        Apply bandpass filtering and downsample.
+
+        Applies 0.5-30 Hz bandpass filter (preserving Delta band for sentence-rate
+        analysis) and downsamples to TARGET_SFREQ (default 256 Hz).
+
+        Source EDFs record at 512 Hz. Downsampling to 256 Hz halves TFR computation
+        time while preserving all frequencies of interest with large margin
+        (Nyquist = 128 Hz >> 30 Hz low-pass). Matches Sokoliuk 2021 methodology.
+
+        Args:
+            epochs: MNE Epochs object.
+            target_sfreq: Target sampling frequency after downsampling. Defaults to
+                TARGET_SFREQ (256.0 Hz). Set to None to skip downsampling.
+
+        Returns:
+            New processed Epochs object.
+        """
         if target_sfreq is None:
             target_sfreq = self.TARGET_SFREQ
 
@@ -223,7 +264,18 @@ class LanguageTrackingAnalysis:
         freqs: Optional[np.ndarray] = None,
         n_cycles: Optional[np.ndarray] = None,
     ):
-        """Compute Inter-Trial Phase Coherence (ITPC) using Morlet wavelets."""
+        """
+        Compute Inter-Trial Phase Coherence (ITPC) using Morlet wavelets.
+
+        Args:
+            epochs (mne.Epochs): Preprocessed epochs.
+            freqs (np.array, optional): Frequencies of interest. Defaults to class ITPC_FREQS.
+            n_cycles (np.array or int, optional): Number of cycles. Defaults to class ITPC_CYCLES.
+
+        Returns:
+            itpc (np.ndarray): ITPC data (n_channels, n_freqs, n_times).
+            tfr (mne.time_frequency.AverageTFR): TFR object containing ITPC.
+        """
         from mne.time_frequency import tfr_morlet
 
         if freqs is None:
@@ -245,7 +297,24 @@ class LanguageTrackingAnalysis:
         return itc.data, itc
 
     def compute_itpc_dft(self, epochs: mne.Epochs):
-        """Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method)."""
+        """
+        Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
+
+        For each trial and electrode, computes the FFT, extracts the phase at each
+        frequency bin, then averages unit phase vectors across trials. This provides
+        a single ITPC spectrum (no time dimension) suitable for cross-validating the
+        Morlet wavelet approach.
+
+        Frequency resolution = 1 / epoch_duration Hz. For 16s epochs this yields
+        ~0.0625 Hz resolution, comparable to Sokoliuk's 0.07 Hz.
+
+        Args:
+            epochs: Preprocessed MNE Epochs object.
+
+        Returns:
+            itpc_spectrum (np.ndarray): ITPC values, shape (n_channels, n_freqs).
+            freqs (np.ndarray): Frequency axis in Hz.
+        """
         data = epochs.get_data()  # (n_trials, n_channels, n_times)
         n_trials, n_channels, n_times = data.shape
         sfreq = epochs.info["sfreq"]
@@ -260,6 +329,16 @@ class LanguageTrackingAnalysis:
         return itpc_spectrum, freqs
 
     def extract_itpc_metrics_dft(self, itpc_spectrum: np.ndarray, freqs: np.ndarray) -> dict:
+        """
+        Extract sentence-rate and word-rate ITPC from a DFT ITPC spectrum.
+
+        Args:
+            itpc_spectrum: DFT ITPC array, shape (n_channels, n_freqs).
+            freqs: Frequency axis from compute_itpc_dft.
+
+        Returns:
+            dict with same keys as extract_itpc_metrics for direct comparison.
+        """
         target_sent = 0.065
         idx_sent = np.argmin(np.abs(freqs - target_sent))
         actual_sent = freqs[idx_sent]
@@ -282,6 +361,16 @@ class LanguageTrackingAnalysis:
         }
 
     def extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
+        """
+        Extract ITPC metrics at Sentence (0.065 Hz) and Word (0.77 Hz) rates.
+
+        Args:
+            itpc_data (np.ndarray): ITPC data array.
+            freqs (np.ndarray, optional): Frequencies corresponding to ITPC data. Defaults to class ITPC_FREQS.
+
+        Returns:
+            dict: Dictionary containing sentence_mean, word_mean, ratio, and actual frequencies.
+        """
         if freqs is None:
             freqs = self.ITPC_FREQS
 
@@ -307,6 +396,15 @@ class LanguageTrackingAnalysis:
         }
 
     def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
+        """
+        Generate and save enhanced ITPC plots (Topomap and TFR).
+
+        Args:
+            itc: MNE AverageTFR object.
+            patient_id: Patient ID string.
+            output_dir: Path to save outputs.
+            metrics: Metrics dictionary from extract_itpc_metrics.
+        """
         import matplotlib.pyplot as plt
 
         output_dir = Path(output_dir)
