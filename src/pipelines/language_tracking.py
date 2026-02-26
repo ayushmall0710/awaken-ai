@@ -207,7 +207,7 @@ class LanguageTrackingAnalysis:
                 raise ValueError(
                     f"Invalid focus string: '{focus}'. "
                     "Valid options are 'LH', 'RH', or 'Clinical'. "
-                    "Alternatively, provide an iterable of channel names."
+                    "Alternatively, provide an iterable of channel names (e.g., ['F7', 'T7'])."
                 )
         else:
             target_chs = set(focus)
