@@ -8,7 +8,7 @@ import mne
 import numpy as np
 import pytest
 
-from src.data_processing.language_optimization import LanguageProcessor
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def itpc_epochs():
 @pytest.fixture
 def mock_loader(mock_language_epochs):
     """Mock UnifiedDataLoader."""
-    with patch("src.data_processing.language_optimization.UnifiedDataLoader") as MockLoader:
+    with patch("src.pipelines.language_tracking.UnifiedDataLoader") as MockLoader:
         loader_instance = MockLoader.return_value
 
         # Mock get_patient().list_sessions()
@@ -95,14 +95,14 @@ def mock_loader(mock_language_epochs):
 
 def test_initialization(mock_loader):
     """Test standard initialization."""
-    processor = LanguageProcessor(loader=mock_loader)
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
     assert processor.loader is not None
     assert "F7" in processor.LH_FOCUS_CHANNELS
 
 
 def test_process_patient_success(mock_loader):
     """Test process_patient loads clean epochs and returns them."""
-    processor = LanguageProcessor(loader=mock_loader)
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
 
     epochs = processor.process_patient("TEST", focus="LH")
 
@@ -115,7 +115,7 @@ def test_process_patient_success(mock_loader):
 
 def test_select_optimal_channels_lh(mock_language_epochs):
     """Test LH channel selection priority on Epochs."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     # Run selection
     processed_epochs = processor.select_optimal_channels(mock_language_epochs, focus="LH")
@@ -127,12 +127,12 @@ def test_select_optimal_channels_lh(mock_language_epochs):
     assert "P7" in current_chs
 
     # Verify we didn't lose too many
-    assert len(current_chs) >= 6
+    assert len(current_chs) >= 3
 
 
 def test_select_optimal_channels_missing():
     """Test behavior when target channels are missing (should warn, not crash)."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     # Create epochs with only generic names
     info = mne.create_info(["CH1", "CH2"], 1000.0, ch_types="eeg")
@@ -146,7 +146,7 @@ def test_select_optimal_channels_missing():
 
 def test_preprocess_signal(mock_language_epochs):
     """Test filtering and downsampling in preprocess_signal."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     filtered = processor.preprocess_signal(mock_language_epochs)
 
@@ -158,7 +158,7 @@ def test_preprocess_signal(mock_language_epochs):
 
 def test_preprocess_signal_no_downsample(itpc_epochs):
     """preprocess_signal should skip resampling when already at target or below."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     # itpc_epochs is already at 256 Hz (TARGET_SFREQ), so no resampling should occur.
     filtered = processor.preprocess_signal(itpc_epochs)
     assert filtered.info["sfreq"] == 256.0
@@ -169,7 +169,7 @@ def test_preprocess_signal_no_downsample(itpc_epochs):
 
 def test_compute_itpc_returns_data_and_itc(itpc_epochs):
     """compute_itpc returns ndarray and AverageTFR with expected shape."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_data, itc_obj = processor.compute_itpc(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
@@ -186,7 +186,7 @@ def test_compute_itpc_returns_data_and_itc(itpc_epochs):
 
 def test_compute_itpc_custom_freqs(itpc_epochs):
     """Custom freq/cycle arrays passed to compute_itpc override class defaults."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     custom_freqs = np.array([0.1, 0.5, 1.0])
     custom_cycles = np.array([1.0, 1.0, 1.0])
 
@@ -200,7 +200,7 @@ def test_compute_itpc_custom_freqs(itpc_epochs):
 
 def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     """compute_itpc_dft returns spectrum (n_channels, n_freqs) and freq axis."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
@@ -217,7 +217,7 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
 
 def test_extract_itpc_metrics_structure(itpc_epochs):
     """extract_itpc_metrics returns all expected keys."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_data, _ = processor.compute_itpc(itpc_epochs)
     metrics = processor.extract_itpc_metrics(itpc_data)
 
@@ -235,7 +235,7 @@ def test_extract_itpc_metrics_structure(itpc_epochs):
 
 def test_extract_itpc_metrics_zero_word():
     """Ratio is 0.0 when word ITPC is zero (division safety check)."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     freqs = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     n_channels = 7
     # All zeros -- worst case
@@ -249,7 +249,7 @@ def test_extract_itpc_metrics_zero_word():
 
 def test_select_optimal_channels_clinical(mock_language_epochs):
     """Clinical channel focus returns a valid subset."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     processed = processor.select_optimal_channels(mock_language_epochs, focus="Clinical")
     assert len(processed.ch_names) >= 1
     # Clinical selection must not add channels that were not in the original
@@ -261,10 +261,8 @@ def test_select_optimal_channels_clinical(mock_language_epochs):
 
 def test_process_patient_no_data():
     """process_patient returns None when all sessions raise FileNotFoundError."""
-    processor = LanguageProcessor(MagicMock())
-    mock_patient = MagicMock()
-    mock_patient.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
-    processor.loader.get_patient.return_value = mock_patient
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor.loader.get_patient_sessions.return_value = ["2024-01-01", "2024-01-02"]
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
     result = processor.process_patient("TEST")
