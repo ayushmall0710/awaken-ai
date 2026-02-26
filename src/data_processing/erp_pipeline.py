@@ -20,6 +20,7 @@ from tqdm import tqdm
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
 from src.data_processing.artifact_rejection import ArtifactRejector
+from src.utils import signal_processing as signal_utils
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ class OddballERPPipeline:
         self,
         data_root: Optional[Path] = None,
         output_dir: Optional[Path] = None,
+        loader: Optional[UnifiedDataLoader] = None,
         verbose: bool = False,
     ):
         """
@@ -57,33 +59,54 @@ class OddballERPPipeline:
         Args:
             data_root: Root directory for data files (defaults to config.LOCAL_DATA_ROOT)
             output_dir: Output directory for processed files (defaults to config.PROCESSED_DATA_DIR)
+            loader: Optional shared UnifiedDataLoader (reuses LRU cache when running with ENG-03 etc.)
             verbose: If True, enable detailed logging
         """
         self.data_root = data_root or config.LOCAL_DATA_ROOT
         self.output_dir = output_dir or config.PROCESSED_DATA_DIR
         self.verbose = verbose
 
-        # Initialize data loader
-        self.loader = UnifiedDataLoader(data_root=self.data_root, verbose=verbose)
+        self.loader = loader if loader is not None else UnifiedDataLoader(data_root=self.data_root, verbose=verbose)
 
         # Set MNE logging level
         if not verbose:
             mne.set_log_level("WARNING")
 
-        # Ensure output directories exist
+        # Effective output paths: use config constants when output_dir is default
+        self._output_paths = self._get_output_paths()
         self._create_output_directories()
         self._last_epoch_diagnostics: Dict[str, Any] = {}
 
+    def _get_output_paths(self):
+        """Return effective output base paths (config constants when output_dir is default)."""
+        if self.output_dir == config.PROCESSED_DATA_DIR:
+            return type(
+                "Paths",
+                (),
+                {
+                    "epochs": config.EPOCHS_DIR,
+                    "erps": config.ERPS_DIR,
+                    "features": config.FEATURES_DIR,
+                    "plots_erp": config.ERP_PLOTS_DIR,
+                    "qc": config.QC_REPORTS_DIR,
+                },
+            )()
+        return type(
+            "Paths",
+            (),
+            {
+                "epochs": self.output_dir / "epochs",
+                "erps": self.output_dir / "erps",
+                "features": self.output_dir / "features",
+                "plots_erp": self.output_dir / "plots" / "erp",
+                "qc": self.output_dir / "qc",
+            },
+        )()
+
     def _create_output_directories(self):
         """Create all necessary output directories."""
-        directories = [
-            self.output_dir / "epochs",
-            self.output_dir / "erps",
-            self.output_dir / "features",
-            self.output_dir / "plots" / "erp",
-            self.output_dir / "qc",
-        ]
-        for dir_path in directories:
+        p = self._output_paths
+        for dir_path in [p.epochs, p.erps, p.features, p.plots_erp, p.qc]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
     def process_patient(
@@ -132,23 +155,32 @@ class OddballERPPipeline:
                     session_trials,
                     custom_electrodes=custom_electrodes,
                 )
+                if session_result["status"] != "success":
+                    logger.warning(
+                        "Session %s %s: %s",
+                        patient_id,
+                        session_date,
+                        session_result["status"],
+                    )
+                all_session_results.append(session_result)
 
-                if session_result["status"] == "success":
-                    all_session_results.append(session_result)
+            successful = [r for r in all_session_results if r.get("status") == "success"]
+            if not successful:
+                return {
+                    "patient_id": patient_id,
+                    "status": "no_successful_sessions",
+                    "session_results": all_session_results,
+                }
 
-            if not all_session_results:
-                return {"patient_id": patient_id, "status": "failed"}
-
-            # Return results (for single session, return that session; for multi-session, aggregate)
-            if len(all_session_results) == 1:
-                return all_session_results[0]
+            # Return results (for single successful session, return that session; for multi-session, aggregate)
+            if len(successful) == 1:
+                return successful[0]
             else:
-                # Aggregate features from all sessions
-                all_features = pd.concat([r["features"] for r in all_session_results], ignore_index=True)
+                all_features = pd.concat([r["features"] for r in successful], ignore_index=True)
                 return {
                     "patient_id": patient_id,
                     "status": "success",
-                    "sessions": len(all_session_results),
+                    "sessions": len(successful),
                     "features": all_features,
                 }
 
@@ -495,8 +527,9 @@ class OddballERPPipeline:
         # Create MNE events array: [sample_index, 0, event_id]
         mne_events = np.array([[e["sample_idx"], 0, 1] for e in valid_events])
 
-        # Select EEG channels (exclude DC channels)
-        picks = mne.pick_types(raw.info, eeg=True, exclude=["DC1", "DC2", "DC", "DC1", "AUX"])
+        # Select EEG channels (exclude non-EEG via shared config, aligned with ENG-03)
+        exclude_ch_names = signal_utils.exclude_non_eeg_channels(raw)
+        picks = mne.pick_types(raw.info, eeg=True, exclude=exclude_ch_names)
 
         # Create epochs
         epochs = mne.Epochs(
@@ -657,6 +690,12 @@ class OddballERPPipeline:
                     f"{patient_id} QC warning: {composite['n_flagged_electrodes']} electrode(s) flagged - "
                     f"{features['qc_notes']}"
                 )
+
+        # Merge epoch/timezone diagnostics from _create_epochs so verify script and parquet have them
+        if self._last_epoch_diagnostics:
+            for key, value in self._last_epoch_diagnostics.items():
+                if key not in features:
+                    features[key] = value
 
         return features
 
@@ -891,17 +930,17 @@ class OddballERPPipeline:
             features: Dictionary of P300 features
         """
         # Save epochs
-        epochs_file = self.output_dir / "epochs" / f"{patient_id}_{date}_oddball-epo.fif"
+        epochs_file = self._output_paths.epochs / f"{patient_id}_{date}_oddball-epo.fif"
         epochs.save(epochs_file, overwrite=True)
         logger.info(f"Saved epochs: {epochs_file}")
 
         # Save ERP
-        erp_file = self.output_dir / "erps" / f"{patient_id}_{date}_oddball-ave.fif"
+        erp_file = self._output_paths.erps / f"{patient_id}_{date}_oddball-ave.fif"
         erp.save(erp_file, overwrite=True)
         logger.info(f"Saved ERP: {erp_file}")
 
         # Save features
-        features_file = self.output_dir / "features" / f"{patient_id}_{date}_p300_features.parquet"
+        features_file = self._output_paths.features / f"{patient_id}_{date}_p300_features.parquet"
         features_df = pd.DataFrame([features])
         features_df.to_parquet(features_file)
         logger.info(f"Saved features: {features_file}")
@@ -917,7 +956,7 @@ class OddballERPPipeline:
         Returns:
             Updated master feature DataFrame
         """
-        master_path = self.output_dir / "features" / "p300_features.parquet"
+        master_path = self._output_paths.features / "p300_features.parquet"
         if master_path.exists():
             master_df = pd.read_parquet(master_path)
             combined = pd.concat([master_df, incoming_features], ignore_index=True)
@@ -929,6 +968,52 @@ class OddballERPPipeline:
         combined.to_parquet(master_path)
         logger.info(f"Updated master feature table: {master_path} ({len(combined)} rows)")
         return combined
+
+    def _plot_erp_panels(
+        self,
+        erp: mne.Evoked,
+        axes: Any,
+        title_top: str,
+        electrodes_to_plot: List[str],
+        panel_title_bottom: str,
+        color_map_or_list: Any,
+    ) -> None:
+        """
+        Draw two-panel ERP plot: Panel 0 butterfly + P300 window, Panel 1 selected electrodes.
+        Caller creates fig/axes and handles save/close.
+        """
+        times = erp.times * 1000  # ms
+        data = erp.data * 1e6  # µV
+        ch_names_upper = [ch.upper() for ch in erp.ch_names]
+
+        # Panel 0: butterfly
+        for ch_idx in range(data.shape[0]):
+            axes[0].plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
+        axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1, label="Stimulus")
+        axes[0].axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
+        axes[0].set_xlabel("Time (ms)")
+        axes[0].set_ylabel("Amplitude (µV)")
+        axes[0].set_title(title_top)
+        axes[0].legend(loc="upper right")
+        axes[0].grid(True, alpha=0.3)
+
+        # Panel 1: selected electrodes
+        is_dict = isinstance(color_map_or_list, dict)
+        for idx, electrode in enumerate(electrodes_to_plot):
+            color = color_map_or_list[electrode] if is_dict else color_map_or_list[idx % len(color_map_or_list)]
+            try:
+                elec_idx = ch_names_upper.index(electrode.upper())
+                axes[1].plot(times, data[elec_idx, :], linewidth=2, color=color, label=electrode)
+            except ValueError:
+                logger.warning(f"Electrode {electrode} not found in data")
+        axes[1].axvline(x=0, color="k", linestyle="--", linewidth=1)
+        axes[1].axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
+        axes[1].axhline(y=0, color="gray", linestyle=":", linewidth=1)
+        axes[1].set_xlabel("Time (ms)")
+        axes[1].set_ylabel("Amplitude (µV)")
+        axes[1].set_title(panel_title_bottom)
+        axes[1].legend(loc="upper right")
+        axes[1].grid(True, alpha=0.3)
 
     def _plot_individual_erp(
         self,
@@ -946,86 +1031,30 @@ class OddballERPPipeline:
             date: Session date
             custom_electrodes: Optional list of custom electrodes to plot
         """
-        save_path = self.output_dir / "plots" / "erp" / f"{patient_id}_{date}_oddball_erp.png"
-
+        save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp.png"
         fig, axes = plt.subplots(2, 1, figsize=(10, 8))
 
-        # Panel 1: Butterfly plot (all channels)
-        times = erp.times * 1000  # Convert to ms
-        data = erp.data * 1e6  # Convert to µV
-
-        for ch_idx in range(data.shape[0]):
-            axes[0].plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
-
-        axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1, label="Stimulus")
-        axes[0].axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
-        axes[0].set_xlabel("Time (ms)")
-        axes[0].set_ylabel("Amplitude (µV)")
-        axes[0].set_title(f"{patient_id} - {date} - All Channels")
-        axes[0].legend(loc="upper right")
-        axes[0].grid(True, alpha=0.3)
-
-        # Panel 2: custom electrodes or default midline electrodes
-        electrode_names_upper = [ch.upper() for ch in erp.ch_names]
-
-        # Determine which electrodes to plot
         if custom_electrodes:
-            # Custom electrode mode.
             electrodes_to_plot = custom_electrodes
             panel_title = f"{patient_id} - {date} - Custom Electrodes: {', '.join(custom_electrodes)}"
-            # Assign colors dynamically for custom electrodes.
-            color_palette = [
-                "red",
-                "blue",
-                "green",
-                "orange",
-                "purple",
-                "brown",
-                "pink",
-                "gray",
-            ]
+            colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray"]
         else:
-            # Default midline electrodes.
             electrodes_to_plot = ["Fz", "Cz", "Pz"]
             panel_title = f"{patient_id} - {date} - Midline Electrodes (Composite Scoring)"
-            color_palette = ["red", "green", "blue"]
+            colors = ["red", "green", "blue"]
 
-        found_any = False
-        for idx, electrode in enumerate(electrodes_to_plot):
-            color = color_palette[idx % len(color_palette)]
-            try:
-                elec_idx = electrode_names_upper.index(electrode.upper())
-                elec_data = data[elec_idx, :]
-                axes[1].plot(times, elec_data, linewidth=2, color=color, label=electrode)
-                found_any = True
-            except ValueError:
-                # Electrode not found; skip it.
-                logger.warning(f"Electrode {electrode} not found in data")
-                pass
-
-        if found_any:
-            axes[1].axvline(x=0, color="k", linestyle="--", linewidth=1)
-            axes[1].axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
-            axes[1].axhline(y=0, color="gray", linestyle=":", linewidth=1)
-            axes[1].set_xlabel("Time (ms)")
-            axes[1].set_ylabel("Amplitude (µV)")
-            axes[1].set_title(panel_title)
-            axes[1].legend(loc="upper right")
-            axes[1].grid(True, alpha=0.3)
-        else:
-            axes[1].text(
-                0.5,
-                0.5,
-                f"Electrodes {', '.join(electrodes_to_plot)} not available",
-                ha="center",
-                va="center",
-                transform=axes[1].transAxes,
-            )
+        self._plot_erp_panels(
+            erp,
+            axes,
+            title_top=f"{patient_id} - {date} - All Channels",
+            electrodes_to_plot=electrodes_to_plot,
+            panel_title_bottom=panel_title,
+            color_map_or_list=colors,
+        )
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close()
-
         logger.info(f"Saved ERP plot: {save_path}")
 
     def process_all_patients(
@@ -1095,7 +1124,7 @@ class OddballERPPipeline:
         logger.info(f"Found {len(patient_ids)} patients with oddball data")
         return sorted(patient_ids)
 
-    def compute_grand_average(self, patient_ids: Optional[List[str]] = None) -> mne.Evoked:
+    def compute_grand_average(self, patient_ids: Optional[List[str]] = None) -> Optional[mne.Evoked]:
         """
         Compute grand average ERP across multiple patients.
 
@@ -1107,15 +1136,15 @@ class OddballERPPipeline:
             MNE Evoked object (grand average ERP)
         """
         aggregate_filename = "grand_average_oddball-ave.fif"
-        aggregate_path = self.output_dir / "erps" / aggregate_filename
+        aggregate_path = self._output_paths.erps / aggregate_filename
 
         if patient_ids is None:
             # Include only session ERP files.
-            candidate_files = list((self.output_dir / "erps").glob("*_oddball-ave.fif"))
+            candidate_files = list(self._output_paths.erps.glob("*_oddball-ave.fif"))
         else:
             candidate_files = []
             for patient_id in patient_ids:
-                patient_erps = list((self.output_dir / "erps").glob(f"{patient_id}_*_oddball-ave.fif"))
+                patient_erps = list(self._output_paths.erps.glob(f"{patient_id}_*_oddball-ave.fif"))
                 candidate_files.extend(patient_erps)
 
         erp_files = []
@@ -1162,7 +1191,7 @@ class OddballERPPipeline:
         grand_avg = mne.grand_average(all_erps)
 
         # Save grand average
-        grand_avg_file = self.output_dir / "erps" / "grand_average_oddball-ave.fif"
+        grand_avg_file = self._output_paths.erps / "grand_average_oddball-ave.fif"
         grand_avg.save(grand_avg_file, overwrite=True)
         logger.info(f"Saved grand average ERP: {grand_avg_file}")
 
@@ -1179,61 +1208,22 @@ class OddballERPPipeline:
             grand_avg: Grand average MNE Evoked object
             n_subjects: Number of subjects included
         """
-        save_path = self.output_dir / "plots" / "erp" / "grand_average_oddball_erp.png"
-
+        save_path = self._output_paths.plots_erp / "grand_average_oddball_erp.png"
         fig, axes = plt.subplots(2, 1, figsize=(12, 8))
 
-        times = grand_avg.times * 1000  # Convert to ms
-        data = grand_avg.data * 1e6  # Convert to µV
-
-        # Panel 1: Butterfly plot (all channels)
-        for ch_idx in range(data.shape[0]):
-            axes[0].plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
-
-        axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1.5, label="Stimulus")
-        axes[0].axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
-        axes[0].axhline(y=0, color="gray", linestyle=":", linewidth=1)
-        axes[0].set_xlabel("Time (ms)")
-        axes[0].set_ylabel("Amplitude (µV)")
-        axes[0].set_title(f"Grand Average ERP (N={n_subjects}) - All Channels")
-        axes[0].legend(loc="upper right")
-        axes[0].grid(True, alpha=0.3)
-
-        # Panel 2: midline electrodes
         electrode_colors = {"Fz": "red", "Cz": "green", "Pz": "blue"}
-        electrode_labels = {
-            "Fz": "Fz (frontal)",
-            "Cz": "Cz (central)",
-            "Pz": "Pz (parietal)",
-        }
-
-        for electrode, color in electrode_colors.items():
-            try:
-                ch_idx = [ch.upper() for ch in grand_avg.ch_names].index(electrode.upper())
-                electrode_data = data[ch_idx, :]
-                axes[1].plot(
-                    times,
-                    electrode_data,
-                    linewidth=2,
-                    color=color,
-                    label=electrode_labels[electrode],
-                )
-            except ValueError:
-                continue
-
-        axes[1].axvline(x=0, color="k", linestyle="--", linewidth=1.5)
-        axes[1].axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
-        axes[1].axhline(y=0, color="gray", linestyle=":", linewidth=1)
-        axes[1].set_xlabel("Time (ms)")
-        axes[1].set_ylabel("Amplitude (µV)")
-        axes[1].set_title(f"Grand Average ERP (N={n_subjects}) - Midline Electrodes (Composite Scoring)")
-        axes[1].legend(loc="upper right")
-        axes[1].grid(True, alpha=0.3)
+        self._plot_erp_panels(
+            grand_avg,
+            axes,
+            title_top=f"Grand Average ERP (N={n_subjects}) - All Channels",
+            electrodes_to_plot=["Fz", "Cz", "Pz"],
+            panel_title_bottom=f"Grand Average ERP (N={n_subjects}) - Midline Electrodes (Composite Scoring)",
+            color_map_or_list=electrode_colors,
+        )
 
         plt.tight_layout()
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close()
-
         logger.info(f"Saved grand average plot: {save_path}")
 
     def generate_qc_report(self) -> Dict[str, Any]:
@@ -1243,7 +1233,7 @@ class OddballERPPipeline:
         Returns:
             Dictionary containing QC metrics
         """
-        features_path = self.output_dir / "features" / "p300_features.parquet"
+        features_path = self._output_paths.features / "p300_features.parquet"
 
         if not features_path.exists():
             logger.warning(f"No feature table found: {features_path}")
@@ -1286,7 +1276,7 @@ class OddballERPPipeline:
             )
 
         # Save report
-        report_path = self.output_dir / "qc" / "erp_qc_report.json"
+        report_path = self._output_paths.qc / "erp_qc_report.json"
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
 

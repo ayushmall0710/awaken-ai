@@ -147,6 +147,8 @@ The pipeline outputs 19 essential columns focused on P300 analysis:
 
 **Design Note**: The schema omits extra diagnostic fields that are not used downstream (for example, per-electrode QC booleans and redundant string lists). `qc_notes` keeps a short summary of any issues.
 
+**Epoch/timezone diagnostics**: When available (after epoch creation), the parquet also includes: `n_valid_events_pre_mne`, `n_dropped_by_mne`, `n_out_of_recording`, `n_too_close_to_start`, `n_too_close_to_end`, `timezone_offset_hours`, `timezone_confidence`, `timezone_warning_flag`, `diagnostic_note` (and optionally `n_rare_events`, `n_epochs_post_mne`). These are used by the verification script sections [2b] and [10].
+
 ### Validation Criteria
 
 An electrode passes QC if:
@@ -246,6 +248,9 @@ python scripts/run_erp_pipeline.py --list-electrodes
 
 # Custom electrode analysis
 python scripts/run_erp_pipeline.py --patient CON008 --electrodes "T5,T6"
+
+# Custom output directory
+python scripts/run_erp_pipeline.py --all --output-dir /path/to/output
 
 # Verbose output
 python scripts/run_erp_pipeline.py --patient CON008 --verbose

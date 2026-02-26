@@ -1,28 +1,6 @@
 #!/usr/bin/env python3
 """
-Run ERP/Oddball Pipeline (ENG-02b)
-
-This script provides a command-line interface to the ERP pipeline for processing
-oddball trials and extracting P300 features.
-
-Usage Examples:
-    # Process a single patient
-    python scripts/run_erp_pipeline.py --patient CON008
-
-    # Process all patients with oddball data
-    python scripts/run_erp_pipeline.py --all
-
-    # Process all patients and compute grand average
-    python scripts/run_erp_pipeline.py --all --grand-average
-
-    # Process single patient with specific session date
-    python scripts/run_erp_pipeline.py --patient CON008 --date 2025-08-14
-
-    # Custom output directory
-    python scripts/run_erp_pipeline.py --all --output-dir /path/to/output
-
-    # Verbose logging
-    python scripts/run_erp_pipeline.py --patient CON008 --verbose
+CLI for the ERP/Oddball pipeline (ENG-02b). See tasks/ENG-02b.md for usage examples.
 """
 
 import argparse
