@@ -107,7 +107,7 @@ class TestCommandFollowingAnalysis:
             np.zeros((1, 1, 1)), mne.create_info(1, 100, "eeg"), tmin=0, verbose=False
         )[:0]
 
-        analysis_instance.load_epochs()
+        analysis_instance.load()
 
         # Verify it TRIED to load epochs for the trial type we put in aligned_events
         mock_loader.load_clean_epochs.assert_called_once()

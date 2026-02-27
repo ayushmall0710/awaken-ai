@@ -30,6 +30,7 @@ from scipy import stats
 from statsmodels.stats.multitest import multipletests
 
 from src.data_loading import UnifiedDataLoader
+from src.pipelines.base import BasePipeline
 from src.utils.signal_processing import (
     calculate_band_power,
     compute_band_envelope,
@@ -174,7 +175,7 @@ def compute_log_band_power(segment: mne.Epochs, bands: Dict[str, Tuple[float, fl
 # ---------------------------------------------------------------------------
 
 
-class CommandFollowingAnalysis:
+class CommandFollowingAnalysis(BasePipeline):
     """
     Analyzes Command Following trials to detect ERD in motor cortex.
 
@@ -189,13 +190,10 @@ class CommandFollowingAnalysis:
         roi_channels: Optional[List[str]] = None,
         loader: Optional[UnifiedDataLoader] = None,
     ):
+        super().__init__(loader=loader)
         self.bands = bands or DEFAULT_BANDS.copy()
         self.command_types = command_types or ["left_command", "right_command"]
         self.roi_channels = roi_channels or ROI_CHANNELS.copy()
-        self.loader = loader or UnifiedDataLoader()
-
-        self.patient_id: Optional[str] = None
-        self.aligned_events: Optional[pd.DataFrame] = None
         self.pairs: List[CommandPair] = []
         self.erd_results: Optional[pd.DataFrame] = None
 
@@ -205,30 +203,24 @@ class CommandFollowingAnalysis:
         self,
         patient_id: str,
         alpha: float = 0.05,
-        summary: bool = False,
-        erd_threshold_dB: float = -1.0,
-        d_threshold: float = 0.5,
-    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, Dict[str, Any]]]:
-        """Run the full analysis pipeline for a patient.
-
-        Returns erd_df by default. If summary=True, returns (erd_df, summary_dict).
-        """
+    ) -> pd.DataFrame:
+        """Run the full analysis pipeline for a patient."""
         self.patient_id = patient_id
         self.aligned_events = self.loader.load_aligned_events(patient_id)
         self.pairs = []
         self.erd_results = None
 
-        self.load_epochs()
+        self.load()
         self.preprocess()
-        erd_df = self.calculate_erd(bands=self.bands, alpha=alpha)
+        return self.calculate_erd(bands=self.bands, alpha=alpha)
 
-        if summary:
-            return erd_df, self.generate_summary(erd_threshold_dB=erd_threshold_dB, d_threshold=d_threshold)
-        return erd_df
+    def analyze(self, alpha: float = 0.05, **kwargs) -> Any:
+        """Delegate to domain-specific calculate_erd()."""
+        return self.calculate_erd(bands=self.bands, alpha=alpha)
 
     # ==================== Data Loading ====================
 
-    def load_epochs(self) -> None:
+    def load(self) -> None:
         """
         Load clean epochs (from ENG-03 artifact rejection) and extract
         paired keep-stop command segments.
@@ -397,7 +389,7 @@ class CommandFollowingAnalysis:
         Bandpass is still needed to isolate motor-relevant frequencies.
         """
         if len(self.pairs) == 0:
-            raise ValueError("No pairs loaded. Call load_epochs() first.")
+            raise ValueError("No pairs loaded. Call load() first.")
 
         l_freq, h_freq = 8.0, 30.0
         logger.info(f"Bandpass filtering {len(self.pairs)} pairs ({l_freq}-{h_freq}Hz)...")
@@ -420,7 +412,7 @@ class CommandFollowingAnalysis:
         Negative ERD_dB indicates desynchronization during motor imagery.
         """
         if len(self.pairs) == 0:
-            raise ValueError("No pairs loaded. Call load_epochs() first.")
+            raise ValueError("No pairs loaded. Call load() first.")
 
         bands = bands or DEFAULT_BANDS.copy()
         results = []
