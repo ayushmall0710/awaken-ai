@@ -33,6 +33,7 @@ def mock_loader():
             "start_time": [0.0, 10.0],
             "end_time": [5.0, 15.0],
             "duration": [5.0, 5.0],
+            "sentences": [["sent1"], ["sent2"]],
         }
     )
     patient.validate.return_value = {"has_trials": True, "edf_loadable": True}
@@ -51,6 +52,7 @@ def mock_loader():
             "patient_id": ["CON008", "CON008"],
             "date": ["2025-01-10", "2025-01-10"],
             "trial_type": ["left_command", "right_command"],
+            "sentences": [["sent1"], ["sent2"]],
         }
     )
     return loader
@@ -84,6 +86,14 @@ def test_list_sessions(MockLoader, mock_loader):
 
 @patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
 def test_list_trials(MockLoader, mock_loader):
+    mock_loader.trials_df = pd.DataFrame(
+        {
+            "patient_id": ["CON008", "CON008"],
+            "date": ["2025-01-10", "2025-01-11"],
+            "trial_type": ["left_command", "language"],
+            "sentences": [["sent1"], ["sent2"]],
+        }
+    )
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["list", "trials", "CON008"])
     assert result.exit_code == 0
@@ -92,6 +102,14 @@ def test_list_trials(MockLoader, mock_loader):
 
 @patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
 def test_list_trials_filtered_by_type(MockLoader, mock_loader):
+    mock_loader.trials_df = pd.DataFrame(
+        {
+            "patient_id": ["CON008", "CON008"],
+            "date": ["2025-01-10", "2025-01-11"],
+            "trial_type": ["left_command", "language"],
+            "sentences": [["sent1"], ["sent2"]],
+        }
+    )
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["list", "trials", "CON008", "--type", "left_command"])
     assert result.exit_code == 0
@@ -199,8 +217,9 @@ def test_run_multiple_pipelines_auto_detected(mock_lang_run, mock_cf_run, mock_c
     mock_loader.trials_df = pd.DataFrame(
         {
             "patient_id": ["CON008", "CON008"],
-            "date": ["2025-01-10", "2025-01-10"],
+            "date": ["2025-01-10", "2025-01-11"],
             "trial_type": ["left_command", "language"],
+            "sentences": [["sent1", "sent2"], ["sent3"]],
         }
     )
     MockLoader.return_value = mock_loader
@@ -243,6 +262,7 @@ def test_run_all_patients(mock_cf_run, mock_config, MockLoader, mock_loader):
             "patient_id": ["CON008", "CON009"],
             "date": ["2025-01-10", "2025-01-10"],
             "trial_type": ["left_command", "left_command"],
+            "sentences": [["sent1"], ["sent2"]],
         }
     )
     MockLoader.return_value = mock_loader

@@ -16,6 +16,8 @@ dependencies = [
     "pyarrow>=14.0",
     "librosa>=0.10",
     "statsmodels>=0.14",
+    "typer>=0.12",
+    "rich>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -33,13 +35,9 @@ test = [
 lint = [
     "ruff>=0.1.0"
 ]
-# CLI dependencies
-cli = [
-    "typer>=0.12"
-]
 # All dependencies for complete local development
 all = [
-    "awaken-ai[dev,test,lint,cli]"
+    "awaken-ai[dev,test,lint]"
 ]
 
 [project.scripts]
