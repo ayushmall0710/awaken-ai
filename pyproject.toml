@@ -31,16 +31,27 @@ test = [
 ]
 # Linting and formatting
 lint = [
-    "ruff>=0.1.0",
+    "ruff>=0.1.0"
+]
+# CLI dependencies
+cli = [
+    "typer>=0.12"
 ]
 # All dependencies for complete local development
 all = [
-    "awaken-ai[dev,test,lint]",
+    "awaken-ai[dev,test,lint,cli]"
 ]
 
+[project.scripts]
+awakenai = "src.cli.main:app"
+
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 [tool.ruff]
 line-length = 120

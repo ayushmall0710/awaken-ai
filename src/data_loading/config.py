@@ -48,6 +48,9 @@ COMMAND_AUDIO_FILE = "motorcommandprompt.wav"
 # Unified Parquet File Path
 UNIFIED_PARQUET_PATH = EEG_DATA_DIR / "unified_stimulus_results.parquet"
 
+# Patient clinical records JSON
+PATIENT_RECORDS_PATH = EEG_DATA_DIR / "patient_records.json"
+
 # --- Sensor Configurations ---
 
 # Standard 10-20 system electrodes generally available across datasets
