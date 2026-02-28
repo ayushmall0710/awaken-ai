@@ -23,6 +23,26 @@ dependencies = [
 [project.scripts]
 awakenai = "src.cli.main:app"
 
+[project.optional-dependencies]
+# Development dependencies (includes heavy packages like Whisper)
+dev = [
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+    "openai-whisper>=20231117",
+]
+# Testing dependencies
+test = [
+    "pytest>=7.4",
+]
+# Linting and formatting
+lint = [
+    "ruff>=0.1.0"
+]
+# All dependencies for complete local development
+all = [
+    "awaken-ai[dev,test,lint]"
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
