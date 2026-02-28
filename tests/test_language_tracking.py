@@ -100,16 +100,19 @@ def test_initialization(mock_loader):
     assert "F7" in processor.LH_FOCUS_CHANNELS
 
 
-def test_process_patient_success(mock_loader):
-    """Test process_patient loads clean epochs and returns them."""
+def test_load_and_preprocess_success(mock_loader):
+    """Test load and preprocess work correctly with clean epochs."""
     processor = LanguageTrackingAnalysis(loader=mock_loader)
+    processor.patient_id = "TEST"
+    processor.focus = "LH"
 
-    epochs = processor.process_patient("TEST", focus="LH")
+    processor.load()
+    processor.preprocess()
 
-    assert epochs is not None
+    assert processor.epochs is not None
     # mne.EpochsArray does not inherit from mne.Epochs, but both share BaseEpochs (which is not always easy to import)
     # So we just check if it looks like epochs
-    assert len(epochs) == 3
+    assert len(processor.epochs) == 3
     mock_loader.load_clean_epochs.assert_called_with("TEST", "2024-01-01", trial_type="language")
 
 
@@ -256,14 +259,12 @@ def test_select_optimal_channels_clinical(mock_language_epochs):
     assert set(processed.ch_names).issubset(set(mock_language_epochs.ch_names))
 
 
-# --- process_patient edge cases ---
-
-
-def test_process_patient_no_data():
-    """process_patient returns None when all sessions raise FileNotFoundError."""
+def test_load_no_data():
+    """load raises ValueError when all sessions raise FileNotFoundError."""
     processor = LanguageTrackingAnalysis(MagicMock())
+    processor.patient_id = "TEST"
     processor.loader.get_patient_sessions.return_value = ["2024-01-01", "2024-01-02"]
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
-    result = processor.process_patient("TEST")
-    assert result is None
+    with pytest.raises(ValueError, match="No clean epochs found for TEST"):
+        processor.load()
