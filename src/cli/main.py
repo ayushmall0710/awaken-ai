@@ -19,7 +19,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from src.cli.cli_utils import resolve_patients
+from src.cli.cli_utils import get_loader, resolve_patients
 from src.cli.commands.inspect_cmd import count_app, info_app, list_app
 from src.cli.commands.setup_cmd import setup_app
 from src.cli.logging_config import setup_logging
@@ -148,6 +148,17 @@ def main(
     setup_logging(verbose)
 
 
+@app.command("unify-data")
+def unify_data_cmd(
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
+) -> None:
+    """Compile and deduplicate all patient CSVs into the global unified Parquet dataset."""
+    from src.cli.commands.setup_cmd import _run_unify_data
+
+    _run_unify_data(verbose)
+    typer.echo("\nData unification complete.\n")
+
+
 @app.command("run")
 def run_cmd(
     patients: Annotated[
@@ -180,7 +191,7 @@ def run_cmd(
     from src.cli.runners import language as lang_runner
     from src.cli.runners import oddball as ob_runner
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
     _guard_setup(patient_ids, session, loader)
 

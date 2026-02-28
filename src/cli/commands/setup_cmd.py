@@ -30,6 +30,14 @@ def _run_update_patient_records(verbose: bool) -> bool:
     return True
 
 
+def _run_unify_data(verbose: bool) -> bool:
+    from src.data_loading import config
+    from src.data_processing.pipeline import unify_stimulus_data
+
+    unify_stimulus_data(config.EEG_DATA_DIR, config.UNIFIED_PARQUET_PATH, verbose=verbose)
+    return True
+
+
 def _run_timestamp_alignment(patient_id: str, verbose: bool) -> bool:
     from src.data_processing.timestamp_aligner import TimestampAligner
 
@@ -149,9 +157,9 @@ def setup_cmd(
     if ctx.invoked_subcommand is not None:
         return
 
-    from src.cli.cli_utils import resolve_patients
+    from src.cli.cli_utils import get_loader, resolve_patients
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
 
     if all_patients and len(patient_ids) > 1 and not force:
@@ -181,9 +189,9 @@ def setup_and_run_cmd(
 
     Runs setup steps first (with Y/n per step unless --force), then dispatches pipelines.
     """
-    from src.cli.cli_utils import resolve_patients
+    from src.cli.cli_utils import get_loader, resolve_patients
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
 
     if all_patients and len(patient_ids) > 1 and not force:

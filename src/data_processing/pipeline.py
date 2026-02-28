@@ -98,7 +98,7 @@ def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     return df.reindex(columns=base_cols)
 
 
-def unify_stimulus_data(data_dir: Path, output_file: Path):
+def unify_stimulus_data(data_dir: Path, output_file: Path, verbose: bool = False):
     """
     Reads all stimulus CSVs from data_dir, normalizes them, and saves to output_file (Parquet).
     Generates session_id and trial_id after deduplication.
@@ -108,7 +108,8 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
     all_files = stimulus_files + patient_dfs
 
     dfs = []
-    print(f"Found {len(all_files)} files to unify from {data_dir}")
+    if verbose:
+        print(f"Found {len(all_files)} files to unify from {data_dir}")
 
     for f in all_files:
         try:
@@ -119,14 +120,17 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
             df = pd.read_csv(f)
             processed_df = process_stimulus_df(df, source_name=f.name)
             dfs.append(processed_df)
-            print(f"Processed {f.name}: {len(df)} rows")
+            if verbose:
+                print(f"Processed {f.name}: {len(df)} rows")
 
         except Exception as e:
-            print(f"Skipping {f.name} due to error: {e}")
+            if verbose:
+                print(f"Skipping {f.name} due to error: {e}")
 
     if dfs:
         unified_df = pd.concat(dfs, ignore_index=True)
-        print(f"\nTotal Unified Rows: {len(unified_df)}")
+        if verbose:
+            print(f"\nTotal Unified Rows: {len(unified_df)}")
 
         # Deduplicate based on full row (excluding source_file, convert sentences to string for comparison)
         initial_count = len(unified_df)
@@ -145,7 +149,8 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
         )
         unified_df = unified_df.drop(columns=["_sentences_str"])
         duplicates_removed = initial_count - len(unified_df)
-        print(f"Removed {duplicates_removed} duplicate rows")
+        if verbose:
+            print(f"Removed {duplicates_removed} duplicate rows")
 
         # Generate IDs (post-dedup)
         unified_df["session_id"] = generate_session_ids(unified_df)
@@ -154,12 +159,15 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
         # Reorder to standard column order
         unified_df = unified_df.reindex(columns=REQUIRED_COLS)
 
-        print(f"Final Row Count: {len(unified_df)}")
+        if verbose:
+            print(f"Final Row Count: {len(unified_df)}")
 
         # Save to Parquet
         unified_df.to_parquet(output_file, engine="pyarrow")
-        print(f"Successfully saved to {output_file}")
+        if verbose:
+            print(f"Successfully saved to {output_file}")
         return unified_df
     else:
-        print("No data found to unify.")
+        if verbose:
+            print("No data found to unify.")
         return None

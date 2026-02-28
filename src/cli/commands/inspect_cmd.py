@@ -10,8 +10,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from src.cli.cli_utils import print_table
-from src.data_loading import UnifiedDataLoader
+from src.cli.cli_utils import get_loader, print_table
 
 list_app = typer.Typer(help="List patients, sessions, or trials.")
 info_app = typer.Typer(help="Show detailed info about a patient or session.")
@@ -22,17 +21,13 @@ _TRIAL_DETAILED_COLS = ["trial_id", "date", "trial_type", "start_time", "end_tim
 _SESSION_DISPLAY_COLS = ["trial_type", "start_time", "end_time", "duration"]
 
 
-def _get_loader() -> UnifiedDataLoader:
-    return UnifiedDataLoader()
-
-
 # ─── list commands ─────────────────────────────────────────────────────────────
 
 
 @list_app.command("patients")
 def list_patients() -> None:
     """List all available patient IDs."""
-    ids = _get_loader().get_patient_ids()
+    ids = get_loader().get_patient_ids()
     typer.echo(f"{len(ids)} patient(s)\n")
     for pid in ids:
         typer.echo(pid)
@@ -43,7 +38,7 @@ def list_sessions(
     patient_id: Annotated[str, typer.Argument(help="Patient ID (e.g. CON008)")],
 ) -> None:
     """List recording sessions (IDs) for a patient."""
-    sessions = _get_loader().get_patient(patient_id).list_session_ids()
+    sessions = get_loader().get_patient(patient_id).list_session_ids()
     typer.echo(f"{len(sessions)} session(s)\n")
     for s in sessions:
         typer.echo(s)
@@ -59,7 +54,7 @@ def list_trials(
     ] = False,
 ) -> None:
     """List trials for a patient, optionally filtered by session or type."""
-    patient = _get_loader().get_patient(patient_id, session=session, trial_type=trial_type)
+    patient = get_loader().get_patient(patient_id, session=session, trial_type=trial_type)
     if patient.trials_df.empty:
         typer.echo("No trials found for the given filters.")
         raise typer.Exit(0)
@@ -81,7 +76,7 @@ def count_trials(
     session: Annotated[Optional[str], typer.Option("--session", "-s", help="Filter by session date")] = None,
 ) -> None:
     """Show trial counts grouped by type for a patient."""
-    patient = _get_loader().get_patient(patient_id, session=session)
+    patient = get_loader().get_patient(patient_id, session=session)
     counts = patient.trials_df["trial_type"].value_counts()
 
     typer.echo(f"\nTrials — {patient_id}" + (f" / {session}" if session else ""))
@@ -99,7 +94,7 @@ def info_patient(
     patient_id: Annotated[str, typer.Argument(help="Patient ID (e.g. CON008)")],
 ) -> None:
     """Show patient summary: sessions, trial counts by type, and clinical metadata."""
-    data = _get_loader().get_patient(patient_id).info()
+    data = get_loader().get_patient(patient_id).info()
 
     sessions = data["sessions"]
     last_5 = ", ".join(sessions[-5:])
@@ -133,7 +128,7 @@ def info_session(
     session_id: Annotated[str, typer.Argument(help="Session ID (e.g. s_CON008_202501101430)")],
 ) -> None:
     """Show trial types and counts for a specific session."""
-    patient = _get_loader().get_patient(patient_id, session=session_id)
+    patient = get_loader().get_patient(patient_id, session=session_id)
     if patient.trials_df.empty:
         typer.echo(f"No trials found for {patient_id} on {session_id}.")
         raise typer.Exit(1)
@@ -152,7 +147,7 @@ def info_trial(
     trial_id: Annotated[str, typer.Argument(help="Trial ID (e.g. 'lt1', 'obt2', 'lct3', 'rct4')")],
 ) -> None:
     """Show details for a specific trial: type, timing, and sentences."""
-    trial = _get_loader().get_patient(patient_id).get_trial_by_id(trial_id)
+    trial = get_loader().get_patient(patient_id).get_trial_by_id(trial_id)
 
     typer.echo(f"\nTrial {trial_id} — {patient_id}")
     typer.echo(f"  Type:       {trial.get('trial_type', 'N/A')}")
