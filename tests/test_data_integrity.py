@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from data_processing.pipeline import process_stimulus_df
+from src.data_processing.pipeline import process_stimulus_df
 
 
 class TestDataIntegrity:

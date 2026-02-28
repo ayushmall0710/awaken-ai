@@ -1,6 +1,6 @@
 import pandas as pd
 
-from data_processing.pipeline import REQUIRED_COLS, process_stimulus_df
+from src.data_processing.pipeline import REQUIRED_COLS, process_stimulus_df
 
 
 class TestProcessStimulusDf:
