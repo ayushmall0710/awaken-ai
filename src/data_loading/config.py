@@ -37,6 +37,9 @@ ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
 QC_DIR = PROCESSED_DATA_DIR / "qc"
 
+# ENG-06 outputs
+REPORTS_DIR = PROCESSED_DATA_DIR / "reports"
+
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
 SENTENCES_DIR = AUDIO_DIR / "sentences"
