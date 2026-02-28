@@ -163,17 +163,17 @@ class UnifiedDataLoader:
 
         return patient_trials.copy()
 
-    def get_patient(self, patient_id: str) -> PatientData:
-        """Get PatientData view for single-patient workflows."""
-        patient_trials = self.get_patient_trials(patient_id)
+    def get_patient(
+        self, patient_id: str, session: Optional[str] = None, trial_type: Optional[str] = None
+    ) -> PatientData:
+        """Get PatientData view for single-patient workflows.
 
-        return PatientData(
-            patient_id=patient_id,
-            trials_df=patient_trials,
-            edf_loader_func=self.load_edf,
-            data_root=self.data_root,
-            find_edf_fn=self._find_edf,
-        )
+        Args:
+            patient_id: Patient identifier (e.g. 'CON008')
+            session: Optional session date filter (e.g. '2025-01-10')
+            trial_type: Optional trial type filter (e.g. 'left_command')
+        """
+        return PatientData(patient_id=patient_id, loader=self, session=session, trial_type=trial_type)
 
     # ==================== EDF Management ====================
 

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from data_processing.normalization import normalize_sentences, normalize_trial_type
+from src.data_processing.normalization import normalize_sentences, normalize_trial_type
 
 
 class TestNormalizeTrialType:

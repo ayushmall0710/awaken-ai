@@ -1,0 +1,1 @@
+"""awakenai CLI package."""
