@@ -55,6 +55,7 @@ include = ["src*"]
 line-length = 120
 indent-width = 4
 target-version = "py310"
+exclude = ["eda", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
