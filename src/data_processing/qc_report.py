@@ -80,11 +80,23 @@ class QCDataCollector:
 def _empty_qc_dataframe() -> pd.DataFrame:
     """Return an empty DataFrame with the standard ENG-03 QC columns."""
     cols = [
-        "patient_id", "date", "trial_type", "window_sec",
-        "reject_ptp_percentile", "reject_ptp_threshold_uv",
-        "n_epochs_total", "n_epochs_dropped", "n_epochs_kept",
-        "drop_reason", "ica", "notes",
-        "ptp_uv_p50", "ptp_uv_p95", "ptp_uv_p99", "ptp_uv_max", "ptp_uv_mean",
+        "patient_id",
+        "date",
+        "trial_type",
+        "window_sec",
+        "reject_ptp_percentile",
+        "reject_ptp_threshold_uv",
+        "n_epochs_total",
+        "n_epochs_dropped",
+        "n_epochs_kept",
+        "drop_reason",
+        "ica",
+        "notes",
+        "ptp_uv_p50",
+        "ptp_uv_p95",
+        "ptp_uv_p99",
+        "ptp_uv_max",
+        "ptp_uv_mean",
     ]
     return pd.DataFrame(columns=cols)
 
@@ -208,12 +220,7 @@ class QCMetricsCalculator:
             df["primary_drop_reason"] = "none"
             return df
         df["primary_drop_reason"] = (
-            df["drop_reason"]
-            .fillna("none")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-            .replace("", "none")
+            df["drop_reason"].fillna("none").astype(str).str.strip().str.lower().replace("", "none")
         )
         return df
 
@@ -309,8 +316,13 @@ def _count_iclabel_artifact_types(
 
     has_per_type = any(
         len(d.get(k, [])) > 0
-        for k in ("eog_components", "ecg_components", "muscle_components",
-                   "line_noise_components", "channel_noise_components")
+        for k in (
+            "eog_components",
+            "ecg_components",
+            "muscle_components",
+            "line_noise_components",
+            "channel_noise_components",
+        )
     )
 
     if labels and not has_per_type:
@@ -430,8 +442,8 @@ class QCReportGenerator:
         return (
             f'<div class="filter-banner">'
             f'<span class="filter-icon">&#x1F50D;</span> '
-            f'<strong>Filtered Report</strong>&ensp;&mdash;&ensp;{detail}'
-            f'</div>'
+            f"<strong>Filtered Report</strong>&ensp;&mdash;&ensp;{detail}"
+            f"</div>"
         )
 
     def _render_summary_table(self) -> str:
@@ -441,9 +453,7 @@ class QCReportGenerator:
 
         n_patients = self.df["patient_id"].nunique() if "patient_id" in self.df.columns else 0
         n_sessions = (
-            len(self.df.groupby(["patient_id", "date"]))
-            if {"patient_id", "date"}.issubset(self.df.columns)
-            else 0
+            len(self.df.groupby(["patient_id", "date"])) if {"patient_id", "date"}.issubset(self.df.columns) else 0
         )
         total_epochs = int(pd.to_numeric(self.df.get("n_epochs_total", 0), errors="coerce").sum())
         total_dropped = int(pd.to_numeric(self.df.get("n_epochs_dropped", 0), errors="coerce").sum())
@@ -453,9 +463,7 @@ class QCReportGenerator:
         n_usable = int(self.df["is_usable"].sum()) if "is_usable" in self.df.columns else "N/A"
         # Total estimated recording time
         total_rec = (
-            self.df["estimated_recording_min"].sum()
-            if "estimated_recording_min" in self.df.columns
-            else float("nan")
+            self.df["estimated_recording_min"].sum() if "estimated_recording_min" in self.df.columns else float("nan")
         )
 
         rows = [
@@ -489,9 +497,11 @@ class QCReportGenerator:
         """Build per-trial-type metrics table for one patient."""
         cols = [
             "trial_type",
-            "n_epochs_total", "n_epochs_kept",
+            "n_epochs_total",
+            "n_epochs_kept",
             "retention_rate",
-            "ptp_uv_p50", "ptp_uv_p95",
+            "ptp_uv_p50",
+            "ptp_uv_p95",
             "snr_db",
             "estimated_recording_min",
             "is_usable",
@@ -506,21 +516,21 @@ class QCReportGenerator:
         table_html = _build_html_table([headers.get(c, c) for c in available], rows)
         footnote = (
             '<dl class="legend-box">'
-            '<dt>SNR&thinsp;(dB)</dt>'
-            '<dd>Relative signal quality&thinsp;=&thinsp;20&middot;log<sub>10</sub>'
-            '(median&thinsp;PTP&thinsp;/&thinsp;P95&thinsp;PTP). '
-            'Higher (less negative) = cleaner signal.<br>'
+            "<dt>SNR&thinsp;(dB)</dt>"
+            "<dd>Relative signal quality&thinsp;=&thinsp;20&middot;log<sub>10</sub>"
+            "(median&thinsp;PTP&thinsp;/&thinsp;P95&thinsp;PTP). "
+            "Higher (less negative) = cleaner signal.<br>"
             '<span class="legend-range legend-excellent">&gt;&minus;3&thinsp;dB &mdash; Excellent</span>'
             '&ensp;<span class="legend-range legend-good">&minus;3 to &minus;6&thinsp;dB &mdash; Good</span>'
             '&ensp;<span class="legend-range legend-ok">&minus;6 to &minus;10&thinsp;dB &mdash; Acceptable</span>'
             '&ensp;<span class="legend-range legend-bad">&lt;&minus;10&thinsp;dB &mdash; Noisy (review)</span>'
-            '</dd>'
-            '<dt>&#x2705; Usable</dt>'
-            '<dd>Session retained &ge;50&thinsp;% of epochs <em>and</em> kept &ge;1 epoch.</dd>'
-            '<dt>&#x274c; Not Usable</dt>'
-            '<dd>&gt;50&thinsp;% epochs dropped <em>or</em> zero epochs kept &mdash; '
-            'exclude from group-level analysis.</dd>'
-            '</dl>'
+            "</dd>"
+            "<dt>&#x2705; Usable</dt>"
+            "<dd>Session retained &ge;50&thinsp;% of epochs <em>and</em> kept &ge;1 epoch.</dd>"
+            "<dt>&#x274c; Not Usable</dt>"
+            "<dd>&gt;50&thinsp;% epochs dropped <em>or</em> zero epochs kept &mdash; "
+            "exclude from group-level analysis.</dd>"
+            "</dl>"
         )
         return table_html + footnote
 
@@ -537,8 +547,14 @@ class QCReportGenerator:
             return ""
 
         # Deduplicate by session date — ICA is session-level, not trial-level
-        ica_cols = ["date", "ica_classification_method",
-                    "ica_n_components_excluded", "ica_n_eog", "ica_n_ecg", "ica_n_muscle"]
+        ica_cols = [
+            "date",
+            "ica_classification_method",
+            "ica_n_components_excluded",
+            "ica_n_eog",
+            "ica_n_ecg",
+            "ica_n_muscle",
+        ]
         available_ica = [c for c in ica_cols if c in pdf.columns]
         deduped = pdf[available_ica].drop_duplicates(subset="date") if "date" in pdf.columns else pdf[available_ica]
 
@@ -560,7 +576,9 @@ class QCReportGenerator:
             "date": "Session Date",
             "ica_classification_method": "Method",
             "ica_n_components_excluded": "Excluded",
-            "ica_n_eog": "EOG", "ica_n_ecg": "ECG", "ica_n_muscle": "Muscle",
+            "ica_n_eog": "EOG",
+            "ica_n_ecg": "ECG",
+            "ica_n_muscle": "Muscle",
             "ica_n_other": "Others",
         }
         display_cols = [c for c in col_map if c in deduped.columns]
@@ -578,10 +596,16 @@ class QCReportGenerator:
             return "<p>No aggregated data available.</p>"
 
         cols = [
-            "trial_type", "n_sessions", "n_usable",
-            "n_epochs_total", "n_epochs_dropped", "n_epochs_kept",
-            "mean_drop_rate", "mean_retention_rate",
-            "mean_snr_db", "total_recording_min",
+            "trial_type",
+            "n_sessions",
+            "n_usable",
+            "n_epochs_total",
+            "n_epochs_dropped",
+            "n_epochs_kept",
+            "mean_drop_rate",
+            "mean_retention_rate",
+            "mean_snr_db",
+            "total_recording_min",
         ]
         available = [c for c in cols if c in summary.columns]
         headers_map = {
@@ -596,10 +620,7 @@ class QCReportGenerator:
             "mean_snr_db": "Avg SNR (dB)",
             "total_recording_min": "Est. Recording (min)",
         }
-        rows: list[list[str]] = [
-            [_format_cell(c, row.get(c)) for c in available]
-            for _, row in summary.iterrows()
-        ]
+        rows: list[list[str]] = [[_format_cell(c, row.get(c)) for c in available] for _, row in summary.iterrows()]
         return _build_html_table([headers_map.get(c, c) for c in available], rows)
 
     def _render_session_notes(self, pdf: pd.DataFrame) -> str:
@@ -733,7 +754,7 @@ def _safe_id(text: str) -> str:
 
 def _build_html_table(headers: list[str], rows: list[Any]) -> str:
     """Build a simple HTML <table> from headers and rows."""
-    parts = ['<table>\n<thead>\n<tr>']
+    parts = ["<table>\n<thead>\n<tr>"]
     for h in headers:
         parts.append(f"<th>{h}</th>")
     parts.append("</tr>\n</thead>\n<tbody>\n")

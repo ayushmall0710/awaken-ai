@@ -50,9 +50,7 @@ def qc_cmd(
             help="Patient ID to include (repeatable, e.g. -p CON008 -p CON009). Omit to use --all.",
         ),
     ] = None,
-    all_patients: Annotated[
-        bool, typer.Option("--all", "-a", help="Include all available patients")
-    ] = False,
+    all_patients: Annotated[bool, typer.Option("--all", "-a", help="Include all available patients")] = False,
     session: Annotated[
         Optional[str], typer.Option("--session", "-s", help="Restrict to a specific session date (YYYY-MM-DD)")
     ] = None,
@@ -105,7 +103,6 @@ def qc_cmd(
     )
 
     typer.echo(f"\nSuccess! Report written to: {report_path}")
-
 
 
 class Pipeline(str, Enum):

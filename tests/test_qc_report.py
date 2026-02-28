@@ -36,23 +36,25 @@ def _make_ica_json(
     channel_noise_components: list | None = None,
 ) -> str:
     """Build a valid ICA summary JSON string matching ENG-03's schema."""
-    return json.dumps({
-        "method": method,
-        "classification_method": classification_method,
-        "n_components": 15,
-        "n_components_selected": None,
-        "excluded": excluded or [1, 3],
-        "eog_channels_used": ["Fp1", "Fp2"],
-        "eog_components": eog_components or [1],
-        "ecg_channels_used": [],
-        "ecg_components": ecg_components or [],
-        "muscle_components": muscle_components or [3],
-        "line_noise_components": line_noise_components or [],
-        "channel_noise_components": channel_noise_components or [],
-        "iclabel_labels": ["brain", "eye", "brain", "muscle"],
-        "iclabel_probs": None,
-        "notes": [],
-    })
+    return json.dumps(
+        {
+            "method": method,
+            "classification_method": classification_method,
+            "n_components": 15,
+            "n_components_selected": None,
+            "excluded": excluded or [1, 3],
+            "eog_channels_used": ["Fp1", "Fp2"],
+            "eog_components": eog_components or [1],
+            "ecg_channels_used": [],
+            "ecg_components": ecg_components or [],
+            "muscle_components": muscle_components or [3],
+            "line_noise_components": line_noise_components or [],
+            "channel_noise_components": channel_noise_components or [],
+            "iclabel_labels": ["brain", "eye", "brain", "muscle"],
+            "iclabel_probs": None,
+            "notes": [],
+        }
+    )
 
 
 @pytest.fixture
@@ -64,65 +66,67 @@ def sample_ica_json():
 @pytest.fixture
 def sample_qc_df(sample_ica_json):
     """Synthetic QC DataFrame matching the ENG-03 output schema."""
-    return pd.DataFrame([
-        {
-            "patient_id": "CON008",
-            "date": "2025-08-14",
-            "trial_type": "language",
-            "window_sec": 16.0,
-            "reject_ptp_percentile": 95.0,
-            "reject_ptp_threshold_uv": 120.5,
-            "n_epochs_total": 72,
-            "n_epochs_dropped": 4,
-            "n_epochs_kept": 68,
-            "drop_reason": "ENG03_PTP_GT_P95",
-            "ica": sample_ica_json,
-            "notes": json.dumps(["all good"]),
-            "ptp_uv_p50": 45.0,
-            "ptp_uv_p95": 110.0,
-            "ptp_uv_p99": 150.0,
-            "ptp_uv_max": 200.0,
-            "ptp_uv_mean": 55.0,
-        },
-        {
-            "patient_id": "CON008",
-            "date": "2025-08-14",
-            "trial_type": "oddball",
-            "window_sec": 35.0,
-            "reject_ptp_percentile": 95.0,
-            "reject_ptp_threshold_uv": 95.3,
-            "n_epochs_total": 4,
-            "n_epochs_dropped": 0,
-            "n_epochs_kept": 4,
-            "drop_reason": None,
-            "ica": sample_ica_json,
-            "notes": json.dumps([]),
-            "ptp_uv_p50": 30.0,
-            "ptp_uv_p95": 80.0,
-            "ptp_uv_p99": 90.0,
-            "ptp_uv_max": 100.0,
-            "ptp_uv_mean": 35.0,
-        },
-        {
-            "patient_id": "CON009",
-            "date": "2025-08-26",
-            "trial_type": "language",
-            "window_sec": 16.0,
-            "reject_ptp_percentile": 95.0,
-            "reject_ptp_threshold_uv": 130.0,
-            "n_epochs_total": 72,
-            "n_epochs_dropped": 8,
-            "n_epochs_kept": 64,
-            "drop_reason": "ENG03_PTP_GT_P95",
-            "ica": _make_ica_json(classification_method="correlation", excluded=[0, 2, 4]),
-            "notes": json.dumps(["noisy session"]),
-            "ptp_uv_p50": 50.0,
-            "ptp_uv_p95": 120.0,
-            "ptp_uv_p99": 160.0,
-            "ptp_uv_max": 220.0,
-            "ptp_uv_mean": 60.0,
-        },
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "patient_id": "CON008",
+                "date": "2025-08-14",
+                "trial_type": "language",
+                "window_sec": 16.0,
+                "reject_ptp_percentile": 95.0,
+                "reject_ptp_threshold_uv": 120.5,
+                "n_epochs_total": 72,
+                "n_epochs_dropped": 4,
+                "n_epochs_kept": 68,
+                "drop_reason": "ENG03_PTP_GT_P95",
+                "ica": sample_ica_json,
+                "notes": json.dumps(["all good"]),
+                "ptp_uv_p50": 45.0,
+                "ptp_uv_p95": 110.0,
+                "ptp_uv_p99": 150.0,
+                "ptp_uv_max": 200.0,
+                "ptp_uv_mean": 55.0,
+            },
+            {
+                "patient_id": "CON008",
+                "date": "2025-08-14",
+                "trial_type": "oddball",
+                "window_sec": 35.0,
+                "reject_ptp_percentile": 95.0,
+                "reject_ptp_threshold_uv": 95.3,
+                "n_epochs_total": 4,
+                "n_epochs_dropped": 0,
+                "n_epochs_kept": 4,
+                "drop_reason": None,
+                "ica": sample_ica_json,
+                "notes": json.dumps([]),
+                "ptp_uv_p50": 30.0,
+                "ptp_uv_p95": 80.0,
+                "ptp_uv_p99": 90.0,
+                "ptp_uv_max": 100.0,
+                "ptp_uv_mean": 35.0,
+            },
+            {
+                "patient_id": "CON009",
+                "date": "2025-08-26",
+                "trial_type": "language",
+                "window_sec": 16.0,
+                "reject_ptp_percentile": 95.0,
+                "reject_ptp_threshold_uv": 130.0,
+                "n_epochs_total": 72,
+                "n_epochs_dropped": 8,
+                "n_epochs_kept": 64,
+                "drop_reason": "ENG03_PTP_GT_P95",
+                "ica": _make_ica_json(classification_method="correlation", excluded=[0, 2, 4]),
+                "notes": json.dumps(["noisy session"]),
+                "ptp_uv_p50": 50.0,
+                "ptp_uv_p95": 120.0,
+                "ptp_uv_p99": 160.0,
+                "ptp_uv_max": 220.0,
+                "ptp_uv_mean": 60.0,
+            },
+        ]
+    )
 
 
 @pytest.fixture
@@ -134,16 +138,12 @@ def temp_qc_dir(sample_qc_df):
         # CON008 session
         con008_dir = root / "CON008" / "2025-08-14"
         con008_dir.mkdir(parents=True)
-        sample_qc_df[sample_qc_df["patient_id"] == "CON008"].to_parquet(
-            con008_dir / "eng03_qc.parquet", index=False
-        )
+        sample_qc_df[sample_qc_df["patient_id"] == "CON008"].to_parquet(con008_dir / "eng03_qc.parquet", index=False)
 
         # CON009 session
         con009_dir = root / "CON009" / "2025-08-26"
         con009_dir.mkdir(parents=True)
-        sample_qc_df[sample_qc_df["patient_id"] == "CON009"].to_parquet(
-            con009_dir / "eng03_qc.parquet", index=False
-        )
+        sample_qc_df[sample_qc_df["patient_id"] == "CON009"].to_parquet(con009_dir / "eng03_qc.parquet", index=False)
 
         yield root
 
@@ -215,11 +215,19 @@ class TestQCMetricsCalculator:
         assert odd_row.iloc[0]["drop_rate"] == 0.0
 
     def test_compute_drop_rates_zero_epochs(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 0, "n_epochs_dropped": 0, "n_epochs_kept": 0,
-            "ica": "{}",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 0,
+                    "n_epochs_dropped": 0,
+                    "n_epochs_kept": 0,
+                    "ica": "{}",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.compute_drop_rates()
         assert np.isnan(result.iloc[0]["drop_rate"])
@@ -234,11 +242,19 @@ class TestQCMetricsCalculator:
         assert abs(lang_row.iloc[0]["snr_db"] - expected_snr) < 0.01
 
     def test_compute_snr_missing_ptp(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
-            "ica": "{}",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 10,
+                    "n_epochs_dropped": 1,
+                    "n_epochs_kept": 9,
+                    "ica": "{}",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.compute_snr_estimates()
         assert "snr_db" in result.columns
@@ -259,22 +275,38 @@ class TestQCMetricsCalculator:
         assert row["ica_n_muscle"] == 1
 
     def test_parse_ica_null_json(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
-            "ica": None,
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 10,
+                    "n_epochs_dropped": 1,
+                    "n_epochs_kept": 9,
+                    "ica": None,
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.parse_ica_summaries()
         assert result.iloc[0]["ica_method"] is None
         assert result.iloc[0]["ica_n_components_excluded"] == 0
 
     def test_parse_ica_invalid_json(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
-            "ica": "not valid json {{{",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 10,
+                    "n_epochs_dropped": 1,
+                    "n_epochs_kept": 9,
+                    "ica": "not valid json {{{",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.parse_ica_summaries()
         assert result.iloc[0]["ica_method"] is None
@@ -444,14 +476,20 @@ class TestHelpers:
             "line_noise_components": [],
             "channel_noise_components": [],
             "iclabel_labels": [
-                "line noise", "line noise", "eye blink", "eye blink",
-                "brain", "brain", "brain", "muscle artifact",
+                "line noise",
+                "line noise",
+                "eye blink",
+                "eye blink",
+                "brain",
+                "brain",
+                "brain",
+                "muscle artifact",
             ],
         }
         result = _parse_single_ica_json(d)
         assert result["ica_n_components_excluded"] == 5
-        assert result["ica_n_eog"] == 2       # indices 2, 3
-        assert result["ica_n_muscle"] == 1     # index 7
+        assert result["ica_n_eog"] == 2  # indices 2, 3
+        assert result["ica_n_muscle"] == 1  # index 7
         assert result["ica_n_line_noise"] == 2  # indices 0, 1
         assert result["ica_n_ecg"] == 0
         assert result["ica_n_channel_noise"] == 0
@@ -580,21 +618,25 @@ class TestIntegration:
 class TestLazyImports:
     def test_import_qc_report_generator(self):
         from src.data_processing import QCReportGenerator as QRG
+
         assert QRG is not None
         assert QRG.__name__ == "QCReportGenerator"
 
     def test_import_qc_data_collector(self):
         from src.data_processing import QCDataCollector as QDC
+
         assert QDC is not None
         assert QDC.__name__ == "QCDataCollector"
 
     def test_import_qc_metrics_calculator(self):
         from src.data_processing import QCMetricsCalculator as QMC
+
         assert QMC is not None
         assert QMC.__name__ == "QCMetricsCalculator"
 
     def test_import_generate_qc_report(self):
         from src.data_processing import generate_qc_report as gqr
+
         assert gqr is not None
         assert callable(gqr)
 
@@ -625,11 +667,19 @@ class TestComputeRetentionRate:
                 assert abs(row["drop_rate"] + row["retention_rate"] - 1.0) < 1e-6
 
     def test_retention_rate_zero_epochs(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 0, "n_epochs_dropped": 0, "n_epochs_kept": 0,
-            "ica": "{}",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 0,
+                    "n_epochs_dropped": 0,
+                    "n_epochs_kept": 0,
+                    "ica": "{}",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.compute_retention_rate()
         assert np.isnan(result.iloc[0]["retention_rate"])
@@ -651,11 +701,19 @@ class TestComputeDataCoverage:
         assert abs(lang["estimated_recording_min"] - 16.0 * 72 / 60) < 0.01
 
     def test_data_coverage_missing_window_sec(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
-            "ica": "{}",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 10,
+                    "n_epochs_dropped": 1,
+                    "n_epochs_kept": 9,
+                    "ica": "{}",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.compute_data_coverage()
         # No window_sec → should still add the column (filled with NaN)
@@ -688,12 +746,23 @@ class TestFlagUsableSessions:
         assert result["is_usable"].all()
 
     def test_usable_flag_unusable_below_threshold(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 100, "n_epochs_dropped": 80, "n_epochs_kept": 20,
-            "window_sec": 16.0, "ica": "{}",
-            "ptp_uv_p50": 20.0, "ptp_uv_p95": 90.0, "ptp_uv_mean": 30.0,
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 100,
+                    "n_epochs_dropped": 80,
+                    "n_epochs_kept": 20,
+                    "window_sec": 16.0,
+                    "ica": "{}",
+                    "ptp_uv_p50": 20.0,
+                    "ptp_uv_p95": 90.0,
+                    "ptp_uv_mean": 30.0,
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.compute_all_metrics()
         # 20% retention < 50% threshold → should be False
@@ -731,11 +800,19 @@ class TestParseDropReasons:
         assert odd["primary_drop_reason"] == "none"
 
     def test_parse_drop_reasons_missing_column(self):
-        df = pd.DataFrame([{
-            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
-            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
-            "ica": "{}",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "patient_id": "P1",
+                    "date": "2025-01-01",
+                    "trial_type": "language",
+                    "n_epochs_total": 10,
+                    "n_epochs_dropped": 1,
+                    "n_epochs_kept": 9,
+                    "ica": "{}",
+                }
+            ]
+        )
         calc = QCMetricsCalculator(df)
         result = calc.parse_drop_reasons()
         assert "primary_drop_reason" in result.columns
@@ -807,6 +884,7 @@ class TestNewMetricsInHTML:
 
     def test_aggregate_summary_includes_new_cols(self, sample_qc_df):
         from src.data_processing.qc_report import _aggregate_summary
+
         calc = QCMetricsCalculator(sample_qc_df)
         enriched = calc.compute_all_metrics()
         summary = _aggregate_summary(enriched, group_cols=["patient_id"])
@@ -866,14 +944,18 @@ class TestGenerateQCReportFilters:
     def test_patient_id_filter_keeps_only_matching(self, temp_qc_dir):
         with tempfile.TemporaryDirectory() as outdir:
             html = generate_qc_report(
-                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+                qc_dir=temp_qc_dir,
+                output_dir=Path(outdir),
+                patient_ids=["CON008"],
             ).read_text()
         assert "CON008" in html and "CON009" not in html
 
     def test_date_filter_keeps_only_matching(self, temp_qc_dir):
         with tempfile.TemporaryDirectory() as outdir:
             html = generate_qc_report(
-                qc_dir=temp_qc_dir, output_dir=Path(outdir), dates=["2025-08-14"],
+                qc_dir=temp_qc_dir,
+                output_dir=Path(outdir),
+                dates=["2025-08-14"],
             ).read_text()
         assert "2025-08-14" in html and "CON009" not in html
 
@@ -885,7 +967,9 @@ class TestGenerateQCReportFilters:
     def test_filter_banner_appears_in_filtered_report(self, temp_qc_dir):
         with tempfile.TemporaryDirectory() as outdir:
             html = generate_qc_report(
-                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+                qc_dir=temp_qc_dir,
+                output_dir=Path(outdir),
+                patient_ids=["CON008"],
             ).read_text()
         assert "Filtered Report" in html
 
@@ -897,7 +981,9 @@ class TestGenerateQCReportFilters:
     def test_csv_reflects_patient_filter(self, temp_qc_dir):
         with tempfile.TemporaryDirectory() as outdir:
             generate_qc_report(
-                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+                qc_dir=temp_qc_dir,
+                output_dir=Path(outdir),
+                patient_ids=["CON008"],
             )
             df = pd.read_csv(Path(outdir) / "qc_summary.csv")
         assert set(df["patient_id"].unique()) == {"CON008"}
