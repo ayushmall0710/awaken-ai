@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
-
-import typer
 
 
 def run(
-    patient_ids: Optional[list[str]],
-    session: Optional[str],
-    output_dir: Optional[Path],
+    patient_ids: list[str] | None,
+    session: str | None,
+    output_dir: Path | None,
 ) -> Path:
     """Generate an HTML QC report and return its path.
 

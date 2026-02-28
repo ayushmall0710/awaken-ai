@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class QCDataCollector:
     """Discover and load ENG-03 QC parquet files from the processed QC directory."""
 
-    def __init__(self, qc_dir: Optional[Path] = None) -> None:
+    def __init__(self, qc_dir: Path | None = None) -> None:
         self.qc_dir = Path(qc_dir) if qc_dir is not None else config.QC_DIR
 
     def discover_qc_files(self) -> list[Path]:
@@ -279,7 +279,7 @@ def _parse_single_ica_json(raw_json: Any) -> dict[str, Any]:
 
 
 # ICLabel label-string -> our short category key
-_ICLABEL_TO_CATEGORY: Dict[str, str] = {
+_ICLABEL_TO_CATEGORY: dict[str, str] = {
     "eye blink": "eog",
     "eye": "eog",
     "heart beat": "ecg",
@@ -440,7 +440,11 @@ class QCReportGenerator:
             return "<p>No QC data available.</p>"
 
         n_patients = self.df["patient_id"].nunique() if "patient_id" in self.df.columns else 0
-        n_sessions = len(self.df.groupby(["patient_id", "date"])) if {"patient_id", "date"}.issubset(self.df.columns) else 0
+        n_sessions = (
+            len(self.df.groupby(["patient_id", "date"]))
+            if {"patient_id", "date"}.issubset(self.df.columns)
+            else 0
+        )
         total_epochs = int(pd.to_numeric(self.df.get("n_epochs_total", 0), errors="coerce").sum())
         total_dropped = int(pd.to_numeric(self.df.get("n_epochs_dropped", 0), errors="coerce").sum())
         overall_drop_rate = (total_dropped / total_epochs * 100) if total_epochs > 0 else 0.0
@@ -448,7 +452,11 @@ class QCReportGenerator:
         # Count usable session rows
         n_usable = int(self.df["is_usable"].sum()) if "is_usable" in self.df.columns else "N/A"
         # Total estimated recording time
-        total_rec = self.df["estimated_recording_min"].sum() if "estimated_recording_min" in self.df.columns else float("nan")
+        total_rec = (
+            self.df["estimated_recording_min"].sum()
+            if "estimated_recording_min" in self.df.columns
+            else float("nan")
+        )
 
         rows = [
             ("Total Patients", str(n_patients)),
@@ -642,7 +650,11 @@ def generate_qc_report(
     active_filters: dict[str, list[str]] = {}
     if patient_ids:
         active_filters["patient_id"] = list(patient_ids)
-        mask = qc_df["patient_id"].isin(patient_ids) if "patient_id" in qc_df.columns else pd.Series(True, index=qc_df.index)
+        mask = (
+            qc_df["patient_id"].isin(patient_ids)
+            if "patient_id" in qc_df.columns
+            else pd.Series(True, index=qc_df.index)
+        )
         qc_df = qc_df[mask].copy()
         logger.info("Filter applied — patient_id in %s. Rows remaining: %d", patient_ids, len(qc_df))
     if dates:
@@ -719,7 +731,7 @@ def _safe_id(text: str) -> str:
     return text.replace(" ", "-").replace("/", "-").lower()
 
 
-def _build_html_table(headers: List[str], rows: List[Any]) -> str:
+def _build_html_table(headers: list[str], rows: list[Any]) -> str:
     """Build a simple HTML <table> from headers and rows."""
     parts = ['<table>\n<thead>\n<tr>']
     for h in headers:

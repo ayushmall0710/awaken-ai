@@ -44,7 +44,11 @@ app.add_typer(setup_app, name="setup")
 def qc_cmd(
     patients: Annotated[
         Optional[list[str]],
-        typer.Option("--patient", "-p", help="Patient ID to include (repeatable, e.g. -p CON008 -p CON009). Omit to use --all."),
+        typer.Option(
+            "--patient",
+            "-p",
+            help="Patient ID to include (repeatable, e.g. -p CON008 -p CON009). Omit to use --all.",
+        ),
     ] = None,
     all_patients: Annotated[
         bool, typer.Option("--all", "-a", help="Include all available patients")

@@ -22,7 +22,6 @@ from src.data_processing.qc_report import (
     generate_qc_report,
 )
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
