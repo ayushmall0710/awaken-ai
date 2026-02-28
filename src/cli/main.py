@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import types
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
@@ -37,6 +38,70 @@ app.add_typer(list_app, name="list")
 app.add_typer(info_app, name="info")
 app.add_typer(count_app, name="count")
 app.add_typer(setup_app, name="setup")
+
+
+@app.command("qc")
+def qc_cmd(
+    patients: Annotated[
+        Optional[list[str]],
+        typer.Option("--patient", "-p", help="Patient ID to include (repeatable, e.g. -p CON008 -p CON009). Omit to use --all."),
+    ] = None,
+    all_patients: Annotated[
+        bool, typer.Option("--all", "-a", help="Include all available patients")
+    ] = False,
+    session: Annotated[
+        Optional[str], typer.Option("--session", "-s", help="Restrict to a specific session date (YYYY-MM-DD)")
+    ] = None,
+    output_dir: Annotated[
+        Optional[str], typer.Option("--output", "-o", help="Directory to write qc_report.html and qc_summary.csv")
+    ] = None,
+) -> None:
+    """Generate an HTML Quality Control report.
+
+    Examples:\n
+      awakenai qc                              # All patients, all sessions\n
+      awakenai qc -p CON008                    # Single patient\n
+      awakenai qc -p CON008 -p CON009          # Multiple patients\n
+      awakenai qc -s 2025-08-14                # Specific session date\n
+      awakenai qc -p CON008 -s 2025-08-14     # Patient + session\n
+      awakenai qc -a                           # All patients (explicit)\n
+      awakenai qc -p CON008 -o /tmp/reports   # Custom output directory\n
+    """
+    from src.cli.runners import qc_report as qc_runner
+
+    # --all and explicit -p are mutually exclusive
+    if all_patients and patients:
+        typer.echo("Error: provide patient IDs via -p or use --all, not both.", err=True)
+        raise typer.Exit(1)
+
+    # Resolve patient list (None = all — generate_qc_report handles that internally)
+    patient_ids: Optional[list[str]] = None
+    if patients:
+        patient_ids = list(patients)
+    elif not all_patients:
+        # No flags given — default to all patients (same as --all)
+        patient_ids = None
+
+    out_path = None if output_dir is None else Path(output_dir)
+
+    # Print active filters so the user knows what's being generated
+    if patient_ids or session:
+        typer.echo("QC filters active:")
+        if patient_ids:
+            typer.echo(f"  Patients : {', '.join(sorted(patient_ids))}")
+        if session:
+            typer.echo(f"  Session  : {session}")
+    else:
+        typer.echo("Generating full QC report (all patients, all sessions)...")
+
+    report_path = qc_runner.run(
+        patient_ids=patient_ids,
+        session=session,
+        output_dir=out_path,
+    )
+
+    typer.echo(f"\nSuccess! Report written to: {report_path}")
+
 
 
 class Pipeline(str, Enum):

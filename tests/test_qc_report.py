@@ -363,7 +363,7 @@ class TestQCReportGenerator:
             gen = QCReportGenerator(df, output_dir=Path(tmpdir))
             path = gen.generate()
             html = path.read_text()
-            assert "ICA Component Summary" in html
+            assert "Artifact Rejection Summary" in html
             assert "iclabel" in html
 
     def test_save_summary_csv(self, sample_qc_df):
@@ -602,3 +602,303 @@ class TestLazyImports:
     def test_import_nonexistent_raises(self):
         with pytest.raises((AttributeError, ImportError)):
             from src.data_processing import NonExistentThing  # noqa: F401
+
+
+# ── New metric tests ─────────────────────────────────────────────────────────
+
+
+class TestComputeRetentionRate:
+    def test_retention_rate_basic(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_retention_rate()
+        assert "retention_rate" in result.columns
+        # CON008 language: 68/72
+        lang = result[(result["patient_id"] == "CON008") & (result["trial_type"] == "language")].iloc[0]
+        assert abs(lang["retention_rate"] - 68 / 72) < 1e-6
+
+    def test_retention_rate_plus_drop_rate_equals_one(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        dr = calc.compute_drop_rates()
+        calc2 = QCMetricsCalculator(dr)
+        rr = calc2.compute_retention_rate()
+        for _, row in rr.iterrows():
+            if not np.isnan(row["drop_rate"]) and not np.isnan(row["retention_rate"]):
+                assert abs(row["drop_rate"] + row["retention_rate"] - 1.0) < 1e-6
+
+    def test_retention_rate_zero_epochs(self):
+        df = pd.DataFrame([{
+            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
+            "n_epochs_total": 0, "n_epochs_dropped": 0, "n_epochs_kept": 0,
+            "ica": "{}",
+        }])
+        calc = QCMetricsCalculator(df)
+        result = calc.compute_retention_rate()
+        assert np.isnan(result.iloc[0]["retention_rate"])
+
+    def test_retention_rate_in_compute_all_metrics(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        assert "retention_rate" in result.columns
+        assert result["retention_rate"].notna().any()
+
+
+class TestComputeDataCoverage:
+    def test_data_coverage_basic(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_data_coverage()
+        assert "estimated_recording_min" in result.columns
+        # CON008 language: window_sec=16, n_epochs=72 → 16*72/60 = 19.2 min
+        lang = result[(result["patient_id"] == "CON008") & (result["trial_type"] == "language")].iloc[0]
+        assert abs(lang["estimated_recording_min"] - 16.0 * 72 / 60) < 0.01
+
+    def test_data_coverage_missing_window_sec(self):
+        df = pd.DataFrame([{
+            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
+            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
+            "ica": "{}",
+        }])
+        calc = QCMetricsCalculator(df)
+        result = calc.compute_data_coverage()
+        # No window_sec → should still add the column (filled with NaN)
+        assert "estimated_recording_min" in result.columns
+
+    def test_data_coverage_in_compute_all_metrics(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        assert "estimated_recording_min" in result.columns
+        assert result["estimated_recording_min"].notna().any()
+
+
+class TestFlagUsableSessions:
+    def test_usable_flag_basic(self, sample_qc_df):
+        """flag_usable_sessions requires retention_rate to already be computed."""
+        calc = QCMetricsCalculator(sample_qc_df)
+        # Without retention_rate → must raise
+        with pytest.raises(ValueError, match="retention_rate"):
+            calc.flag_usable_sessions()
+        # With retention_rate present → succeeds
+        df_with_retention = calc.compute_retention_rate()
+        calc2 = QCMetricsCalculator(df_with_retention)
+        result = calc2.flag_usable_sessions(min_retention=0.5, min_epochs_kept=1)
+        assert "is_usable" in result.columns
+
+    def test_usable_flag_all_usable_with_high_retention(self, sample_qc_df):
+        """All rows in sample data have ≥94% retention → all usable."""
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        assert result["is_usable"].all()
+
+    def test_usable_flag_unusable_below_threshold(self):
+        df = pd.DataFrame([{
+            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
+            "n_epochs_total": 100, "n_epochs_dropped": 80, "n_epochs_kept": 20,
+            "window_sec": 16.0, "ica": "{}",
+            "ptp_uv_p50": 20.0, "ptp_uv_p95": 90.0, "ptp_uv_mean": 30.0,
+        }])
+        calc = QCMetricsCalculator(df)
+        result = calc.compute_all_metrics()
+        # 20% retention < 50% threshold → should be False
+        assert not result.iloc[0]["is_usable"]
+
+    def test_usable_flag_custom_threshold(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        calc2 = QCMetricsCalculator(result)
+        # Require 100% retention → none should pass
+        result2 = calc2.flag_usable_sessions(min_retention=1.0, min_epochs_kept=1)
+        assert not result2["is_usable"].all()
+
+    def test_usable_flag_in_compute_all_metrics(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        assert "is_usable" in result.columns
+        assert result["is_usable"].dtype == bool
+
+
+class TestParseDropReasons:
+    def test_parse_drop_reasons_normalizes(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.parse_drop_reasons()
+        assert "primary_drop_reason" in result.columns
+        # Known value: "ENG03_PTP_GT_P95" → "eng03_ptp_gt_p95"
+        lang = result[(result["patient_id"] == "CON008") & (result["trial_type"] == "language")].iloc[0]
+        assert lang["primary_drop_reason"] == "eng03_ptp_gt_p95"
+
+    def test_parse_drop_reasons_null_becomes_none(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.parse_drop_reasons()
+        # CON008 oddball has null drop_reason
+        odd = result[(result["patient_id"] == "CON008") & (result["trial_type"] == "oddball")].iloc[0]
+        assert odd["primary_drop_reason"] == "none"
+
+    def test_parse_drop_reasons_missing_column(self):
+        df = pd.DataFrame([{
+            "patient_id": "P1", "date": "2025-01-01", "trial_type": "language",
+            "n_epochs_total": 10, "n_epochs_dropped": 1, "n_epochs_kept": 9,
+            "ica": "{}",
+        }])
+        calc = QCMetricsCalculator(df)
+        result = calc.parse_drop_reasons()
+        assert "primary_drop_reason" in result.columns
+        assert result.iloc[0]["primary_drop_reason"] == "none"
+
+    def test_parse_drop_reasons_in_compute_all_metrics(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        result = calc.compute_all_metrics()
+        assert "primary_drop_reason" in result.columns
+
+
+class TestNewMetricsInHTML:
+    def _enriched_df(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        return calc.compute_all_metrics()
+
+    def test_html_contains_retention_rate(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            path = gen.generate()
+            html = path.read_text()
+            assert "Retention Rate" in html
+
+    def test_html_contains_ptp_columns(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            path = gen.generate()
+            html = path.read_text()
+            assert "Median PTP" in html
+            assert "P95 PTP" in html
+
+    def test_html_contains_session_notes(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            path = gen.generate()
+            html = path.read_text()
+            assert "Session Notes" in html
+            assert "noisy session" in html
+
+    def test_html_contains_usable_flag(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            path = gen.generate()
+            html = path.read_text()
+            assert "Usable Sessions" in html
+
+    def test_html_contains_recording_time(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            path = gen.generate()
+            html = path.read_text()
+            assert "Est. Total Recording Time" in html
+
+    def test_csv_contains_new_columns(self, sample_qc_df):
+        df = self._enriched_df(sample_qc_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            csv_path = gen.save_summary_csv()
+            loaded = pd.read_csv(csv_path)
+            assert "retention_rate" in loaded.columns
+            assert "estimated_recording_min" in loaded.columns
+            assert "is_usable" in loaded.columns
+            assert "primary_drop_reason" in loaded.columns
+
+    def test_aggregate_summary_includes_new_cols(self, sample_qc_df):
+        from src.data_processing.qc_report import _aggregate_summary
+        calc = QCMetricsCalculator(sample_qc_df)
+        enriched = calc.compute_all_metrics()
+        summary = _aggregate_summary(enriched, group_cols=["patient_id"])
+        assert "mean_retention_rate" in summary.columns
+        assert "total_recording_min" in summary.columns
+        assert "n_usable" in summary.columns
+
+
+# ── Filter tests ──────────────────────────────────────────────────────────────
+
+
+class TestFilterBanner:
+    """Unit tests for QCReportGenerator._render_filter_banner."""
+
+    def _make_gen(self, filters):
+        df = pd.DataFrame([{"patient_id": "P1", "date": "2025-01-01", "trial_type": "lang"}])
+        return QCReportGenerator(df, active_filters=filters)
+
+    def test_no_filters_returns_empty(self):
+        assert self._make_gen({})._render_filter_banner() == ""
+
+    def test_none_active_filters_returns_empty(self):
+        assert self._make_gen(None)._render_filter_banner() == ""
+
+    def test_patient_id_filter_shown(self):
+        html = self._make_gen({"patient_id": ["CON008"]})._render_filter_banner()
+        assert "CON008" in html and "filter-banner" in html
+
+    def test_date_filter_shown(self):
+        html = self._make_gen({"date": ["2025-08-14"]})._render_filter_banner()
+        assert "2025-08-14" in html
+
+    def test_combined_filters_shown(self):
+        html = self._make_gen({"patient_id": ["CON008"], "date": ["2025-08-14"]})._render_filter_banner()
+        assert "CON008" in html and "2025-08-14" in html
+
+    def test_banner_absent_in_unfiltered_html(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        df = calc.compute_all_metrics()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir))
+            html = gen.generate().read_text()
+        assert "Filtered Report" not in html
+
+    def test_banner_present_in_filtered_html(self, sample_qc_df):
+        calc = QCMetricsCalculator(sample_qc_df)
+        df = calc.compute_all_metrics()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            gen = QCReportGenerator(df, output_dir=Path(tmpdir), active_filters={"patient_id": ["CON008"]})
+            html = gen.generate().read_text()
+        assert "Filtered Report" in html and "CON008" in html
+
+
+class TestGenerateQCReportFilters:
+    """Integration tests for patient_id and date filters in generate_qc_report."""
+
+    def test_patient_id_filter_keeps_only_matching(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            html = generate_qc_report(
+                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+            ).read_text()
+        assert "CON008" in html and "CON009" not in html
+
+    def test_date_filter_keeps_only_matching(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            html = generate_qc_report(
+                qc_dir=temp_qc_dir, output_dir=Path(outdir), dates=["2025-08-14"],
+            ).read_text()
+        assert "2025-08-14" in html and "CON009" not in html
+
+    def test_no_filters_includes_all(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            html = generate_qc_report(qc_dir=temp_qc_dir, output_dir=Path(outdir)).read_text()
+        assert "CON008" in html and "CON009" in html
+
+    def test_filter_banner_appears_in_filtered_report(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            html = generate_qc_report(
+                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+            ).read_text()
+        assert "Filtered Report" in html
+
+    def test_no_filter_banner_in_unfiltered_report(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            html = generate_qc_report(qc_dir=temp_qc_dir, output_dir=Path(outdir)).read_text()
+        assert "Filtered Report" not in html
+
+    def test_csv_reflects_patient_filter(self, temp_qc_dir):
+        with tempfile.TemporaryDirectory() as outdir:
+            generate_qc_report(
+                qc_dir=temp_qc_dir, output_dir=Path(outdir), patient_ids=["CON008"],
+            )
+            df = pd.read_csv(Path(outdir) / "qc_summary.csv")
+        assert set(df["patient_id"].unique()) == {"CON008"}
