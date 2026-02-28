@@ -9,10 +9,6 @@ import typer
 
 from src.data_loading import UnifiedDataLoader, config
 
-setup_app = typer.Typer(
-    help="Set up prerequisites for a patient, then optionally run analysis.", invoke_without_command=True
-)
-
 
 def _events_done(patient_id: str) -> bool:
     return (config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet").exists()
@@ -142,9 +138,7 @@ def _do_setup(patient_id: str, verbose: bool, force: bool, loader: UnifiedDataLo
         typer.echo(f"\nSetup complete for {patient_id}.")
 
 
-@setup_app.callback()
 def setup_cmd(
-    ctx: typer.Context,
     patients: Annotated[
         Optional[list[str]],
         typer.Argument(help="Patient IDs to set up (e.g. CON008 CON009). Omit if using --all."),
@@ -154,8 +148,6 @@ def setup_cmd(
     force: Annotated[bool, typer.Option("--force", "-f", help="Skip Y/n prompts and run all steps")] = False,
 ) -> None:
     """Set up prerequisites (patient records, alignment, artifact rejection) for one or more patients."""
-    if ctx.invoked_subcommand is not None:
-        return
 
     from src.cli.cli_utils import get_loader, resolve_patients
 
