@@ -1,5 +1,5 @@
 """
-ENG-03: Artifact Rejection (ICA)
+Artifact Rejection (ICA)
 
 This module applies session-level ICA-based artifact rejection and exports
 fixed-window epochs per trial_type as MNE .fif files, plus QC metadata as Parquet.
@@ -583,7 +583,7 @@ def _apply_and_summarize(
 
 
 class ArtifactRejector:
-    """ENG-03 driver: run ICA artifact rejection per session and export
+    """Preprocessing driver: run ICA artifact rejection per session and export
     fixed-window EEG-only epochs + QC metadata.
     """
 
@@ -610,7 +610,7 @@ class ArtifactRejector:
     # ── Public API ───────────────────────────────────────────────────────
 
     def run(self, patient_ids: List[str], save: bool = True) -> Dict[Tuple[str, str], Dict[str, Path]]:
-        """Run ENG-03 for a list of patients.
+        """Run artifact rejection for a list of patients.
 
         Returns:
             Mapping of ``(patient_id, session_id) -> {trial_type: epochs_fif_path}``.
@@ -629,7 +629,7 @@ class ArtifactRejector:
         save: bool = True,
         return_raw_clean: bool = False,
     ) -> Union[Dict[str, Path], Tuple[Dict[str, Path], mne.io.BaseRaw]]:
-        """Run ENG-03 for a single patient session.
+        """Run artifact rejection for a single patient session.
 
         Steps: load -> ICA -> epoch per trial_type -> auto-reject -> save.
 

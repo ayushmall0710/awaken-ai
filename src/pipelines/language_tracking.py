@@ -93,7 +93,7 @@ class LanguageTrackingAnalysis(BasePipeline):
                 continue
 
         if not all_epochs:
-            raise ValueError(f"No clean epochs found for {self.patient_id}. Run ENG-03 first.")
+            raise ValueError(f"No clean epochs found for {self.patient_id}. Run 'awakenai preprocess' first.")
 
         self.epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
 
