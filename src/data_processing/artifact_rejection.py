@@ -870,7 +870,7 @@ class ArtifactRejector:
                     "end_time_unix": valid_df["end_time"].values.astype(float) if "end_time" in valid_df else np.nan,
                     "duration_log_sec": valid_df["duration"].values.astype(float) if "duration" in valid_df else np.nan,
                     "source_file": valid_df["source_file"].values if "source_file" in valid_df else None,
-                    "session_id": valid_df["session_d"].values,
+                    "session_id": valid_df["session_id"].values,
                     "trial_id": valid_df["trial_id"].values,
                 }
             )
