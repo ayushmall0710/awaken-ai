@@ -266,5 +266,5 @@ def test_load_no_data():
     processor.loader.get_patient_sessions.return_value = ["2024-01-01", "2024-01-02"]
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
-    with pytest.raises(ValueError, match="No clean epochs found for TEST"):
+    with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
         processor.load()
