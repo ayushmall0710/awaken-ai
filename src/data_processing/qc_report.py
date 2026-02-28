@@ -455,8 +455,8 @@ class QCReportGenerator:
         n_sessions = (
             len(self.df.groupby(["patient_id", "date"])) if {"patient_id", "date"}.issubset(self.df.columns) else 0
         )
-        total_epochs = int(pd.to_numeric(self.df.get("n_epochs_total", 0), errors="coerce").sum())
-        total_dropped = int(pd.to_numeric(self.df.get("n_epochs_dropped", 0), errors="coerce").sum())
+        total_epochs = int(pd.to_numeric(self.df.get("n_epochs_total", pd.Series(dtype=int)), errors="coerce").sum())
+        total_dropped = int(pd.to_numeric(self.df.get("n_epochs_dropped", pd.Series(dtype=int)), errors="coerce").sum())
         overall_drop_rate = (total_dropped / total_epochs * 100) if total_epochs > 0 else 0.0
         mean_snr = self.df["snr_db"].mean() if "snr_db" in self.df.columns else float("nan")
         # Count usable session rows
