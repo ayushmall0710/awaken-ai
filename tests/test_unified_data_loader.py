@@ -31,6 +31,15 @@ def sample_unified_data():
             "2025-05-06",
             "2025-03-10",
         ],
+        "session_id": [
+            "s_CON001a_202501150000",
+            "s_CON001a_202501150000",
+            "s_CON005_202502140000",
+            "s_CON005_202502140000",
+            "s_CON005_202505060000",
+            "s_CON008_202503100000",
+        ],
+        "trial_id": ["lt1", "obt1", "lt2", "obt2", "lt3", "lt4"],
         "trial_type": [
             "language",
             "oddball",
@@ -107,15 +116,15 @@ class TestUnifiedDataLoader:
         patient_ids = loader.get_patient_ids()
         test_patient = patient_ids[0]
 
-        trials = loader.get_patient_trials(test_patient)
+        patient = loader.get_patient(test_patient)
+        trials = patient.trials_df
         assert len(trials) > 0
 
-        patient = loader.get_patient(test_patient)
         assert isinstance(patient, PatientData)
         assert patient.patient_id == test_patient
 
     def test_multi_session_support(self, loader):
-        sessions = loader.get_patient_sessions("CON005")
+        sessions = loader.get_patient("CON005").list_sessions()
         assert len(sessions) == 2
         assert "2025-02-14" in sessions
         assert "2025-05-06" in sessions
@@ -139,7 +148,7 @@ class TestUnifiedDataLoader:
 
     def test_error_handling_invalid_patient(self, loader):
         with pytest.raises(UnifiedDataLoadingError):
-            loader.get_patient_trials("INVALID_ID")
+            loader.load_edf("INVALID_ID")
 
     def test_load_edf_filepath_exclusivity(self, loader):
         with pytest.raises(ValueError):
@@ -174,7 +183,7 @@ class TestPatientData:
     def test_trial_access(self, loader):
         patient = loader.get_patient("CON001a")
         if len(patient.trials_df) > 0:
-            trial = patient.get_trial(0)
+            trial = patient.get_trial_by_id("lt1")
             assert trial is not None
             assert "trial_type" in trial.index
 

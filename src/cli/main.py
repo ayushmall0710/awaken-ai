@@ -125,7 +125,7 @@ def _check_setup(patient_id: str, session: Optional[str], loader: UnifiedDataLoa
     missing = []
     if not (config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet").exists():
         missing.append("timestamp alignment")
-    sessions = [session] if session else loader.get_patient_sessions(patient_id)
+    sessions = [session] if session else loader.get_patient(patient_id).list_sessions()
     if not any((config.EPOCHS_DIR / patient_id / date).exists() for date in sessions):
         missing.append("artifact rejection")
     return missing

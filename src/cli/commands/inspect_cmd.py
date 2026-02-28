@@ -42,8 +42,8 @@ def list_patients() -> None:
 def list_sessions(
     patient_id: Annotated[str, typer.Argument(help="Patient ID (e.g. CON008)")],
 ) -> None:
-    """List recording sessions (dates) for a patient."""
-    sessions = _get_loader().get_patient(patient_id).list_sessions()
+    """List recording sessions (IDs) for a patient."""
+    sessions = _get_loader().get_patient(patient_id).list_session_ids()
     typer.echo(f"{len(sessions)} session(s)\n")
     for s in sessions:
         typer.echo(s)
@@ -130,15 +130,15 @@ def info_patient(
 @info_app.command("session")
 def info_session(
     patient_id: Annotated[str, typer.Argument(help="Patient ID (e.g. CON008)")],
-    date: Annotated[str, typer.Argument(help="Session date (e.g. 2025-01-10)")],
+    session_id: Annotated[str, typer.Argument(help="Session ID (e.g. s_CON008_202501101430)")],
 ) -> None:
     """Show trial types and counts for a specific session."""
-    patient = _get_loader().get_patient(patient_id, session=date)
+    patient = _get_loader().get_patient(patient_id, session=session_id)
     if patient.trials_df.empty:
-        typer.echo(f"No trials found for {patient_id} on {date}.")
+        typer.echo(f"No trials found for {patient_id} on {session_id}.")
         raise typer.Exit(1)
 
-    typer.echo(f"\nSession: {patient_id} / {date}")
+    typer.echo(f"\nSession: {session_id}")
     typer.echo(f"  Trial types: {', '.join(patient.get_trial_types())}")
     typer.echo(f"  Total trials: {len(patient.trials_df)}\n")
 
@@ -149,12 +149,12 @@ def info_session(
 @info_app.command("trial")
 def info_trial(
     patient_id: Annotated[str, typer.Argument(help="Patient ID (e.g. CON008)")],
-    trial_idx: Annotated[int, typer.Argument(help="Trial index (0-based)")],
+    trial_id: Annotated[str, typer.Argument(help="Trial ID (e.g. 'lt1', 'obt2', 'lct3', 'rct4')")],
 ) -> None:
     """Show details for a specific trial: type, timing, and sentences."""
-    trial = _get_loader().get_patient(patient_id).get_trial(trial_idx)
+    trial = _get_loader().get_patient(patient_id).get_trial_by_id(trial_id)
 
-    typer.echo(f"\nTrial {trial_idx} — {patient_id}")
+    typer.echo(f"\nTrial {trial_id} — {patient_id}")
     typer.echo(f"  Type:       {trial.get('trial_type', 'N/A')}")
     typer.echo(f"  Date:       {trial.get('date', 'N/A')}")
     typer.echo(f"  Start:      {trial.get('start_time'):.3f}s" if trial.get("start_time") else "  Start:      N/A")

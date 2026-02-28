@@ -19,7 +19,7 @@ def _events_done(patient_id: str) -> bool:
 
 
 def _epochs_done(patient_id: str, loader: UnifiedDataLoader) -> bool:
-    sessions = loader.get_patient_sessions(patient_id)
+    sessions = loader.get_patient(patient_id).list_sessions()
     return any((config.EPOCHS_DIR / patient_id / date).exists() for date in sessions)
 
 

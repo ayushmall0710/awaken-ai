@@ -4,17 +4,56 @@ import pandas as pd
 
 from src.data_processing.normalization import normalize_sentences, normalize_trial_type
 
+# Trial type -> short prefix for trial_id generation
+TRIAL_TYPE_PREFIX = {
+    "language": "lt",
+    "oddball": "obt",
+    "left_command": "lct",
+    "right_command": "rct",
+    "beep": "bt",
+    "control": "ct",
+    "loved_one_voice": "lovt",
+}
+
 # Standard columns for unified stimulus data
 REQUIRED_COLS = [
     "patient_id",
+    "session_id",
     "date",
     "trial_type",
+    "trial_id",
     "sentences",
     "start_time",
     "end_time",
     "duration",
     "source_file",
 ]
+
+
+def generate_session_ids(df: pd.DataFrame) -> pd.Series:
+    """Generate session_id from patient_id + date.
+    Added HHMM to the date in case there are multiple sessions in a day.
+
+    Format: s_{patient_id}_{%Y%m%d%H%M}
+    Example: s_CON008_202501101430
+    """
+    date_str = pd.to_datetime(df["date"], errors="coerce").dt.strftime("%Y%m%d%H%M")
+    fallback = df["date"].astype(str).str.replace(r"[^\w]", "", regex=True)
+    date_str = date_str.fillna(fallback)
+
+    return "s_" + df["patient_id"] + "_" + date_str
+
+
+def generate_trial_ids(df: pd.DataFrame) -> pd.Series:
+    """Generate trial_id per (session_id, trial_type) sorted by start_time.
+
+    Format: {prefix}{sequential_index}  (e.g. lt1, obt2, lct3)
+    Falls back to 'unk' prefix for unmapped trial types.
+    """
+    df = df.sort_values("start_time")
+    prefixes = df["trial_type"].map(TRIAL_TYPE_PREFIX).fillna("unk")
+    seq = df.groupby(["session_id", "trial_type"]).cumcount() + 1
+    return prefixes + seq.astype(str)
 
 
 def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
@@ -54,13 +93,15 @@ def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
     # Add provenance
     df["source_file"] = source_name
 
-    # Reindex to standard columns
-    return df.reindex(columns=REQUIRED_COLS)
+    # Reindex to standard columns (session_id and trial_id added later in unify_stimulus_data)
+    base_cols = [c for c in REQUIRED_COLS if c not in ("session_id", "trial_id")]
+    return df.reindex(columns=base_cols)
 
 
 def unify_stimulus_data(data_dir: Path, output_file: Path):
     """
     Reads all stimulus CSVs from data_dir, normalizes them, and saves to output_file (Parquet).
+    Generates session_id and trial_id after deduplication.
     """
     stimulus_files = list(data_dir.glob("*stimulus_results.csv"))
     patient_dfs = list(data_dir.glob("patient_df*.csv"))
@@ -105,6 +146,14 @@ def unify_stimulus_data(data_dir: Path, output_file: Path):
         unified_df = unified_df.drop(columns=["_sentences_str"])
         duplicates_removed = initial_count - len(unified_df)
         print(f"Removed {duplicates_removed} duplicate rows")
+
+        # Generate IDs (post-dedup)
+        unified_df["session_id"] = generate_session_ids(unified_df)
+        unified_df["trial_id"] = generate_trial_ids(unified_df)
+
+        # Reorder to standard column order
+        unified_df = unified_df.reindex(columns=REQUIRED_COLS)
+
         print(f"Final Row Count: {len(unified_df)}")
 
         # Save to Parquet

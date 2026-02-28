@@ -18,14 +18,17 @@ runner = CliRunner()
 def mock_loader():
     loader = MagicMock()
     loader.get_patient_ids.return_value = ["CON008", "CON009"]
-    loader.get_patient_sessions.return_value = ["2025-01-10"]
-    loader.get_patient_summary.return_value = pd.DataFrame(
-        {"patient_id": ["CON008"], "trial_type": ["left_command"], "count": [10]}
-    )
 
     patient = MagicMock()
     patient.list_sessions.return_value = ["2025-01-10"]
+    patient.list_session_ids.return_value = ["s_CON008_20250110"]
     patient.get_trial_types.return_value = ["left_command", "right_command"]
+
+    loader.get_patient.return_value = patient
+
+    loader.get_patient_summary.return_value = pd.DataFrame(
+        {"patient_id": ["CON008"], "trial_type": ["left_command"], "count": [10]}
+    )
     patient.trials_df = pd.DataFrame(
         {
             "date": ["2025-01-10", "2025-01-10"],
@@ -78,7 +81,7 @@ def test_list_sessions(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["list", "sessions", "CON008"])
     assert result.exit_code == 0
-    assert "2025-01-10" in result.output
+    assert "s_CON008_20250110" in result.output
 
 
 # ─── list trials ─────────────────────────────────────────────────────────────
@@ -134,9 +137,9 @@ def test_info_patient(MockLoader, mock_loader):
 @patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
 def test_info_session(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
-    result = runner.invoke(app, ["info", "session", "CON008", "2025-01-10"])
+    result = runner.invoke(app, ["info", "session", "CON008", "s_CON008_20250110"])
     assert result.exit_code == 0
-    assert "2025-01-10" in result.output
+    assert "s_CON008_20250110" in result.output
 
 
 # ─── run auto-dispatch ────────────────────────────────────────────────────────
