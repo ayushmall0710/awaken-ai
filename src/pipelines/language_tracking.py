@@ -12,19 +12,21 @@ References:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Union
+from typing import Any, Iterable, Optional, Union
 
 import mne
 import numpy as np
+import pandas as pd
 
 from src.data_loading import config
-from src.data_loading.unified_data_loader import UnifiedDataLoader, UnifiedDataLoadingError
+from src.data_loading.unified_data_loader import UnifiedDataLoader
+from src.pipelines.base import BasePipeline
 from src.utils.signal_processing import normalize_channel_names
 
 logger = logging.getLogger(__name__)
 
 
-class LanguageTrackingAnalysis:
+class LanguageTrackingAnalysis(BasePipeline):
     """
     Pipeline for Language Tracking Paradigm data.
 
@@ -58,60 +60,86 @@ class LanguageTrackingAnalysis:
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
-    def __init__(self, loader: Optional[UnifiedDataLoader] = None):
+    def __init__(
+        self,
+        loader: Optional[UnifiedDataLoader] = None,
+        focus: Union[str, Iterable[str]] = "LH",
+        filter_signal: bool = True,
+    ):
         """
         Initialize the LanguageTrackingAnalysis.
 
         Args:
-            loader: Optional UnifiedDataLoader instance. If None, creates a new one.
-        """
-        self.loader = loader if loader else UnifiedDataLoader()
-
-    def run(self, patient_id: str, focus: Union[str, Iterable[str]] = "LH") -> Optional[Dict[str, Any]]:
-        """
-        Execute the full language tracking pipeline for a given patient.
-
-        Args:
-            patient_id: Patient ID (e.g., 'CON008').
+            loader: Optional UnifiedDataLoader instance.
             focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
-
-        Returns:
-            Dictionary of ITPC metrics or None if processing fails.
+            filter_signal: Whether to apply bandpass filtering.
         """
-        focus_name = focus if isinstance(focus, str) else "Custom"
-        logger.info(f"Running Language Tracking Pipeline for {patient_id} (Focus: {focus_name})")
+        super().__init__(loader=loader)
+        self.focus = focus
+        self.filter_signal = filter_signal
+        self.epochs: Optional[mne.Epochs] = None
 
-        # 1. Process Patient Data (Load, Select Channels, Filter)
-        epochs = self.process_patient(patient_id, focus=focus)
-        if epochs is None:
-            logger.warning(f"Pipeline aborted for {patient_id}: No valid epochs.")
-            return None
+    def load(self) -> None:
+        """Load and concatenate all language epochs for the patient."""
+        sessions = self.loader.get_patient_sessions(self.patient_id)
+        all_epochs = []
+
+        for date in sessions:
+            try:
+                epochs = self.loader.load_clean_epochs(self.patient_id, date, trial_type="language")
+                all_epochs.append(epochs)
+            except FileNotFoundError:
+                logger.warning(f"No clean language epochs found for {self.patient_id} on {date}. Skipping session.")
+                continue
+
+        if not all_epochs:
+            raise ValueError(f"No clean epochs found for {self.patient_id}. Run ENG-03 first.")
+
+        self.epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
+
+    def preprocess(self) -> None:
+        """Apply optimization steps: channel selection and bandpass filtering."""
+        if self.epochs is None:
+            raise ValueError("Epochs not loaded. Call load() first.")
+
+        self.epochs = self.select_optimal_channels(self.epochs, focus=self.focus)
+        if self.filter_signal:
+            self.epochs = self.preprocess_signal(self.epochs)
 
         try:
             montage = mne.channels.make_standard_montage("standard_1020")
-            epochs.set_montage(montage, on_missing="warn")
+            self.epochs.set_montage(montage, on_missing="warn")
         except Exception as e:
-            logger.warning(f"Montage error for {patient_id}: {e}")
+            logger.warning(f"Montage error for {self.patient_id}: {e}")
+
+    def analyze(self, **kwargs) -> pd.DataFrame:
+        """
+        Compute ITPC (Morlet and DFT) and return results.
+        """
+        if self.epochs is None:
+            raise ValueError("Epochs not preprocessed. Call preprocess() first.")
+
+        focus_name = self.focus if isinstance(self.focus, str) else "Custom"
 
         # 2. Compute Morlet ITPC
-        logger.info(f"[{patient_id}] Computing Morlet ITPC...")
-        itpc_data, itc_obj = self.compute_itpc(epochs)
+        logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
+        itpc_data, itc_obj = self.compute_itpc(self.epochs)
         morlet_metrics = self.extract_itpc_metrics(itpc_data)
 
         # Generate output plots
-        output_dir = config.LOCAL_DATA_ROOT / "outputs" / patient_id
-        self.plot_itpc_results(itc_obj, patient_id, output_dir, morlet_metrics)
+        output_dir = config.LOCAL_DATA_ROOT / "outputs" / self.patient_id
+        self.plot_itpc_results(itc_obj, self.patient_id, str(output_dir), morlet_metrics)
 
         # 3. Compute DFT ITPC (Sokoliuk Method)
-        logger.info(f"[{patient_id}] Computing DFT ITPC...")
-        itpc_spectrum, dft_freqs = self.compute_itpc_dft(epochs)
+        logger.info(f"[{self.patient_id}] Computing DFT ITPC...")
+        itpc_spectrum, dft_freqs = self.compute_itpc_dft(self.epochs)
         dft_metrics = self.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
 
         # Combine results
-        result = {
-            "patient_id": patient_id,
-            "n_trials": len(epochs),
-            "sfreq": epochs.info["sfreq"],
+        result_dict = {
+            "patient_id": self.patient_id,
+            "n_trials": len(self.epochs),
+            "sfreq": self.epochs.info["sfreq"],
             "focus": focus_name,
             # Morlet
             "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
@@ -127,59 +155,25 @@ class LanguageTrackingAnalysis:
             "dft_freq_word_hz": dft_metrics["freq_word_hz"],
         }
 
+        self.results = pd.DataFrame([result_dict])
+
         logger.info(
-            f"Pipeline complete for {patient_id} ({focus_name}). Morlet Ratio: {result['morlet_ratio_sent_word']:.2f}"
+            f"Pipeline complete for {self.patient_id} ({focus_name}). "
+            f"Morlet Ratio: {result_dict['morlet_ratio_sent_word']:.2f}"
         )
-        return result
+        return self.results
 
-    def process_patient(
-        self,
-        patient_id: str,
-        focus: Union[str, Iterable[str]] = "LH",
-        filter_signal: bool = True,
-    ) -> Optional[mne.Epochs]:
-        """
-        End-to-end processing for a single patient using pre-cleaned epochs (ENG-03).
-
-        Args:
-            patient_id: Patient ID (e.g., 'CON008').
-            focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
-            filter_signal: Whether to apply bandpass filtering.
-
-        Returns:
-            mne.Epochs object containing processed language trial segments.
-
-        Raises:
-            UnifiedDataLoadingError: If data loading fails.
-        """
-        try:
-            sessions = self.loader.get_patient_sessions(patient_id)
-            all_epochs = []
-
-            for date in sessions:
-                try:
-                    epochs = self.loader.load_clean_epochs(patient_id, date, trial_type="language")
-                    all_epochs.append(epochs)
-                except FileNotFoundError:
-                    logger.warning(f"No clean language epochs found for {patient_id} on {date}. Skipping session.")
-                    continue
-
-            if not all_epochs:
-                logger.error(f"No clean epochs found for {patient_id}. Run ENG-03 (ArtifactRejector) first.")
-                return None
-
-            epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
-
-        except UnifiedDataLoadingError as e:
-            logger.error(f"Failed to load data for {patient_id}: {e}")
-            return None
-
-        # Apply optimization steps
-        epochs = self.select_optimal_channels(epochs, focus=focus)
-        if filter_signal:
-            epochs = self.preprocess_signal(epochs)
-
-        return epochs
+    def generate_summary(self) -> Any:
+        """Generate summary of language tracking results."""
+        if self.results is None or self.results.empty:
+            return {}
+        row = self.results.iloc[0]
+        return {
+            "patient_id": row["patient_id"],
+            "focus": row["focus"],
+            "morlet_ratio": row["morlet_ratio_sent_word"],
+            "dft_ratio": row["dft_ratio_sent_word"],
+        }
 
     def select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:
         """
