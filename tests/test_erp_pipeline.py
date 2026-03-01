@@ -12,8 +12,8 @@ import pytest
 
 from src.data_processing.erp_pipeline import ERP_CONFIG, OddballERPPipeline
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture(autouse=True)
 def mock_unified_loader():
@@ -107,20 +107,22 @@ def mock_eng03_epochs():
     data = np.random.randn(n_epochs, n_channels, n_samples) * 1e-5
 
     trial_start_unix = 1704110400.0
-    metadata = pd.DataFrame({
-        "start_time_unix": [
-            trial_start_unix,
-            trial_start_unix + 40.0,
-            trial_start_unix + 80.0,
-        ],
-        "end_time_unix": [
-            trial_start_unix + window_sec,
-            trial_start_unix + 40.0 + window_sec,
-            trial_start_unix + 80.0 + window_sec,
-        ],
-        "trial_type": ["oddball"] * n_epochs,
-        "patient_id": ["TEST001"] * n_epochs,
-    })
+    metadata = pd.DataFrame(
+        {
+            "start_time_unix": [
+                trial_start_unix,
+                trial_start_unix + 40.0,
+                trial_start_unix + 80.0,
+            ],
+            "end_time_unix": [
+                trial_start_unix + window_sec,
+                trial_start_unix + 40.0 + window_sec,
+                trial_start_unix + 80.0 + window_sec,
+            ],
+            "trial_type": ["oddball"] * n_epochs,
+            "patient_id": ["TEST001"] * n_epochs,
+        }
+    )
 
     epochs = mne.EpochsArray(data, info=info, tmin=0.0, baseline=None, verbose=False)
     epochs.metadata = metadata
@@ -159,7 +161,6 @@ def mock_evoked(mock_epochs):
 
 
 class TestOddballERPPipeline:
-
     def test_initialization(self, temp_output_dir):
         """Test pipeline initialization."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
@@ -344,12 +345,8 @@ class TestOddballERPPipeline:
         """Master table should keep latest row for the same patient/date key."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
-        df1 = pd.DataFrame(
-            [{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 3, "p300_amplitude_uV": 4.0}]
-        )
-        df2 = pd.DataFrame(
-            [{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 5, "p300_amplitude_uV": 6.0}]
-        )
+        df1 = pd.DataFrame([{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 3, "p300_amplitude_uV": 4.0}])
+        df2 = pd.DataFrame([{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 5, "p300_amplitude_uV": 6.0}])
 
         pipeline._update_master_feature_table(df1)
         master = pipeline._update_master_feature_table(df2)
@@ -451,7 +448,6 @@ class TestERPConfig:
 
 
 class TestTrialMapping:
-
     def test_build_trial_windows(self, temp_output_dir, mock_eng03_epochs):
         """Verify trial-windows DataFrame has expected schema and values."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
@@ -487,7 +483,9 @@ class TestTrialMapping:
         ]
 
         mapped_df, diag = pipeline._map_rare_to_trials(
-            rare_events, tw, sfreq=float(mock_eng03_epochs.info["sfreq"]),
+            rare_events,
+            tw,
+            sfreq=float(mock_eng03_epochs.info["sfreq"]),
         )
 
         assert diag["n_rare_events"] == 2
@@ -509,7 +507,9 @@ class TestTrialMapping:
         ]
 
         mapped_df, diag = pipeline._map_rare_to_trials(
-            rare_events, tw, sfreq=float(mock_eng03_epochs.info["sfreq"]),
+            rare_events,
+            tw,
+            sfreq=float(mock_eng03_epochs.info["sfreq"]),
         )
 
         assert diag["n_mapped"] == 1
@@ -528,7 +528,9 @@ class TestTrialMapping:
         ]
 
         mapped_df, diag = pipeline._map_rare_to_trials(
-            rare_events, tw, sfreq=float(mock_eng03_epochs.info["sfreq"]),
+            rare_events,
+            tw,
+            sfreq=float(mock_eng03_epochs.info["sfreq"]),
         )
 
         assert diag["n_boundary_clipped"] == 1
@@ -547,7 +549,9 @@ class TestTrialMapping:
         ]
 
         mapped_df, _ = pipeline._map_rare_to_trials(
-            rare_events, tw, sfreq=float(mock_eng03_epochs.info["sfreq"]),
+            rare_events,
+            tw,
+            sfreq=float(mock_eng03_epochs.info["sfreq"]),
         )
 
         sub = pipeline._extract_subepochs(mock_eng03_epochs, mapped_df)
@@ -561,7 +565,9 @@ class TestTrialMapping:
         """Empty mapped_df should produce an Epochs object with zero good epochs."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
-        empty_mapped = pd.DataFrame(columns=["timestamp_unix", "eng03_epoch_idx", "offset_sec", "start_sample", "end_sample"])
+        empty_mapped = pd.DataFrame(
+            columns=["timestamp_unix", "eng03_epoch_idx", "offset_sec", "start_sample", "end_sample"]
+        )
         sub = pipeline._extract_subepochs(mock_eng03_epochs, empty_mapped)
 
         assert len(sub) == 0
@@ -572,7 +578,6 @@ class TestTrialMapping:
 
 
 class TestIntegration:
-
     @pytest.mark.integration
     def test_full_pipeline_single_patient(self, temp_output_dir, mock_aligned_events, mock_eng03_epochs):
         """Test full pipeline on single patient using ENG-03 epochs."""
@@ -747,7 +752,6 @@ class TestIntegration:
 
 
 class TestENG03Integration:
-
     def test_process_session_requires_eng03_epochs(self, temp_output_dir, mock_aligned_events):
         """_process_session returns error if ENG-03 epochs are not on disk."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
@@ -761,7 +765,10 @@ class TestENG03Integration:
         assert "ENG-03" in result["error"]
 
     def test_process_session_with_eng03_epochs(
-        self, temp_output_dir, mock_aligned_events, mock_eng03_epochs,
+        self,
+        temp_output_dir,
+        mock_aligned_events,
+        mock_eng03_epochs,
     ):
         """_process_session succeeds when ENG-03 epochs are available."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)

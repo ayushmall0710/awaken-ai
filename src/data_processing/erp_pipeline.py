@@ -29,9 +29,9 @@ ERP_CONFIG = {
     "p300_window": (0.3, 0.6),  # P300 search window: 300-600ms
     "min_epochs": 2,  # Minimum rare events needed per trial
     "midline_electrodes": ["Pz", "Cz", "Fz"],
-    "p300_min_amplitude": 0.0,           # µV — must be positive
+    "p300_min_amplitude": 0.0,  # µV — must be positive
     "p300_expected_latency_range": (300, 500),  # typical range for controls (ms)
-    "p300_max_latency_range": (250, 600),       # hard rejection cutoff (ms)
+    "p300_max_latency_range": (250, 600),  # hard rejection cutoff (ms)
 }
 
 
@@ -196,7 +196,9 @@ class OddballERPPipeline:
             logger.info(f"Loading ENG-03 oddball epochs for {patient_id} - {date}")
             try:
                 epochs35 = self.loader.load_clean_epochs(
-                    patient_id=patient_id, date=date, trial_type="oddball",
+                    patient_id=patient_id,
+                    date=date,
+                    trial_type="oddball",
                 )
             except FileNotFoundError as e:
                 error_msg = (
@@ -221,7 +223,9 @@ class OddballERPPipeline:
 
             trial_windows = self._build_trial_windows(epochs35)
             mapped_df, mapping_diag = self._map_rare_to_trials(
-                rare_events, trial_windows, sfreq=float(epochs35.info["sfreq"]),
+                rare_events,
+                trial_windows,
+                sfreq=float(epochs35.info["sfreq"]),
             )
             self._last_epoch_diagnostics = mapping_diag
 
@@ -368,18 +372,16 @@ class OddballERPPipeline:
             raise ValueError("ENG-03 metadata missing start_time_unix; cannot map rare events.")
 
         starts = md["start_time_unix"].astype(float).values
-        ends = (
-            md["end_time_unix"].astype(float).values
-            if "end_time_unix" in md.columns
-            else starts + float(window_sec)
-        )
+        ends = md["end_time_unix"].astype(float).values if "end_time_unix" in md.columns else starts + float(window_sec)
 
-        return pd.DataFrame({
-            "eng03_epoch_idx": np.arange(len(starts), dtype=int),
-            "start_time_unix": starts,
-            "end_time_unix": ends,
-            "window_sec": float(window_sec),
-        })
+        return pd.DataFrame(
+            {
+                "eng03_epoch_idx": np.arange(len(starts), dtype=int),
+                "start_time_unix": starts,
+                "end_time_unix": ends,
+                "window_sec": float(window_sec),
+            }
+        )
 
     def _map_rare_to_trials(
         self,
@@ -432,13 +434,15 @@ class OddballERPPipeline:
                 n_boundary += 1
                 continue
 
-            rows.append({
-                "timestamp_unix": ts,
-                "eng03_epoch_idx": epoch_idx,
-                "offset_sec": offset_sec,
-                "start_sample": start_sample,
-                "end_sample": end_sample,
-            })
+            rows.append(
+                {
+                    "timestamp_unix": ts,
+                    "eng03_epoch_idx": epoch_idx,
+                    "offset_sec": offset_sec,
+                    "start_sample": start_sample,
+                    "end_sample": end_sample,
+                }
+            )
 
         mapped_df = pd.DataFrame(rows)
         diagnostics = {
@@ -451,8 +455,11 @@ class OddballERPPipeline:
         }
         logger.info(
             "Rare-event mapping: %d/%d mapped (unmapped=%d, duplicate=%d, boundary=%d)",
-            diagnostics["n_mapped"], diagnostics["n_rare_events"],
-            n_unmapped, n_duplicate, n_boundary,
+            diagnostics["n_mapped"],
+            diagnostics["n_rare_events"],
+            n_unmapped,
+            n_duplicate,
+            n_boundary,
         )
         return mapped_df, diagnostics
 
@@ -490,8 +497,11 @@ class OddballERPPipeline:
             logger.warning("No sub-epochs could be extracted from ENG-03 trials")
             data_1 = np.zeros((1, len(epochs35.ch_names), n_target))
             placeholder = mne.EpochsArray(
-                data_1, info=epochs35.info.copy(), tmin=tmin,
-                baseline=ERP_CONFIG["baseline"], verbose=False,
+                data_1,
+                info=epochs35.info.copy(),
+                tmin=tmin,
+                baseline=ERP_CONFIG["baseline"],
+                verbose=False,
             )
             placeholder.drop([0], reason="PLACEHOLDER")
             return placeholder
