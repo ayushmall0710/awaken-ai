@@ -49,10 +49,10 @@ PROMPTS_DIR = AUDIO_DIR / "prompts"
 COMMAND_AUDIO_FILE = "motorcommandprompt.wav"
 
 # Unified Parquet File Path
-UNIFIED_PARQUET_PATH = EEG_DATA_DIR / "unified_stimulus_results.parquet"
+UNIFIED_PARQUET_PATH = PROCESSED_DATA_DIR / "unified_stimulus_results.parquet"
 
 # Patient clinical records JSON
-PATIENT_RECORDS_PATH = EEG_DATA_DIR / "patient_records.json"
+PATIENT_RECORDS_PATH = PROCESSED_DATA_DIR / "patient_records.json"
 
 # --- Sensor Configurations ---
 

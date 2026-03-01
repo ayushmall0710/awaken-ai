@@ -2,6 +2,7 @@ import pandas as pd
 
 from src.data_processing.pipeline import (
     REQUIRED_COLS,
+    filter_latest_sessions,
     generate_session_ids,
     generate_trial_ids,
     process_stimulus_df,
@@ -220,12 +221,12 @@ class TestGenerateTrialIds:
         df = pd.DataFrame(
             {
                 "session_id": ["s_CON008_202501101430"] * 3,
-                "trial_type": ["language", "language", "oddball"],
+                "trial_type": ["language", "oddball", "language"],
                 "start_time": [100.0, 200.0, 300.0],
             }
         )
         result = generate_trial_ids(df)
-        assert list(result) == ["lt1", "lt2", "obt1"]
+        assert list(result) == ["lt1_CON008_202501101430", "obt1_CON008_202501101430", "lt2_CON008_202501101430"]
 
     def test_unknown_type_fallback(self):
         df = pd.DataFrame(
@@ -236,4 +237,47 @@ class TestGenerateTrialIds:
             }
         )
         result = generate_trial_ids(df)
-        assert result.iloc[0] == "unk1"
+        assert result.iloc[0] == "unk1_CON008_202501101430"
+
+
+class TestFilterLatestSessions:
+    """Tests for filtering older sessions that map to the same session_id (same minute)."""
+
+    def test_filter_different_minutes(self):
+        """Should keep both rows if they map to different session_ids."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101431"],
+                "date": ["1/10/2025 14:30:15", "1/10/2025 14:31:05"],
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2
+
+    def test_filter_same_minute(self):
+        """Should only keep the row with the actual latest timestamp within the same minute."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101430", "s_CON008_202501101500"],
+                "date": [
+                    "1/10/2025 14:30:15",
+                    "1/10/2025 14:30:45",
+                    "1/10/2025 15:00:00",
+                ],  # 15s vs 45s, and a different session
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2
+        # Should keep the later 14:30 session and the 15:00 session
+        assert list(result["date"]) == ["1/10/2025 14:30:45", "1/10/2025 15:00:00"]
+
+    def test_keep_identical_timestamps(self):
+        """Should keep both rows if their exact timestamps are identical (e.g. from the same actual session)."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101430"],
+                "date": ["1/10/2025 14:30:15", "1/10/2025 14:30:15"],
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2

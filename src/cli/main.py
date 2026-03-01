@@ -156,7 +156,7 @@ def unify_data_cmd(
     from src.cli.commands.setup_cmd import _run_unify_data
 
     _run_unify_data(verbose)
-    typer.echo("\nData unification complete.\n")
+    typer.echo(f"\nData unification complete. Saved to: {config.UNIFIED_PARQUET_PATH}\n")
 
 
 @app.command("run")

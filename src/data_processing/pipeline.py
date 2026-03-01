@@ -47,13 +47,24 @@ def generate_session_ids(df: pd.DataFrame) -> pd.Series:
 def generate_trial_ids(df: pd.DataFrame) -> pd.Series:
     """Generate trial_id per (session_id, trial_type) sorted by start_time.
 
-    Format: {prefix}{sequential_index}  (e.g. lt1, obt2, lct3)
+    Format: {prefix}{sequential_index}_{patient_id}_{datetime}  (e.g. lt1_CON008_202501101430)
     Falls back to 'unk' prefix for unmapped trial types.
     """
     df = df.sort_values("start_time")
     prefixes = df["trial_type"].map(TRIAL_TYPE_PREFIX).fillna("unk")
     seq = df.groupby(["session_id", "trial_type"]).cumcount() + 1
-    return prefixes + seq.astype(str)
+    return prefixes + seq.astype(str) + df["session_id"].str[1:]
+
+
+def filter_latest_sessions(df: pd.DataFrame, verbose: bool = False) -> pd.DataFrame:
+    """
+    Handle multiple sessions mapped to the same session_id (i.e. same minute).
+    Keeps only the rows corresponding to the latest actual 'date' timestamp per session_id.
+    """
+    df = df.assign(_parsed_date=pd.to_datetime(df["date"], errors="coerce"))
+    latest_dates = df.groupby("session_id")["_parsed_date"].transform("max")
+    mask = (df["_parsed_date"] == latest_dates) | df["_parsed_date"].isna()
+    return df[mask].drop(columns=["_parsed_date"]).reset_index(drop=True)
 
 
 def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
@@ -154,6 +165,7 @@ def unify_stimulus_data(data_dir: Path, output_file: Path, verbose: bool = False
 
         # Generate IDs (post-dedup)
         unified_df["session_id"] = generate_session_ids(unified_df)
+        unified_df = filter_latest_sessions(unified_df, verbose=verbose)  # another dedup, lol
         unified_df["trial_id"] = generate_trial_ids(unified_df)
 
         # Reorder to standard column order
