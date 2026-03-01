@@ -4,9 +4,11 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+import typer
 from typer.testing import CliRunner
 
 from src.cli.main import app
+from src.cli.runners import oddball as oddball_runner
 
 runner = CliRunner()
 
@@ -287,3 +289,54 @@ def test_help():
     assert "list" in result.output
     assert "info" in result.output
     assert "run" in result.output
+
+
+# ─── oddball runner status handling ───────────────────────────────────────────
+
+
+@patch("src.cli.runners.oddball.OddballERPPipeline")
+def test_oddball_runner_success(MockPipeline, mock_loader):
+    pipeline = MagicMock()
+    pipeline.process_patient.return_value = {
+        "status": "success",
+        "features": pd.DataFrame([{"n_epochs": 4, "p300_amplitude_uV": 5.2, "p300_latency_ms": 392.0}]),
+    }
+    MockPipeline.return_value = pipeline
+
+    oddball_runner.run(mock_loader, ["CON008"], "2025-01-10", ["Pz", "Cz"])
+
+    pipeline.process_patient.assert_called_once_with(
+        "CON008",
+        date="2025-01-10",
+        custom_electrodes=["Pz", "Cz"],
+    )
+
+
+@patch("src.cli.runners.oddball.OddballERPPipeline")
+def test_oddball_runner_partial_failure_does_not_exit(MockPipeline, mock_loader):
+    pipeline = MagicMock()
+    pipeline.process_patient.side_effect = [
+        {"status": "insufficient_epochs"},
+        {
+            "status": "success",
+            "features": pd.DataFrame([{"n_epochs": 3, "p300_amplitude_uV": 4.0, "p300_latency_ms": 410.0}]),
+        },
+    ]
+    MockPipeline.return_value = pipeline
+    mock_loader.get_patient_sessions.return_value = ["2025-01-10", "2025-01-11"]
+
+    oddball_runner.run(mock_loader, ["CON008"], None, None)
+
+    assert pipeline.process_patient.call_count == 2
+
+
+@patch("src.cli.runners.oddball.OddballERPPipeline")
+def test_oddball_runner_no_success_exits(MockPipeline, mock_loader):
+    pipeline = MagicMock()
+    pipeline.process_patient.return_value = {"status": "no_data"}
+    MockPipeline.return_value = pipeline
+
+    with pytest.raises(typer.Exit) as exc:
+        oddball_runner.run(mock_loader, ["CON008"], "2025-01-10", None)
+
+    assert exc.value.exit_code == 1
