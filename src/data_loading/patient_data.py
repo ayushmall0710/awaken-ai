@@ -44,7 +44,7 @@ class PatientData:
         self._session = session
         self._trial_type = trial_type
 
-        trials = loader.get_patient_trials(patient_id)
+        trials = loader.trials_df[loader.trials_df["patient_id"] == patient_id]
         if session:
             trials = trials[trials["date"] == session]
         if trial_type:
@@ -62,6 +62,12 @@ class PatientData:
     def list_sessions(self) -> List[str]:
         """Sorted list of recording session dates."""
         return sorted(self.trials_df["date"].unique().tolist())
+
+    def list_session_ids(self) -> List[str]:
+        """Sorted list of unique session IDs."""
+        if "session_id" not in self.trials_df.columns:
+            return []
+        return sorted(self.trials_df["session_id"].dropna().unique().tolist())
 
     def get_trial_types(self) -> List[str]:
         """Sorted list of unique trial types for this patient."""
@@ -85,13 +91,12 @@ class PatientData:
             )
         return filtered.copy()
 
-    def get_trial(self, trial_idx: int) -> pd.Series:
-        """Single trial by index."""
-        if not (0 <= trial_idx < len(self.trials_df)):
-            raise IndexError(
-                f"Trial index {trial_idx} out of range [0, {len(self.trials_df) - 1}] for patient {self.patient_id}"
-            )
-        return self.trials_df.iloc[trial_idx]
+    def get_trial_by_id(self, trial_id: str) -> pd.Series:
+        """Single trial by trial_id string (e.g. 'lt1', 'obt2')."""
+        matches = self.trials_df[self.trials_df["trial_id"] == trial_id]
+        if matches.empty:
+            raise KeyError(f"No trial with trial_id='{trial_id}' for patient {self.patient_id}")
+        return matches.iloc[0]
 
     # ─── EDF access ───────────────────────────────────────────────────────────
 

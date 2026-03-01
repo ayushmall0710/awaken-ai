@@ -8,6 +8,17 @@ import pandas as pd
 import typer
 
 from src.data_loading import UnifiedDataLoader
+from src.data_loading.unified_data_loader import UnifiedDataLoadingError
+
+
+def get_loader() -> UnifiedDataLoader:
+    """Instantiate the data loader or fail gracefully with setup instructions."""
+    try:
+        return UnifiedDataLoader()
+    except UnifiedDataLoadingError as e:
+        typer.echo(f"\n[Error] {e}", err=True)
+        typer.echo("-> Run 'awakenai unify-data' to generate the required dataset first.\n", err=True)
+        raise typer.Exit(1)
 
 
 def resolve_patients(

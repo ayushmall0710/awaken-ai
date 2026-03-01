@@ -54,6 +54,9 @@ def sample_trials_df():
     return pd.DataFrame(
         [
             {
+                "patient_id": "P001",
+                "session_id": "s_P001_202401010000",
+                "trial_id": "lt1",
                 "date": "2024-01-01",
                 "trial_type": "language",
                 "start_time": base_ts + 1.0,  # 1s after EDF start
@@ -71,6 +74,8 @@ def sample_stimulus_data():
     """Standard stimulus data dictionary for testing."""
     return {
         "patient_id": ["P001", "P001"],
+        "session_id": ["s_P001_202401010000", "s_P001_202401010000"],
+        "trial_id": ["lt1", "cft1"],
         "date": ["2024-01-01", "2024-01-01"],
         "trial_type": ["language", "lcmd+p"],
         "sentences": ["[1, 2, 3]", "[]"],
@@ -100,6 +105,13 @@ def raw_stimulus_df():
     return pd.DataFrame(
         {
             "patient_id": ["P001", "P002", "P003", "P004"],
+            "session_id": [
+                "s_P001_202401010000",
+                "s_P002_202401020000",
+                "s_P003_202401030000",
+                "s_P004_202401040000",
+            ],
+            "trial_id": ["lt1", "cft1", "lt2", "obt1"],
             "date": ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"],
             "trial_type": ["lang_11", "lcmd+p", "lang_70", "oddball"],
             "sentences": ["", "[]", "", "{'event': 'standard'}"],

@@ -84,7 +84,7 @@ class LanguageProcessor:
         try:
             # Note: We load all sessions and concatenate them if needed
             # ENG-03 produces one .fif file per session per trial type
-            sessions = self.loader.get_patient_sessions(patient_id)
+            sessions = self.loader.get_patient(patient_id).list_sessions()
             all_epochs = []
 
             for date in sessions:

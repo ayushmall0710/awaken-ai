@@ -18,14 +18,17 @@ runner = CliRunner()
 def mock_loader():
     loader = MagicMock()
     loader.get_patient_ids.return_value = ["CON008", "CON009"]
-    loader.get_patient_sessions.return_value = ["2025-01-10"]
-    loader.get_patient_summary.return_value = pd.DataFrame(
-        {"patient_id": ["CON008"], "trial_type": ["left_command"], "count": [10]}
-    )
 
     patient = MagicMock()
     patient.list_sessions.return_value = ["2025-01-10"]
+    patient.list_session_ids.return_value = ["s_CON008_20250110"]
     patient.get_trial_types.return_value = ["left_command", "right_command"]
+
+    loader.get_patient.return_value = patient
+
+    loader.get_patient_summary.return_value = pd.DataFrame(
+        {"patient_id": ["CON008"], "trial_type": ["left_command"], "count": [10]}
+    )
     patient.trials_df = pd.DataFrame(
         {
             "date": ["2025-01-10", "2025-01-10"],
@@ -61,7 +64,7 @@ def mock_loader():
 # ─── list patients ────────────────────────────────────────────────────────────
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_list_patients(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["list", "patients"])
@@ -73,18 +76,18 @@ def test_list_patients(MockLoader, mock_loader):
 # ─── list sessions ────────────────────────────────────────────────────────────
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_list_sessions(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["list", "sessions", "CON008"])
     assert result.exit_code == 0
-    assert "2025-01-10" in result.output
+    assert "s_CON008_20250110" in result.output
 
 
 # ─── list trials ─────────────────────────────────────────────────────────────
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_list_trials(MockLoader, mock_loader):
     mock_loader.trials_df = pd.DataFrame(
         {
@@ -100,7 +103,7 @@ def test_list_trials(MockLoader, mock_loader):
     assert "left_command" in result.output
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_list_trials_filtered_by_type(MockLoader, mock_loader):
     mock_loader.trials_df = pd.DataFrame(
         {
@@ -119,7 +122,7 @@ def test_list_trials_filtered_by_type(MockLoader, mock_loader):
 # ─── info patient ─────────────────────────────────────────────────────────────
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_info_patient(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
     result = runner.invoke(app, ["info", "patient", "CON008"])
@@ -131,18 +134,18 @@ def test_info_patient(MockLoader, mock_loader):
 # ─── info session ─────────────────────────────────────────────────────────────
 
 
-@patch("src.cli.commands.inspect_cmd.UnifiedDataLoader")
+@patch("src.cli.commands.inspect_cmd.get_loader")
 def test_info_session(MockLoader, mock_loader):
     MockLoader.return_value = mock_loader
-    result = runner.invoke(app, ["info", "session", "CON008", "2025-01-10"])
+    result = runner.invoke(app, ["info", "session", "CON008", "s_CON008_20250110"])
     assert result.exit_code == 0
-    assert "2025-01-10" in result.output
+    assert "s_CON008_20250110" in result.output
 
 
 # ─── run auto-dispatch ────────────────────────────────────────────────────────
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 @patch("src.cli.runners.command_following.run")
 def test_run_auto_dispatches_command_following(MockCF_run, mock_config, MockLoader, mock_loader):
@@ -167,7 +170,7 @@ def test_version():
 # ─── setup guard session tests ──────────────────────────────────────────────────
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 def test_run_fails_if_session_setup_missing(mock_config, MockLoader, mock_loader):
     """Test that specifying a session strictly checks that session's epochs."""
@@ -186,7 +189,7 @@ def test_run_fails_if_session_setup_missing(mock_config, MockLoader, mock_loader
     assert "artifact rejection" in result.output
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 @patch("src.cli.runners.command_following.CommandFollowingAnalysis")
 def test_run_passes_if_session_setup_exists(MockCFA, mock_config, MockLoader, mock_loader):
@@ -207,7 +210,7 @@ def test_run_passes_if_session_setup_exists(MockCFA, mock_config, MockLoader, mo
 # ─── run dispatcher permutations tests ───────────────────────────────────────────────────
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 @patch("src.cli.runners.command_following.run")
 @patch("src.cli.runners.language.run")
@@ -234,7 +237,7 @@ def test_run_multiple_pipelines_auto_detected(mock_lang_run, mock_cf_run, mock_c
     mock_lang_run.assert_called_once()
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 @patch("src.cli.runners.oddball.run")
 def test_run_explicit_pipeline_args(mock_ob_run, mock_config, MockLoader, mock_loader):
@@ -252,7 +255,7 @@ def test_run_explicit_pipeline_args(mock_ob_run, mock_config, MockLoader, mock_l
     assert "Cz" in kwargs[3]
 
 
-@patch("src.cli.main.UnifiedDataLoader")
+@patch("src.cli.main.get_loader")
 @patch("src.cli.main.config")
 @patch("src.cli.runners.command_following.run")
 def test_run_all_patients(mock_cf_run, mock_config, MockLoader, mock_loader):

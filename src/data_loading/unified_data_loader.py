@@ -105,16 +105,6 @@ class UnifiedDataLoader:
         """Get sorted list of unique patient IDs."""
         return sorted(self.trials_df["patient_id"].unique().tolist())
 
-    def get_patient_sessions(self, patient_id: str) -> List[str]:
-        """Get sorted list of session dates for a patient."""
-        patient_trials = self.trials_df[self.trials_df["patient_id"] == patient_id]
-
-        if len(patient_trials) == 0:
-            raise UnifiedDataLoadingError(f"Patient '{patient_id}' not found")
-
-        sessions = sorted(patient_trials["date"].unique().tolist())
-        return sessions
-
     def get_trial_types(self) -> List[str]:
         """Get sorted list of unique trial types."""
         return sorted(self.trials_df["trial_type"].unique().tolist())
@@ -139,29 +129,6 @@ class UnifiedDataLoader:
         return summary.sort_values(["patient_id", "trial_type"])
 
     # ==================== Single-Patient Access ====================
-
-    def get_patient_trials(self, patient_id: str) -> pd.DataFrame:
-        """
-        Get all trials for a specific patient.
-
-        Args:
-            patient_id: Patient identifier (e.g., 'CON008')
-
-        Returns:
-            DataFrame with patient's trials (defensive copy)
-
-        Raises:
-            UnifiedDataLoadingError: If patient ID not found
-        """
-        patient_trials = self.trials_df[self.trials_df["patient_id"] == patient_id]
-
-        if len(patient_trials) == 0:
-            available = self.get_patient_ids()
-            raise UnifiedDataLoadingError(
-                f"Patient '{patient_id}' not found in dataset. Available patients: {available}"
-            )
-
-        return patient_trials.copy()
 
     def get_patient(
         self, patient_id: str, session: Optional[str] = None, trial_type: Optional[str] = None
@@ -215,7 +182,7 @@ class UnifiedDataLoader:
         # Patient-based loading (normal flow)
         # If date not specified, load based on session count
         if date is None:
-            sessions = self.get_patient_sessions(patient_id)
+            sessions = self.get_patient(patient_id).list_sessions()
 
             if len(sessions) == 0:
                 raise UnifiedDataLoadingError(f"Patient {patient_id} has no trial data")
@@ -229,7 +196,7 @@ class UnifiedDataLoader:
                 return {session: self._load_edf_cached(patient_id, session, use_clipped) for session in sessions}
         else:
             # Specific date requested - validate and return single Raw
-            sessions = self.get_patient_sessions(patient_id)
+            sessions = self.get_patient(patient_id).list_sessions()
             if date not in sessions:
                 raise UnifiedDataLoadingError(
                     f"Date '{date}' not found for patient {patient_id}. Available sessions: {sessions}"
@@ -269,7 +236,7 @@ class UnifiedDataLoader:
             return dated_raw
 
         # Fallback: Check if this is a single-session patient
-        sessions = self.get_patient_sessions(patient_id)
+        sessions = self.get_patient(patient_id).list_sessions()
         if len(sessions) == 1:
             # Only one session, try non-dated files
             if use_clipped:
@@ -392,8 +359,10 @@ class UnifiedDataLoader:
         """
         required_columns = [
             "patient_id",
+            "session_id",
             "date",
             "trial_type",
+            "trial_id",
             "sentences",
             "start_time",
             "end_time",
@@ -479,7 +448,7 @@ class UnifiedDataLoader:
             return validation
 
         # Check EDF file existence (try all sessions, mark valid if any exists)
-        sessions = self.get_patient_sessions(patient_id)
+        sessions = self.get_patient(patient_id).list_sessions()
         edf_found = False
         for session_date in sessions:
             try:
@@ -566,7 +535,7 @@ class UnifiedDataLoader:
     @staticmethod
     def load_clean_epochs(
         patient_id: str,
-        date: str,
+        session_id: str,
         trial_type: str,
     ) -> "mne.Epochs":
         """Load cleaned EEG epochs produced by ENG-03 for a single trial type.
@@ -591,11 +560,14 @@ class UnifiedDataLoader:
             If the ``.fif`` file does not exist in the epochs directory.
         """
         safe_tt = str(trial_type).lower().strip()
-        fif_path = config.EPOCHS_DIR / patient_id / date / f"{safe_tt}-epo.fif"
+        fif_path = config.EPOCHS_DIR / patient_id / session_id / f"{safe_tt}-epo.fif"
+
         if not fif_path.exists():
             raise FileNotFoundError(
-                f"Clean epochs not found: {fif_path}. Run ArtifactRejector.run_session('{patient_id}', '{date}') first."
+                f"Clean epochs not found: {fif_path}. "
+                f"Run ArtifactRejector.run_session('{patient_id}', '{session_id}') first."
             )
+
         return mne.read_epochs(fif_path, preload=True, verbose=False)
 
     # ==================== Metadata ====================

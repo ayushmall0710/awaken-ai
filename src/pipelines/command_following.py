@@ -74,7 +74,7 @@ class CommandPair:
     keep: mne.Epochs
     stop: mne.Epochs
     side: str  # "left" or "right"
-    trial_idx: int
+    trial_id: str
     keep_start: float  # keep onset (Unix timestamp)
     stop_start: float  # stop onset (Unix timestamp)
 
@@ -234,16 +234,15 @@ class CommandFollowingAnalysis(BasePipeline):
         if len(cmd_trials) == 0:
             raise ValueError(f"No command trials found for patient {self.patient_id}")
 
-        trial_idx = 0
-        for (date, trial_type), group in cmd_trials.groupby(["date", "trial_type"]):
-            all_epochs = self.loader.load_clean_epochs(self.patient_id, date, trial_type)
+        for (session_id, trial_type), group in cmd_trials.groupby(["session_id", "trial_type"]):
+            all_epochs = self.loader.load_clean_epochs(self.patient_id, session_id, trial_type)
             if len(all_epochs) == 0:
                 continue
 
             all_epochs.pick(self.roi_channels)
 
-            date_trials = self.aligned_events[self.aligned_events["date"] == date]
-            tz_offset = detect_timezone_offset(all_epochs, date_trials)
+            session_trials = self.aligned_events[self.aligned_events["session_id"] == session_id]
+            tz_offset = detect_timezone_offset(all_epochs, session_trials)
             side = trial_type.split("_")[0]
 
             # Pre-calculate mapping from epoch sample index to epoch index
@@ -270,14 +269,11 @@ class CommandFollowingAnalysis(BasePipeline):
 
                 if match_epoch is not None:
                     try:
-                        pairs = self._extract_trial_pairs(match_epoch, tz_offset, trial, side, trial_idx)
+                        trial_id = trial["trial_id"]
+                        pairs = self._extract_trial_pairs(match_epoch, tz_offset, trial, side, trial_id)
                         self.pairs.extend(pairs)
                     except Exception as e:
-                        logger.warning(f"Failed to extract pairs for trial {trial_idx}: {e}")
-                else:
-                    pass  # Epoch was likely dropped during cleaning
-
-                trial_idx += 1
+                        logger.warning(f"Failed to extract pairs for trial {trial.get('trial_id', 'unknown')}: {e}")
 
         logger.info(f"Loaded {len(self.pairs)} keep-stop pairs")
 
@@ -289,7 +285,7 @@ class CommandFollowingAnalysis(BasePipeline):
         tz_offset: float,
         trial: pd.Series,
         side: str,
-        trial_idx: int,
+        trial_id: str,
     ) -> List[CommandPair]:
         """Extract paired keep-stop segments from a single trial's clean epochs.
 
@@ -315,7 +311,7 @@ class CommandFollowingAnalysis(BasePipeline):
                     keep=keep_seg,
                     stop=stop_seg,
                     side=side,
-                    trial_idx=trial_idx,
+                    trial_id=trial_id,
                     keep_start=keep_pos["start"],
                     stop_start=stop_pos["start"],
                 )
@@ -443,7 +439,7 @@ class CommandFollowingAnalysis(BasePipeline):
         """Compute per-pair ERD for one side with paired tests and mixed effects."""
         keep_powers = [compute_log_band_power(p.keep, bands) for p in pairs]
         stop_powers = [compute_log_band_power(p.stop, bands) for p in pairs]
-        trial_indices = [p.trial_idx for p in pairs]
+        trial_ids = [p.trial_id for p in pairs]
 
         channels = pairs[0].keep.ch_names
         results = []
@@ -462,7 +458,7 @@ class CommandFollowingAnalysis(BasePipeline):
 
                 # Mixed effects: accounts for within-trial correlation (epochs from
                 # same trial share brain state, so are not independent)
-                p_mixed = self._run_mixed_model(erd_per_pair, trial_indices)
+                p_mixed = self._run_mixed_model(erd_per_pair, trial_ids)
                 is_contralateral = ch == CONTRALATERAL_MAP.get(side)
 
                 results.append(
@@ -595,8 +591,7 @@ class CommandFollowingAnalysis(BasePipeline):
 
     def visualize_trial(
         self,
-        trial_idx: int = 0,
-        trial_type: str = "right_command",
+        trial_id: str,
         save_path: Optional[str] = None,
         show: bool = True,
     ) -> Optional[plt.Figure]:
@@ -616,15 +611,14 @@ class CommandFollowingAnalysis(BasePipeline):
             drop=True
         )
 
-        # Filter by requested trial type if provided, otherwise just index into all command trials
-        if trial_type:
-            cmd_trials = cmd_trials[cmd_trials["trial_type"] == trial_type].reset_index(drop=True)
+        # Filter by requested trial ID
+        trial_matches = cmd_trials[cmd_trials["trial_id"] == trial_id]
 
-        if trial_idx >= len(cmd_trials):
-            logger.error(f"Trial index {trial_idx} out of range for {trial_type} (max {len(cmd_trials) - 1})")
+        if len(trial_matches) == 0:
+            logger.error(f"Trial ID {trial_id} not found among command trials.")
             return None
 
-        trial = cmd_trials.iloc[trial_idx]
+        trial = trial_matches.iloc[0]
         date = trial["date"]
         actual_type = trial["trial_type"]
 
@@ -691,7 +685,7 @@ class CommandFollowingAnalysis(BasePipeline):
         if dc_ch:
             dc_data = raw_trial.get_data(picks=[dc_ch])[0]
         else:
-            logger.warning(f"No DC channel found for trial {trial_idx}, plotting flatline.")
+            logger.warning(f"No DC channel found for trial {trial_id}, plotting flatline.")
             dc_data = np.zeros_like(times)
 
         motor_data = raw_trial.get_data(picks=[motor_ch])[0]
@@ -706,7 +700,7 @@ class CommandFollowingAnalysis(BasePipeline):
 
         fig, axes = plt.subplots(3, 1, figsize=(18, 11), sharex=True)
         fig.suptitle(
-            f"{self.patient_id} — {actual_type} (Trial {trial_idx}) | {motor_ch} (contralateral)\n"
+            f"{self.patient_id} — {actual_type} (Trial {trial_id}) | {motor_ch} (contralateral)\n"
             f"{n_keep} keep + {n_stop} stop events",
             fontsize=13,
             fontweight="bold",

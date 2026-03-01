@@ -99,7 +99,15 @@ class TestCommandFollowingAnalysis:
         # load_epochs expects self.aligned_events to be set (usually by run())
         # We set it to a dummy DF with one command trial to trigger load_clean_epochs call
         analysis_instance.aligned_events = pd.DataFrame(
-            [{"trial_type": "left_command", "date": "2024-01-01", "start_time": 1000}]
+            [
+                {
+                    "trial_type": "left_command",
+                    "date": "2024-01-01",
+                    "session_id": "s_TEST_20240101",
+                    "trial_id": "lct1",
+                    "start_time": 1000,
+                }
+            ]
         )
 
         # Mock load_clean_epochs to return empty (simulating dropped epochs)
@@ -144,7 +152,7 @@ class TestCommandFollowingAnalysis:
                     keep=keep_epoch,
                     stop=stop_epoch,
                     side="left",
-                    trial_idx=i,  # important for mixed model indexing
+                    trial_id=f"cft{i}",  # important for mixed model indexing
                     keep_start=0,
                     stop_start=10,
                 )

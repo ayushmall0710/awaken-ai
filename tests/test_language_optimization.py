@@ -82,8 +82,10 @@ def mock_loader(mock_language_epochs):
     with patch("src.data_processing.language_optimization.UnifiedDataLoader") as MockLoader:
         loader_instance = MockLoader.return_value
 
-        # Mock get_patient_sessions
-        loader_instance.get_patient_sessions.return_value = ["2024-01-01"]
+        # Mock get_patient().list_sessions()
+        mock_patient = MagicMock()
+        mock_patient.list_sessions.return_value = ["2024-01-01"]
+        loader_instance.get_patient.return_value = mock_patient
 
         # Mock load_clean_epochs
         loader_instance.load_clean_epochs.return_value = mock_language_epochs
@@ -260,7 +262,9 @@ def test_select_optimal_channels_clinical(mock_language_epochs):
 def test_process_patient_no_data():
     """process_patient returns None when all sessions raise FileNotFoundError."""
     processor = LanguageProcessor(MagicMock())
-    processor.loader.get_patient_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    mock_patient = MagicMock()
+    mock_patient.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    processor.loader.get_patient.return_value = mock_patient
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
     result = processor.process_patient("TEST")

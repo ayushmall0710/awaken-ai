@@ -82,6 +82,7 @@ def _empty_qc_dataframe() -> pd.DataFrame:
     cols = [
         "patient_id",
         "date",
+        "session_id",
         "trial_type",
         "window_sec",
         "reject_ptp_percentile",
