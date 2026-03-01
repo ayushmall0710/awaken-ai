@@ -1,8 +1,7 @@
-"""
-ERP/Oddball Pipeline Module (ENG-02b)
+"""ERP/Oddball Pipeline (ENG-02b).
 
-Extracts epochs from aligned oddball trials, computes ERPs, and quantifies P300 features.
-Supports batch processing across patients and generates validation plots and QC reports.
+Loads ICA-cleaned 35s epochs from ENG-03, maps rare-event timestamps into trial windows,
+extracts 900ms sub-epochs, computes ERPs, and quantifies P300 features.
 """
 
 import json
@@ -19,27 +18,20 @@ from tqdm import tqdm
 
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
-from src.data_processing.artifact_rejection import ArtifactRejector
-from src.utils import signal_processing as signal_utils
 
 logger = logging.getLogger(__name__)
 
 
-# ERP Analysis Configuration
 ERP_CONFIG = {
     "tmin": -0.2,  # Epoch start: 200ms before stimulus
     "tmax": 0.7,  # Epoch end: 700ms after stimulus
     "baseline": (None, 0),  # Baseline correction: -200ms to 0ms
     "p300_window": (0.3, 0.6),  # P300 search window: 300-600ms
     "min_epochs": 2,  # Minimum rare events needed per trial
-    "midline_electrodes": ["Pz", "Cz", "Fz"],  # Primary electrodes for P300
-    # P300 validation thresholds for composite scoring
-    "p300_min_amplitude": 0.0,  # Minimum amplitude (µV) - must be positive
-    "p300_expected_latency_range": (
-        300,
-        500,
-    ),  # Expected latency range (ms) for controls
-    "p300_max_latency_range": (250, 600),  # Maximum acceptable range (ms)
+    "midline_electrodes": ["Pz", "Cz", "Fz"],
+    "p300_min_amplitude": 0.0,           # µV — must be positive
+    "p300_expected_latency_range": (300, 500),  # typical range for controls (ms)
+    "p300_max_latency_range": (250, 600),       # hard rejection cutoff (ms)
 }
 
 
@@ -68,23 +60,20 @@ class OddballERPPipeline:
 
         self.loader = loader if loader is not None else UnifiedDataLoader(data_root=self.data_root, verbose=verbose)
 
-        # Set MNE logging level
         if not verbose:
             mne.set_log_level("WARNING")
 
-        # Effective output paths: use config constants when output_dir is default
         self._output_paths = self._get_output_paths()
         self._create_output_directories()
         self._last_epoch_diagnostics: Dict[str, Any] = {}
 
     def _get_output_paths(self):
-        """Return effective output base paths (config constants when output_dir is default)."""
+        """Use config constants when output_dir is the default; otherwise nest under output_dir."""
         if self.output_dir == config.PROCESSED_DATA_DIR:
             return type(
                 "Paths",
                 (),
                 {
-                    "epochs": config.EPOCHS_DIR,
                     "erps": config.ERPS_DIR,
                     "features": config.FEATURES_DIR,
                     "plots_erp": config.ERP_PLOTS_DIR,
@@ -95,7 +84,6 @@ class OddballERPPipeline:
             "Paths",
             (),
             {
-                "epochs": self.output_dir / "epochs",
                 "erps": self.output_dir / "erps",
                 "features": self.output_dir / "features",
                 "plots_erp": self.output_dir / "plots" / "erp",
@@ -104,9 +92,8 @@ class OddballERPPipeline:
         )()
 
     def _create_output_directories(self):
-        """Create all necessary output directories."""
         p = self._output_paths
-        for dir_path in [p.epochs, p.erps, p.features, p.plots_erp, p.qc]:
+        for dir_path in [p.erps, p.features, p.plots_erp, p.qc]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
     def process_patient(
@@ -129,21 +116,18 @@ class OddballERPPipeline:
         logger.info(f"Processing patient: {patient_id}")
 
         try:
-            # Load aligned events
             aligned_trials = self._load_aligned_trials(patient_id)
 
             if aligned_trials.empty:
                 logger.warning(f"No aligned trials found for {patient_id}")
                 return {"patient_id": patient_id, "status": "no_data"}
 
-            # Filter for specific date if provided
             if date:
                 aligned_trials = aligned_trials[aligned_trials["date"] == date]
                 if aligned_trials.empty:
                     logger.warning(f"No trials found for {patient_id} on {date}")
                     return {"patient_id": patient_id, "date": date, "status": "no_data"}
 
-            # Process each session separately
             all_session_results = []
             sessions = aligned_trials["date"].unique()
 
@@ -172,7 +156,6 @@ class OddballERPPipeline:
                     "session_results": all_session_results,
                 }
 
-            # Return results (for single successful session, return that session; for multi-session, aggregate)
             if len(successful) == 1:
                 return successful[0]
             else:
@@ -210,25 +193,19 @@ class OddballERPPipeline:
         logger.info(f"Processing session: {patient_id} - {date}")
 
         try:
-            # Load ICA-cleaned EEG from ENG-03 (required)
-            logger.info(f"Loading artifact-cleaned EEG from ENG-03 for {patient_id} - {date}")
-            rejector = ArtifactRejector(loader=self.loader, verbose=self.verbose)
+            logger.info(f"Loading ENG-03 oddball epochs for {patient_id} - {date}")
             try:
-                _, raw = rejector.run_session(
-                    patient_id=patient_id,
-                    date=date,
-                    save=False,  # Don't save epochs (ENG-03 already did)
-                    return_raw_clean=True,  # Get artifact-cleaned continuous raw
+                epochs35 = self.loader.load_clean_epochs(
+                    patient_id=patient_id, date=date, trial_type="oddball",
                 )
-            except Exception as e:
+            except FileNotFoundError as e:
                 error_msg = (
-                    f"Failed to load artifact-cleaned EEG for {patient_id} - {date}. "
-                    f"ENG-03 must be run before ENG-02b. Error: {type(e).__name__}: {e}"
+                    f"ENG-03 oddball epochs not found for {patient_id} - {date}. "
+                    f"Run ENG-03 (ArtifactRejector.run_session) first. {e}"
                 )
                 logger.error(error_msg)
                 raise RuntimeError(error_msg) from e
 
-            # Extract rare events from oddball trials
             rare_events = self._extract_rare_events(aligned_trials)
 
             if len(rare_events) < ERP_CONFIG["min_epochs"]:
@@ -242,21 +219,23 @@ class OddballERPPipeline:
                     "status": "insufficient_data",
                 }
 
-            # Create epochs
-            epochs = self._create_epochs(raw, rare_events)
+            trial_windows = self._build_trial_windows(epochs35)
+            mapped_df, mapping_diag = self._map_rare_to_trials(
+                rare_events, trial_windows, sfreq=float(epochs35.info["sfreq"]),
+            )
+            self._last_epoch_diagnostics = mapping_diag
+
+            epochs = self._extract_subepochs(epochs35, mapped_df)
 
             if len(epochs) < ERP_CONFIG["min_epochs"]:
-                logger.warning(f"Insufficient epochs after creation for {patient_id} on {date}: {len(epochs)}")
+                logger.warning(f"Insufficient epochs after mapping for {patient_id} on {date}: {len(epochs)}")
                 return {
                     "patient_id": patient_id,
                     "date": date,
                     "status": "insufficient_epochs",
                 }
 
-            # Compute ERP (average across epochs)
             erp = self._compute_erp(epochs)
-
-            # Quantify P300 features
             features = self._quantify_p300(
                 erp,
                 patient_id,
@@ -265,13 +244,9 @@ class OddballERPPipeline:
                 custom_electrodes=custom_electrodes,
             )
 
-            # Save outputs
             self._save_outputs(patient_id, date, epochs, erp, features)
-
-            # Generate plots
             self._plot_individual_erp(erp, patient_id, date, custom_electrodes=custom_electrodes)
 
-            # Log summary
             if custom_electrodes:
                 logger.info(
                     f"Successfully processed {patient_id} - {date}: {len(epochs)} epochs, custom electrode mode"
@@ -317,45 +292,10 @@ class OddballERPPipeline:
             return pd.DataFrame()
 
         df = pd.read_parquet(aligned_path, engine="pyarrow")
-
-        # Filter for oddball trials
         oddball_trials = df[df["trial_type"].str.lower() == "oddball"].copy()
 
         logger.info(f"Loaded {len(oddball_trials)} oddball trials for {patient_id}")
         return oddball_trials
-
-    def _detect_timezone_offset(self, raw: mne.io.Raw, rare_events: List[Dict[str, Any]]) -> float:
-        """
-        Detect timezone offset between EDF and Unix timestamps.
-
-        Matches the ENG-02 timestamp aligner logic.
-
-        Args:
-            raw: MNE Raw object
-            rare_events: List of rare events with Unix timestamps
-
-        Returns:
-            Timezone offset in seconds
-        """
-        meas_date = raw.info.get("meas_date")
-        if meas_date is None or not rare_events:
-            return 0.0
-
-        edf_start_unix = meas_date.timestamp()
-        # Use earliest event to mirror ENG-02 behavior.
-        first_event_unix = min(event["timestamp_unix"] for event in rare_events)
-
-        diff = abs(first_event_unix - edf_start_unix)
-
-        # If difference > 30 minutes, apply hour-based correction
-        if diff > 1800:
-            correction = (diff // 1800) * 1800
-            if first_event_unix > edf_start_unix:
-                correction = -correction
-            logger.info(f"Timezone offset detected: {correction / 3600:.1f} hours")
-            return correction
-
-        return 0.0
 
     def _extract_rare_events(self, trials_df: pd.DataFrame) -> List[Dict[str, Any]]:
         """
@@ -370,14 +310,13 @@ class OddballERPPipeline:
         rare_events = []
 
         for idx, trial in trials_df.iterrows():
-            # Use bracket notation like timestamp_aligner does
             try:
                 events = trial["sentences"]
             except (KeyError, TypeError):
                 logger.warning(f"Trial {idx}: No 'sentences' field found")
                 continue
 
-            # Convert numpy array to list if necessary (pandas reads parquet nested data as numpy arrays)
+            # pandas deserialises nested parquet columns as numpy arrays, not lists
             if isinstance(events, np.ndarray):
                 events = events.tolist()
 
@@ -394,7 +333,6 @@ class OddballERPPipeline:
                     logger.debug(f"Trial {idx}: event is not a dict (type: {type(event)})")
                     continue
 
-                # Check if this is a rare event with aligned timestamp
                 if event.get("event") == "rare" and "event_start" in event:
                     rare_count_in_trial += 1
                     rare_events.append(
@@ -412,162 +350,165 @@ class OddballERPPipeline:
         logger.info(f"Extracted {len(rare_events)} rare events")
         return rare_events
 
-    def _create_epochs(self, raw: mne.io.Raw, rare_events: List[Dict[str, Any]]) -> mne.Epochs:
-        """
-        Create MNE Epochs around rare beep events.
+    def _build_trial_windows(self, epochs35: mne.Epochs, window_sec: float = 35.0) -> pd.DataFrame:
+        """Build a table of ENG-03 trial start/end times from epoch metadata.
 
         Args:
-            raw: MNE Raw object (continuous EEG data)
-            rare_events: List of rare event dictionaries with Unix timestamps
+            epochs35: ENG-03 oddball epochs (35s fixed-window).
+            window_sec: Trial window length in seconds.
 
         Returns:
-            MNE Epochs object
+            DataFrame with columns eng03_epoch_idx, start_time_unix, end_time_unix.
         """
-        # Get EDF metadata
-        edf_start_unix = raw.info["meas_date"].timestamp()
-        sfreq = raw.info["sfreq"]
-        recording_duration = raw.times[-1]  # Duration of recording in seconds
-        max_sample = int(recording_duration * sfreq)
+        if epochs35.metadata is None:
+            raise ValueError("ENG-03 oddball epochs have no metadata; expected start_time_unix field.")
 
-        # Detect timezone offset (same logic as timestamp_aligner)
-        timezone_offset = self._detect_timezone_offset(raw, rare_events)
-        logger.debug(f"Timezone offset: {timezone_offset / 3600:.1f} hours")
+        md = epochs35.metadata
+        if "start_time_unix" not in md.columns:
+            raise ValueError("ENG-03 metadata missing start_time_unix; cannot map rare events.")
 
+        starts = md["start_time_unix"].astype(float).values
+        ends = (
+            md["end_time_unix"].astype(float).values
+            if "end_time_unix" in md.columns
+            else starts + float(window_sec)
+        )
+
+        return pd.DataFrame({
+            "eng03_epoch_idx": np.arange(len(starts), dtype=int),
+            "start_time_unix": starts,
+            "end_time_unix": ends,
+            "window_sec": float(window_sec),
+        })
+
+    def _map_rare_to_trials(
+        self,
+        rare_events: List[Dict[str, Any]],
+        trial_windows_df: pd.DataFrame,
+        sfreq: float,
+    ) -> tuple:
+        """Map rare-event timestamps into ENG-03 35s trial windows.
+
+        Args:
+            rare_events: Rare events with ``timestamp_unix`` keys.
+            trial_windows_df: Output of ``_build_trial_windows``.
+            sfreq: Sampling frequency of the ENG-03 epochs.
+
+        Returns:
+            (mapped_df, diagnostics) where *mapped_df* contains only events that
+            successfully map to exactly one trial without boundary clipping, and
+            *diagnostics* is a summary dict.
+        """
+        tmin = ERP_CONFIG["tmin"]
+        tmax = ERP_CONFIG["tmax"]
+        starts = trial_windows_df["start_time_unix"].values
+        window_sec = float(trial_windows_df["window_sec"].iloc[0])
+        epoch_ids = trial_windows_df["eng03_epoch_idx"].values
+
+        rows: List[Dict[str, Any]] = []
+        n_unmapped = 0
+        n_duplicate = 0
+        n_boundary = 0
+
+        for event in rare_events:
+            ts = float(event["timestamp_unix"])
+            mask = (starts <= ts) & (ts < starts + window_sec)
+            matched = epoch_ids[mask]
+
+            if len(matched) != 1:
+                if len(matched) > 1:
+                    n_duplicate += 1
+                else:
+                    n_unmapped += 1
+                continue
+
+            epoch_idx = int(matched[0])
+            offset_sec = ts - float(starts[epoch_idx])
+            start_sample = int(np.round((offset_sec + tmin) * sfreq))
+            n_target = int(np.round((tmax - tmin) * sfreq)) + 1
+            end_sample = start_sample + n_target
+
+            if start_sample < 0 or end_sample > int(np.round(window_sec * sfreq)) + 1:
+                n_boundary += 1
+                continue
+
+            rows.append({
+                "timestamp_unix": ts,
+                "eng03_epoch_idx": epoch_idx,
+                "offset_sec": offset_sec,
+                "start_sample": start_sample,
+                "end_sample": end_sample,
+            })
+
+        mapped_df = pd.DataFrame(rows)
         diagnostics = {
             "n_rare_events": len(rare_events),
-            "timezone_offset_seconds": float(timezone_offset),
-            "timezone_offset_hours": float(timezone_offset / 3600),
-            "n_out_of_recording": 0,
-            "n_too_close_to_start": 0,
-            "n_too_close_to_end": 0,
-            "n_valid_events_pre_mne": 0,
-            "n_epochs_post_mne": 0,
-            "n_dropped_by_mne": 0,
-            "timezone_confidence": "high",
-            "timezone_warning_flag": False,
-            "diagnostic_note": "",
+            "n_mapped": len(mapped_df),
+            "n_unmapped": n_unmapped,
+            "n_duplicate": n_duplicate,
+            "n_boundary_clipped": n_boundary,
+            "mapping_rate": len(mapped_df) / max(len(rare_events), 1),
         }
-
-        # Convert Unix timestamps to EDF-relative time (with timezone correction)
-        valid_events = []
-        for event in rare_events:
-            # Apply timezone offset correction (inverse of _edf_to_unix)
-            event["edf_time"] = (event["timestamp_unix"] - edf_start_unix) + timezone_offset
-            event["sample_idx"] = int(event["edf_time"] * sfreq)
-
-            # Validate within recording bounds first.
-            if event["sample_idx"] < 0 or event["sample_idx"] >= max_sample:
-                diagnostics["n_out_of_recording"] += 1
-                logger.warning(
-                    f"Event at Unix {event['timestamp_unix']} → EDF time {event['edf_time']:.2f}s → "
-                    f"sample {event['sample_idx']} is outside recording range [0, {max_sample}]. Skipping."
-                )
-                continue
-
-            # Validate full epoch window bounds to avoid silent post-hoc drops.
-            if event["edf_time"] + ERP_CONFIG["tmin"] < 0:
-                diagnostics["n_too_close_to_start"] += 1
-                logger.warning(
-                    f"Event at Unix {event['timestamp_unix']} is too close to recording start for "
-                    f"epoch window [{ERP_CONFIG['tmin']}, {ERP_CONFIG['tmax']}]. Skipping."
-                )
-                continue
-            if event["edf_time"] + ERP_CONFIG["tmax"] > recording_duration:
-                diagnostics["n_too_close_to_end"] += 1
-                logger.warning(
-                    f"Event at Unix {event['timestamp_unix']} is too close to recording end for "
-                    f"epoch window [{ERP_CONFIG['tmin']}, {ERP_CONFIG['tmax']}]. Skipping."
-                )
-                continue
-
-            valid_events.append(event)
-            logger.debug(
-                f"Event: Unix {event['timestamp_unix']} → EDF {event['edf_time']:.2f}s → sample {event['sample_idx']}"
-            )
-
-        diagnostics["n_valid_events_pre_mne"] = len(valid_events)
-        valid_ratio = (len(valid_events) / len(rare_events)) if rare_events else 0.0
-        if abs(timezone_offset) >= 12 * 3600 or valid_ratio < 0.8:
-            diagnostics["timezone_confidence"] = "low"
-            diagnostics["timezone_warning_flag"] = True
-            diagnostics["diagnostic_note"] = (
-                f"Alignment warning: offset={timezone_offset / 3600:.1f}h, "
-                f"valid_events={len(valid_events)}/{len(rare_events)}."
-            )
-            logger.warning(diagnostics["diagnostic_note"])
-        else:
-            diagnostics["diagnostic_note"] = (
-                f"Offset {timezone_offset / 3600:.1f}h; valid_events={len(valid_events)}/{len(rare_events)}."
-            )
-
-        if len(valid_events) == 0:
-            logger.error("No valid events within recording range after timestamp conversion")
-            self._last_epoch_diagnostics = diagnostics
-            return mne.Epochs(
-                raw,
-                np.array([]).reshape(0, 3),
-                event_id={"rare": 1},
-                tmin=ERP_CONFIG["tmin"],
-                tmax=ERP_CONFIG["tmax"],
-                baseline=ERP_CONFIG["baseline"],
-                preload=True,
-                reject=None,
-                verbose=False,
-            )
-
         logger.info(
-            "Valid events after filtering: %d/%d (out_of_recording=%d, too_close_to_start=%d, too_close_to_end=%d)",
-            len(valid_events),
-            len(rare_events),
-            diagnostics["n_out_of_recording"],
-            diagnostics["n_too_close_to_start"],
-            diagnostics["n_too_close_to_end"],
+            "Rare-event mapping: %d/%d mapped (unmapped=%d, duplicate=%d, boundary=%d)",
+            diagnostics["n_mapped"], diagnostics["n_rare_events"],
+            n_unmapped, n_duplicate, n_boundary,
         )
+        return mapped_df, diagnostics
 
-        # Create MNE events array: [sample_index, 0, event_id]
-        mne_events = np.array([[e["sample_idx"], 0, 1] for e in valid_events])
-
-        # Select EEG channels (exclude non-EEG via shared config, aligned with ENG-03)
-        exclude_ch_names = signal_utils.exclude_non_eeg_channels(raw)
-        picks = mne.pick_types(raw.info, eeg=True, exclude=exclude_ch_names)
-
-        # Create epochs
-        epochs = mne.Epochs(
-            raw,
-            mne_events,
-            event_id={"rare": 1},
-            tmin=ERP_CONFIG["tmin"],
-            tmax=ERP_CONFIG["tmax"],
-            baseline=ERP_CONFIG["baseline"],
-            picks=picks,
-            preload=True,
-            proj=False,  # Don't apply projections yet (will be done in ENG-03)
-            reject=None,  # No artifact rejection (will be done in ENG-03)
-            verbose=self.verbose,
-        )
-
-        diagnostics["n_epochs_post_mne"] = len(epochs)
-        diagnostics["n_dropped_by_mne"] = len(valid_events) - len(epochs)
-        if diagnostics["n_dropped_by_mne"] > 0:
-            logger.warning(
-                "MNE dropped %d event(s) after pre-filtering",
-                diagnostics["n_dropped_by_mne"],
-            )
-        self._last_epoch_diagnostics = diagnostics
-
-        logger.info(f"Created {len(epochs)} epochs (shape: {epochs.get_data().shape})")
-        return epochs
-
-    def _compute_erp(self, epochs: mne.Epochs) -> mne.Evoked:
-        """
-        Compute ERP by averaging epochs.
+    def _extract_subepochs(
+        self,
+        epochs35: mne.Epochs,
+        mapped_df: pd.DataFrame,
+    ) -> mne.EpochsArray:
+        """Slice 900ms sub-epochs from 35s ENG-03 epochs.
 
         Args:
-            epochs: MNE Epochs object
+            epochs35: Full 35s epoch objects.
+            mapped_df: Output of ``_map_rare_to_trials`` with start_sample / end_sample.
 
         Returns:
-            MNE Evoked object (averaged ERP)
+            ``mne.EpochsArray`` of shape (n_events, n_channels, n_times).
         """
+        tmin = ERP_CONFIG["tmin"]
+        tmax = ERP_CONFIG["tmax"]
+        sfreq = float(epochs35.info["sfreq"])
+        n_target = int(np.round((tmax - tmin) * sfreq)) + 1
+
+        src = epochs35.get_data()  # (n_epochs, n_channels, n_times)
+        slices: List[np.ndarray] = []
+
+        for _, row in mapped_df.iterrows():
+            eidx = int(row["eng03_epoch_idx"])
+            s0 = int(row["start_sample"])
+            s1 = s0 + n_target
+            if s0 < 0 or s1 > src.shape[-1]:
+                continue
+            slices.append(src[eidx, :, s0:s1])
+
+        if len(slices) == 0:
+            logger.warning("No sub-epochs could be extracted from ENG-03 trials")
+            data_1 = np.zeros((1, len(epochs35.ch_names), n_target))
+            placeholder = mne.EpochsArray(
+                data_1, info=epochs35.info.copy(), tmin=tmin,
+                baseline=ERP_CONFIG["baseline"], verbose=False,
+            )
+            placeholder.drop([0], reason="PLACEHOLDER")
+            return placeholder
+
+        data = np.stack(slices, axis=0)
+        sub_epochs = mne.EpochsArray(
+            data,
+            info=epochs35.info.copy(),
+            tmin=tmin,
+            baseline=ERP_CONFIG["baseline"],
+            verbose=False,
+        )
+        logger.info(f"Extracted {len(sub_epochs)} sub-epochs from ENG-03 35s trials")
+        return sub_epochs
+
+    def _compute_erp(self, epochs: mne.Epochs) -> mne.Evoked:
+        """Average epochs to produce the ERP."""
         erp = epochs.average()
         logger.info(f"Computed ERP from {len(epochs)} epochs")
         return erp
@@ -588,7 +529,6 @@ class OddballERPPipeline:
         if n_flagged == 0:
             return f"All electrodes valid, averaged {n_valid}/3"
 
-        # Summarize issues
         issues = []
         for electrode in ["Pz", "Cz", "Fz"]:
             if not composite[f"{electrode}_is_valid"]:
@@ -627,7 +567,6 @@ class OddballERPPipeline:
         Returns:
             Dictionary of P300 features
         """
-        # Initialize base features
         features = {
             "patient_id": patient_id,
             "date": date,
@@ -635,63 +574,50 @@ class OddballERPPipeline:
             "processing_timestamp": datetime.now().isoformat(),
         }
 
-        # Compute baseline noise level
         baseline_mask = (erp.times >= ERP_CONFIG["tmin"]) & (erp.times <= 0)
         baseline_data = erp.data[:, baseline_mask]
         features["baseline_std_uV"] = float(np.std(baseline_data) * 1e6)
 
-        # Determine which electrodes to analyze
         if custom_electrodes:
-            # Analyze only requested electrodes.
             logger.info(f"{patient_id}: Using custom electrodes: {custom_electrodes}")
-
             for electrode in custom_electrodes:
                 p300_features = self._detect_p300_peak(erp, electrode)
                 features[f"p300_amplitude_{electrode}_uV"] = p300_features["amplitude"]
                 features[f"p300_latency_{electrode}_ms"] = p300_features["latency"]
-
-            # Skip composite score for custom electrode mode.
+            # No composite scoring in custom mode
             features["qc_notes"] = f"Custom electrode analysis: {','.join(custom_electrodes)}"
 
         else:
-            # Default mode: analyze Pz/Cz/Fz and compute a composite score.
             for electrode in ERP_CONFIG["midline_electrodes"]:
                 p300_features = self._detect_p300_peak(erp, electrode)
                 features[f"p300_amplitude_{electrode}_uV"] = p300_features["amplitude"]
                 features[f"p300_latency_{electrode}_ms"] = p300_features["latency"]
 
-            # Compute composite P300 and QC fields.
             composite = self._compute_composite_p300(erp, patient_id)
 
-            # Add composite fields.
             features.update(
                 {
-                    # Composite metrics
                     "p300_composite_amplitude_uV": composite["composite_amplitude"],
                     "p300_composite_latency_ms": composite["composite_latency"],
-                    # Selected electrode
                     "p300_best_electrode": composite["best_electrode"],
-                    # Reliability counts
                     "p300_n_valid_electrodes": composite["n_valid_electrodes"],
                     "p300_n_flagged_electrodes": composite["n_flagged_electrodes"],
                 }
             )
 
-            # Generate QC notes.
             features["qc_notes"] = self._generate_qc_notes(composite)
 
-            # Compatibility fields expected by downstream code.
+            # Aliases expected by downstream code
             features["p300_amplitude_uV"] = composite["composite_amplitude"]
             features["p300_latency_ms"] = composite["composite_latency"]
 
-            # Log flagged electrodes.
             if composite["n_flagged_electrodes"] > 0:
                 logger.warning(
                     f"{patient_id} QC warning: {composite['n_flagged_electrodes']} electrode(s) flagged - "
                     f"{features['qc_notes']}"
                 )
 
-        # Merge epoch/timezone diagnostics from _create_epochs so verify script and parquet have them
+        # Mapping diagnostics flow through to the feature table for traceability
         if self._last_epoch_diagnostics:
             for key, value in self._last_epoch_diagnostics.items():
                 if key not in features:
@@ -710,12 +636,10 @@ class OddballERPPipeline:
         Returns:
             Dictionary with amplitude and latency
         """
-        # Check if electrode exists (case-insensitive)
         electrode_names = [ch.upper() for ch in erp.ch_names]
         electrode_upper = electrode.upper()
 
         if electrode_upper not in electrode_names:
-            # Show first 10 electrodes to help selection.
             available = ", ".join(erp.ch_names[:10])
             if len(erp.ch_names) > 10:
                 available += f" ... ({len(erp.ch_names)} total)"
@@ -724,12 +648,10 @@ class OddballERPPipeline:
             )
             return {"amplitude": np.nan, "latency": np.nan}
 
-        # Get electrode index (case-insensitive match)
         ch_idx = electrode_names.index(electrode_upper)
         data = erp.data[ch_idx, :]
         times = erp.times
 
-        # Define P300 search window
         window_start, window_end = ERP_CONFIG["p300_window"]
         window_mask = (times >= window_start) & (times <= window_end)
 
@@ -737,13 +659,12 @@ class OddballERPPipeline:
             logger.warning(f"P300 window outside epoch range for {electrode}")
             return {"amplitude": np.nan, "latency": np.nan}
 
-        # Find peak (maximum positive deflection in window)
         window_data = data[window_mask]
         window_times = times[window_mask]
 
         peak_idx = np.argmax(window_data)
-        amplitude = float(window_data[peak_idx] * 1e6)  # Convert V to µV
-        latency = float(window_times[peak_idx] * 1000)  # Convert s to ms
+        amplitude = float(window_data[peak_idx] * 1e6)  # V → µV
+        latency = float(window_times[peak_idx] * 1000)  # s → ms
 
         return {"amplitude": amplitude, "latency": latency}
 
@@ -775,13 +696,11 @@ class OddballERPPipeline:
             "issues": [],
         }
 
-        # Check for NaN
         if np.isnan(amplitude) or np.isnan(latency):
             validation["is_valid"] = False
             validation["issues"].append("missing_data")
             return validation
 
-        # Check polarity (must be positive)
         if amplitude <= ERP_CONFIG["p300_min_amplitude"]:
             validation["is_valid"] = False
             validation["is_positive"] = False
@@ -791,7 +710,6 @@ class OddballERPPipeline:
                 "likely inverted reference or absent P300"
             )
 
-        # Check latency range (max acceptable)
         min_lat, max_lat = ERP_CONFIG["p300_max_latency_range"]
         if not (min_lat <= latency <= max_lat):
             validation["is_valid"] = False
@@ -801,7 +719,7 @@ class OddballERPPipeline:
                 f"{patient_id} - {electrode}: Latency {latency:.1f}ms outside acceptable range [{min_lat}-{max_lat}ms]"
             )
 
-        # Check expected latency (for QC, doesn't invalidate)
+        # Atypical latency flags for QC but doesn't invalidate the electrode
         exp_min, exp_max = ERP_CONFIG["p300_expected_latency_range"]
         if not (exp_min <= latency <= exp_max):
             validation["is_expected_latency"] = False
@@ -830,13 +748,11 @@ class OddballERPPipeline:
         valid_electrodes = []
         flagged_electrodes = []
 
-        # Extract and validate each electrode.
         for electrode in ERP_CONFIG["midline_electrodes"]:
             p300 = self._detect_p300_peak(erp, electrode)
             amplitude = p300["amplitude"]
             latency = p300["latency"]
 
-            # Validate quality.
             validation = self._validate_p300_electrode(electrode, amplitude, latency, patient_id)
 
             electrode_data[electrode] = {
@@ -849,7 +765,6 @@ class OddballERPPipeline:
                 "issues": validation["issues"],
             }
 
-            # Collect valid measurements.
             if validation["is_valid"]:
                 valid_amplitudes.append(amplitude)
                 valid_latencies.append(latency)
@@ -857,7 +772,6 @@ class OddballERPPipeline:
             else:
                 flagged_electrodes.append(electrode)
 
-        # Compute composite scores.
         if valid_amplitudes:
             composite = {
                 "composite_amplitude": float(np.mean(valid_amplitudes)),
@@ -888,18 +802,15 @@ class OddballERPPipeline:
             }
             logger.warning(f"{patient_id}: No valid P300 detected in any electrode!")
 
-        # Add QC flags.
         composite["n_flagged_electrodes"] = len(flagged_electrodes)
         composite["flagged_electrodes"] = ",".join(flagged_electrodes) if flagged_electrodes else ""
 
-        # Add per-electrode validation details.
         for electrode in ERP_CONFIG["midline_electrodes"]:
             data = electrode_data[electrode]
             composite[f"{electrode}_is_valid"] = data["is_valid"]
             composite[f"{electrode}_is_positive"] = data["is_positive"]
             composite[f"{electrode}_issues"] = ",".join(data["issues"]) if data["issues"] else ""
 
-        # Log flagged electrodes.
         if flagged_electrodes:
             for elec in flagged_electrodes:
                 data = electrode_data[elec]
@@ -920,30 +831,20 @@ class OddballERPPipeline:
         features: Dict[str, Any],
     ):
         """
-        Save epochs, ERP, and features to disk.
+        Save ERP and features to disk.
 
         Args:
             patient_id: Patient identifier
             date: Session date
-            epochs: MNE Epochs object
+            epochs: MNE Epochs object (not saved — regenerated on demand from ENG-03)
             erp: MNE Evoked object
             features: Dictionary of P300 features
         """
-        # Save epochs
-        epochs_file = self._output_paths.epochs / f"{patient_id}_{date}_oddball-epo.fif"
-        epochs.save(epochs_file, overwrite=True)
-        logger.info(f"Saved epochs: {epochs_file}")
-
-        # Save ERP
         erp_file = self._output_paths.erps / f"{patient_id}_{date}_oddball-ave.fif"
         erp.save(erp_file, overwrite=True)
         logger.info(f"Saved ERP: {erp_file}")
 
-        # Save features
-        features_file = self._output_paths.features / f"{patient_id}_{date}_p300_features.parquet"
         features_df = pd.DataFrame([features])
-        features_df.to_parquet(features_file)
-        logger.info(f"Saved features: {features_file}")
         self._update_master_feature_table(features_df)
 
     def _update_master_feature_table(self, incoming_features: pd.DataFrame) -> pd.DataFrame:
@@ -963,7 +864,6 @@ class OddballERPPipeline:
         else:
             combined = incoming_features.copy()
 
-        # Keep latest row per patient/date.
         combined = combined.drop_duplicates(subset=["patient_id", "date"], keep="last")
         combined.to_parquet(master_path)
         logger.info(f"Updated master feature table: {master_path} ({len(combined)} rows)")
@@ -1094,7 +994,6 @@ class OddballERPPipeline:
             logger.warning("No features extracted from any patient")
             return pd.DataFrame()
 
-        # Combine all features
         features_df = pd.concat(all_features, ignore_index=True)
         return self._update_master_feature_table(features_df)
 
@@ -1110,8 +1009,6 @@ class OddballERPPipeline:
 
         for file_path in aligned_files:
             patient_id = file_path.stem.replace("_events", "")
-
-            # Check if this patient has oddball trials
             try:
                 df = pd.read_parquet(file_path)
                 has_oddball = (df["trial_type"].str.lower() == "oddball").any()
@@ -1139,7 +1036,6 @@ class OddballERPPipeline:
         aggregate_path = self._output_paths.erps / aggregate_filename
 
         if patient_ids is None:
-            # Include only session ERP files.
             candidate_files = list(self._output_paths.erps.glob("*_oddball-ave.fif"))
         else:
             candidate_files = []
@@ -1150,7 +1046,7 @@ class OddballERPPipeline:
         erp_files = []
         excluded_files = []
         for erp_file in candidate_files:
-            # Require patient_date_oddball-ave.fif naming shape.
+            # Skip the grand-average file itself and any oddly named files
             if erp_file.name == aggregate_filename or erp_file == aggregate_path:
                 excluded_files.append(erp_file.name)
                 continue
@@ -1172,7 +1068,6 @@ class OddballERPPipeline:
 
         logger.info("Computing grand average from %d session ERP file(s)", len(erp_files))
 
-        # Load all ERPs
         all_erps = []
         for erp_file in erp_files:
             try:
@@ -1187,15 +1082,12 @@ class OddballERPPipeline:
             logger.warning("No ERPs successfully loaded")
             return None
 
-        # Compute grand average
         grand_avg = mne.grand_average(all_erps)
 
-        # Save grand average
         grand_avg_file = self._output_paths.erps / "grand_average_oddball-ave.fif"
         grand_avg.save(grand_avg_file, overwrite=True)
         logger.info(f"Saved grand average ERP: {grand_avg_file}")
 
-        # Plot grand average
         self._plot_grand_average(grand_avg, len(all_erps))
 
         return grand_avg
@@ -1244,7 +1136,6 @@ class OddballERPPipeline:
         if features.empty:
             return {"status": "empty"}
 
-        # Aggregate statistics
         report = {
             "total_patients": int(features["patient_id"].nunique()),
             "total_sessions": len(features),
@@ -1275,14 +1166,11 @@ class OddballERPPipeline:
                 features["timezone_confidence"].fillna("unknown").value_counts().to_dict()
             )
 
-        # Save report
         report_path = self._output_paths.qc / "erp_qc_report.json"
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
 
         logger.info(f"Saved QC report: {report_path}")
-
-        # Print summary
         self._print_qc_summary(report)
 
         return report

@@ -2,34 +2,38 @@
 
 **Status:** ✅ Complete  
 **Assignee:** Arnav Dixit  
-**Dependencies:** ENG-02 (Timestamp Alignment), ENG-01 (Data Loader)
+**Dependencies:** ENG-02 (Timestamp Alignment), ENG-03 (Artifact Rejection), ENG-01 (Data Loader)
 
 ---
 
 ## Overview
 
-ERP analysis pipeline for oddball trials. It extracts EEG epochs around rare beep events, computes averaged ERPs, quantifies P300 features across midline electrodes, and generates plots and QC reports. It supports default analysis (Pz/Cz/Fz) and custom electrode sets.
+ERP analysis pipeline for oddball trials. Loads ICA-cleaned 35-second oddball epochs produced by ENG-03, maps rare-event timestamps into those trial windows, extracts short 900ms sub-epochs around each rare beep, computes averaged ERPs, quantifies P300 features across midline electrodes, and generates plots and QC reports. Supports default analysis (Pz/Cz/Fz) with composite scoring and custom electrode sets.
 
-### Artifact Rejection Integration
+### ENG-03 Epoch Integration
 
-The pipeline requires ICA-cleaned EEG from ENG-03:
-- Loads artifact-cleaned continuous raw via `ArtifactRejector.run_session(return_raw_clean=True)`
-- **Dependency**: ENG-03 must be run before ENG-02b
-- Fails with clear error if ENG-03 hasn't processed the session
+The pipeline reads ENG-03's saved oddball trial epochs from disk:
+- Loads `data/processed/epochs/{patient_id}/{date}/oddball-epo.fif` via `UnifiedDataLoader.load_clean_epochs()`
+- Maps each rare-event timestamp from ENG-02 aligned events into the appropriate 35s trial window
+- Extracts 900ms sub-epochs (`-200ms to +700ms` around each rare beep) from within those trials
+- **Dependency**: ENG-03 must be run first (`ArtifactRejector.run_session(save=True)`) to generate the epoch files
+- Fails with clear error if the `.fif` file is missing
 
-This ensures all P300 measurements use artifact-cleaned data with eye blinks, heartbeat, and muscle artifacts removed before epoch creation.
+Rare events that fall inside trials dropped by ENG-03's PTP rejection are silently excluded (no fallback to raw EEG).
 
 ## Implementation Summary
 
 The `OddballERPPipeline` class in `src/data_processing/erp_pipeline.py` provides:
 
-**Epoch Extraction**: Loads aligned events from ENG-02, converts Unix timestamps to EDF-relative time with timezone detection, validates epoch boundaries, and creates MNE Epochs objects.
+**Trial Window Mapping**: Reads ENG-03 epoch metadata (`start_time_unix`, `end_time_unix`) to build a table of trial time windows. Each rare-event timestamp is matched to its parent 35s trial by checking `trial_start <= event_time < trial_start + 35s`. Events that don't map to any surviving trial, map to multiple trials, or whose sub-epoch window crosses a trial boundary are excluded.
 
-**ERP Computation**: Averages epochs to produce clean ERP waveforms with baseline correction (-200 to 0ms).
+**Sub-Epoch Extraction**: For each mapped rare event, slices a 900ms window from the parent 35s epoch's data array. The result is an `mne.EpochsArray` with the same channel set and sampling rate as ENG-03's output, with baseline correction applied (`-200ms to 0ms`).
 
-**P300 Quantification**: Detects and measures P300 peaks (amplitude, latency). By default, the pipeline analyzes Pz/Cz/Fz, validates each electrode (positive amplitude, latency 250-600ms), and computes composite metrics from valid electrodes. It also supports custom electrode analysis.
+**ERP Computation**: Averages sub-epochs to produce clean ERP waveforms.
 
-**Batch Processing**: Processes multiple patients with progress tracking. Updates both per-session feature files and a master `p300_features.parquet` table with deduplication.
+**P300 Quantification**: Detects and measures P300 peaks (amplitude, latency). By default, the pipeline analyzes Pz/Cz/Fz, validates each electrode (positive amplitude, latency 250-600ms), and computes composite metrics from valid electrodes. Also supports custom electrode analysis.
+
+**Batch Processing**: Processes multiple patients with progress tracking. All features go into a single `p300_features.parquet` master table with deduplication on `(patient_id, date)`.
 
 **Visualization**: Generates two-panel plots showing butterfly plots (all channels) and electrode-specific traces (Pz/Cz/Fz by default, or custom electrodes if specified). Creates individual and grand average ERPs, with automatic exclusion of aggregate files to prevent contamination.
 
@@ -60,36 +64,29 @@ ERP_CONFIG = {
 ### Data Flow
 
 ```
-Aligned Events (ENG-02)
-    ↓
-Load Oddball Trials
-    ↓
-Extract Rare Beep Events
-    ↓
-Convert Timestamps (Unix → EDF)
-    ↓
-Validate Full Epoch Window Bounds
-    ↓
-Create MNE Epochs (-200ms to +700ms)
-    ↓
-Average Epochs → ERP
-    ↓
-Quantify P300 (amplitude, latency)
-    ↓
-Save Outputs + Generate Plots
+Aligned Events (ENG-02)          ENG-03 Oddball Epochs (35s .fif)
+    ↓                                 ↓
+Extract Rare Beep Timestamps     Build Trial Windows (metadata)
+    ↓                                 ↓
+    └──────── Map Rare Events ────────┘
+                   ↓
+    Extract 900ms Sub-Epochs from 35s Trials
+                   ↓
+          Average Sub-Epochs → ERP
+                   ↓
+    Quantify P300 (amplitude, latency, composite)
+                   ↓
+       Save Outputs + Generate Plots
 ```
 
 ### Output Structure
 
 ```
 data/processed/
-├── epochs/
-│   └── {patient_id}_{date}_oddball-epo.fif
 ├── erps/
 │   ├── {patient_id}_{date}_oddball-ave.fif
 │   └── grand_average_oddball-ave.fif
 ├── features/
-│   ├── {patient_id}_{date}_p300_features.parquet
 │   └── p300_features.parquet
 ├── plots/erp/
 │   ├── {patient_id}_{date}_oddball_erp.png
@@ -97,6 +94,8 @@ data/processed/
 └── qc/
     └── erp_qc_report.json
 ```
+
+> 900ms epochs are not saved — they're re-sliced from ENG-03's 35s `.fif` on demand.
 
 ### Feature Schema
 
@@ -145,9 +144,7 @@ The pipeline outputs 19 essential columns focused on P300 analysis:
 |--------|------|-------------|
 | qc_notes | str | QC summary (e.g., "Pz inverted, used Fz only") |
 
-**Design Note**: The schema omits extra diagnostic fields that are not used downstream (for example, per-electrode QC booleans and redundant string lists). `qc_notes` keeps a short summary of any issues.
-
-**Epoch/timezone diagnostics**: When available (after epoch creation), the parquet also includes: `n_valid_events_pre_mne`, `n_dropped_by_mne`, `n_out_of_recording`, `n_too_close_to_start`, `n_too_close_to_end`, `timezone_offset_hours`, `timezone_confidence`, `timezone_warning_flag`, `diagnostic_note` (and optionally `n_rare_events`, `n_epochs_post_mne`). These are used by the verification script sections [2b] and [10].
+**Mapping diagnostics**: The parquet also includes `n_rare_events`, `n_mapped`, `n_unmapped`, `n_duplicate`, `n_boundary_clipped`, `mapping_rate` from the trial-mapping step.
 
 ### Validation Criteria
 
@@ -161,8 +158,6 @@ An electrode passes QC if:
 Two additional fields provide simplified access to the composite metrics:
 - `p300_amplitude_uV` → Alias for `p300_composite_amplitude_uV`
 - `p300_latency_ms` → Alias for `p300_composite_latency_ms`
-
-These aliases let scripts access P300 values without requiring the composite prefix.
 
 ### Example: Patient with Inverted Pz
 ```
@@ -221,9 +216,18 @@ With `--electrodes`, Panel 2 shows the requested channels instead of Fz/Cz/Pz.
 
 Grand-average plots use the same layout and average across all included sessions. Use `--grand-average` with `--all`.
 
-Plots show waveforms directly. Feature extraction uses the validation and composite rules described above.
-
 ## Usage
+
+### Prerequisites
+
+1. **ENG-02** must be run first so aligned events exist: `data/processed/aligned_events/{patient_id}_events.parquet`.
+2. **ENG-03** must be run first to generate cleaned oddball epoch files:
+   ```python
+   from src.data_processing.artifact_rejection import ArtifactRejector
+   ar = ArtifactRejector(verbose=True)
+   ar.run_session(patient_id="CON008", date="2025-08-14", save=True)
+   ```
+   This creates `data/processed/epochs/CON008/2025-08-14/oddball-epo.fif`.
 
 ### Command Line Interface
 
@@ -258,32 +262,15 @@ python scripts/run_erp_pipeline.py --patient CON008 --verbose
 
 ### Testing with real data locally
 
-1. **Prerequisites**
-   - **ENG-02** must be run first so aligned events exist: `data/processed/aligned_events/{patient_id}_events.parquet`. Each parquet must contain oddball trials with `sentences` (rare/standard events).
-   - **EDF files** must be available where `UnifiedDataLoader` expects them (e.g. under `data/` or `ONEDRIVE_ROOT` per `src/data_loading/config.py`).
-   - **Environment**: From repo root, activate the same env used for ENG-02/ENG-03 (e.g. `capstone`), ensure `mne` and `mne-icalabel` are installed (`pip install -e .` in `awaken-ai`).
-
-2. **Order of operations**
-   - There is no separate “run ENG-03” step. When you run the ERP pipeline, it calls `ArtifactRejector.run_session(..., return_raw_clean=True)`, which loads the EDF, runs ICA artifact rejection, and returns the cleaned continuous EEG. If that fails (missing EDF, missing aligned events, or ICA error), the pipeline raises a `RuntimeError` with a message that ENG-03 must be run first (i.e. the artifact-rejection step failed).
-
-3. **Commands (from `awaken-ai/`)**
+1. Run ENG-02 for your patient, then ENG-03 (`ArtifactRejector.run_session(save=True)`).
+2. Run the ERP pipeline:
    ```bash
    cd awaken-ai
-
-   # See which patients have oddball data
-   python scripts/run_erp_pipeline.py --list
-
-   # Run on one patient (uses ICA-cleaned EEG internally)
    python scripts/run_erp_pipeline.py --patient CON008 --verbose
-
-   # Optional: restrict to one session date
-   python scripts/run_erp_pipeline.py --patient CON008 --date 2025-08-14 --verbose
    ```
-
-4. **What to check**
-   - Logs should show: `Loading artifact-cleaned EEG from ENG-03 for CON008 - 2025-08-14` then epoch extraction and P300 quantification.
-   - Outputs under `data/processed/`: `features/*.parquet`, `plots/erp/*.png`, `erps/*-ave.fif`, `epochs/*-epo.fif`.
-   - If you see `Failed to load artifact-cleaned EEG ... ENG-03 must be run before ENG-02b`, fix the underlying cause (e.g. missing aligned events parquet, missing EDF, or bad paths in `config.py` / `ONEDRIVE_ROOT`).
+3. Logs should show: `Loading ENG-03 oddball epochs for CON008 - 2025-08-14` then mapping, sub-epoch extraction, and P300 quantification.
+4. Outputs under `data/processed/`: `features/p300_features.parquet`, `plots/erp/*.png`, `erps/*-ave.fif`.
+5. If you see `ENG-03 oddball epochs not found`, run ENG-03 for that patient/date first.
 
 ### Python API
 
@@ -291,24 +278,19 @@ python scripts/run_erp_pipeline.py --patient CON008 --verbose
 from pathlib import Path
 from src.data_processing.erp_pipeline import OddballERPPipeline
 
-# Initialize pipeline
 pipeline = OddballERPPipeline(
     data_root=Path("data"),
     output_dir=Path("data/processed"),
     verbose=True
 )
 
-# Process single patient
 result = pipeline.process_patient("CON008")
 print(result["features"])
 
-# Process all patients
 features_df = pipeline.process_all_patients()
 
-# Compute grand average
 grand_avg = pipeline.compute_grand_average()
 
-# Generate QC report
 qc_report = pipeline.generate_qc_report()
 ```
 
@@ -318,19 +300,20 @@ Unit tests in `tests/test_erp_pipeline.py` cover:
 
 - Pipeline initialization, directory creation
 - Rare event extraction from aligned trials
-- Timestamp conversion (Unix → EDF)
-- Epoch creation parameters
+- Trial window building from ENG-03 epoch metadata
+- Rare-event-to-trial mapping (all mapped, unmapped, boundary clipped)
+- Sub-epoch extraction (shape, timing, empty case)
 - ERP computation (averaging)
 - P300 peak detection
 - Feature quantification (default and custom electrode modes)
-- Output saving (epochs, ERPs, features)
+- Output saving (ERPs, features)
 - Plotting (individual, grand average)
 - QC report generation
 - Batch processing
 - Grand-average exclusion of aggregate files
-- Epoch boundary filtering
-- ENG-02 timezone consistency
 - Master feature table upsert
+- ENG-03 integration (missing epochs error, successful load)
+- Full pipeline integration with mocked ENG-03 epochs
 
 Run: `pytest tests/test_erp_pipeline.py -v`
 
@@ -348,9 +331,11 @@ QC_REPORTS_DIR = PROCESSED_DATA_DIR / "qc"
 
 ## Design Decisions
 
-**1. No Artifact Rejection Yet**
-- Keeping all epochs for now (ENG-03 will add ICA-based rejection)
-- `reject=None` in `mne.Epochs()` to allow future filtering
+**1. ENG-03 Epoch Reuse**
+- Loads pre-computed artifact-cleaned 35s epochs from disk rather than re-running ICA each time
+- Maps rare events into those epochs via Unix timestamps and extracts 900ms sub-epochs
+- Events from ENG-03-dropped trials are silently excluded — no fallback to raw EEG
+- Trade-off: some rare events may be lost due to trial-level PTP rejection, but all data used is artifact-cleaned
 
 **2. Multi-Electrode P300**
 - Pz (parietal) is primary - usually strongest P300
@@ -364,37 +349,24 @@ QC_REPORTS_DIR = PROCESSED_DATA_DIR / "qc"
 - Each session → separate epoch/ERP files
 - Features aggregated in master table
 
-**4. Timestamp Conversion**
-```python
-# ENG-02 gives Unix timestamps
-event_unix = 1704110405.0
-
-# Convert to EDF-relative time
-edf_start_unix = raw.info['meas_date'].timestamp()
-edf_time = event_unix - edf_start_unix
-
-# Convert to sample index
-sample_idx = int(edf_time * sfreq)
-```
-
 ## Limitations
 
-1. No artifact rejection yet (all epochs kept) - ENG-03 will add this
-2. Fixed 300-600ms P300 window (could make adaptive later)
-3. Default analysis limited to Fz/Cz/Pz (use `--electrodes` for others)
-4. Loads entire EDF per session (fine for current data sizes)
+1. Fixed 300-600ms P300 window (could make adaptive later)
+2. Default analysis limited to Fz/Cz/Pz (use `--electrodes` for others)
+3. Rare events in ENG-03-dropped trials are lost (depends on ENG-03 rejection settings)
+4. Event count per session is small (typically 9-15 rare events), making ERP averages sensitive to dropped trials
 
 ## Integration Points
 
 ### Upstream Dependencies
 
 - **ENG-02**: Provides aligned events with `event_start` timestamps
-- **ENG-01**: Provides `UnifiedDataLoader` for EDF access
+- **ENG-03**: Provides ICA-cleaned 35s oddball epochs (`.fif` files)
+- **ENG-01**: Provides `UnifiedDataLoader` for epoch loading
 - **DAT-03**: Provides unified stimulus data schema
 
 ### Downstream Consumers
 
-- **ENG-03 (Artifact Rejection)**: Processes saved epochs with ICA
 - **SCI-01 (P300 Features)**: Uses P300 feature table for statistical analysis
 - **VIS-01 (Validation Plots)**: Uses ERP plots for validation figures
 - **MOD-01 (Feature Assembly)**: Integrates P300 features into master feature table
@@ -418,10 +390,10 @@ Checklist:
 
 ## Performance
 
-- **Single Patient**: ~10-30 seconds (depends on number of sessions/epochs)
-- **Batch Processing**: ~5-10 minutes for 10 patients
-- **Memory Usage**: ~500MB per patient (peak during epoch creation)
-- **Output Size**: ~50-100MB per patient (epochs + ERPs + plots)
+- **Single Patient**: ~5-15 seconds (no ICA re-run, loads pre-computed ENG-03 epochs)
+- **Batch Processing**: ~2-5 minutes for 10 patients
+- **Memory Usage**: ~200MB per patient (peak during epoch loading)
+- **Output Size**: ~5-10MB per patient (ERP `.fif` + plot; 900ms epochs are not saved)
 
 ## Future Work
 
@@ -449,22 +421,3 @@ Checklist:
 - `docs/Oddball_pipeline.md`: Detailed pipeline specification
 - `tasks/ENG-02.md`: Timestamp alignment implementation
 - `PROJECT_SCHEDULE.md`: Project timeline and milestones
-
-## Status
-
-**Status:** ✅ Complete  
-**Implementation:** ~6 days  
-**Code**: ~800 lines (pipeline) + ~400 (tests) + ~150 (CLI)
-
-All deliverables complete:
-- Core pipeline module with composite P300 scoring
-- Epoch extraction and ERP computation
-- Multi-electrode validation and composite scoring
-- Custom electrode analysis mode
-- Batch processing with master table management
-- Individual and grand average visualization
-- Quality control reporting with concise notes
-- Comprehensive test coverage
-- Full CLI with electrode discovery
-
-Pipeline ready for ENG-03 (artifact rejection) and downstream analysis tasks.

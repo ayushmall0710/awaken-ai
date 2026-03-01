@@ -227,3 +227,4 @@ reports/*.md
 
 # Exploratory Data Analysis artifacts
 eda/*.parquet
+eda/verify_eng03_to_eng02b_epoching.ipynb
