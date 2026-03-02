@@ -66,6 +66,8 @@ class LanguageTrackingAnalysis(BasePipeline):
     #   Word: ~1.3s per word -> ~0.77 Hz, nominal band 0.70-0.90 Hz
     SENTENCE_BAND: tuple = (0.05, 0.08)
     WORD_BAND: tuple = (0.70, 0.90)
+    SENTENCE_BAND_WIDTH_HZ: float = 0.08 - 0.05  # 0.03
+    WORD_BAND_WIDTH_HZ: float = 0.90 - 0.70  # 0.20
 
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
@@ -187,12 +189,14 @@ class LanguageTrackingAnalysis(BasePipeline):
             "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
             "morlet_itpc_word": morlet_metrics["itpc_word"],
             "morlet_ratio_sent_word": morlet_metrics["ratio_sent_word"],
+            "morlet_ratio_bw_normalized": morlet_metrics["ratio_bw_normalized"],
             "morlet_freq_sentence_hz": morlet_metrics["freq_sentence_hz"],
             "morlet_freq_word_hz": morlet_metrics["freq_word_hz"],
             # DFT
             "dft_itpc_sentence": dft_metrics["itpc_sentence"],
             "dft_itpc_word": dft_metrics["itpc_word"],
             "dft_ratio_sent_word": dft_metrics["ratio_sent_word"],
+            "dft_ratio_bw_normalized": dft_metrics["ratio_bw_normalized"],
             "dft_freq_sentence_hz": dft_metrics["freq_sentence_hz"],
             "dft_freq_word_hz": dft_metrics["freq_word_hz"],
             # Permutation test
@@ -424,13 +428,19 @@ class LanguageTrackingAnalysis(BasePipeline):
         sent_mask = (freqs >= self.SENTENCE_BAND[0]) & (freqs <= self.SENTENCE_BAND[1])
         word_mask = (freqs >= self.WORD_BAND[0]) & (freqs <= self.WORD_BAND[1])
 
-        itpc_sent_val = float(np.mean(itpc_spectrum[:, sent_mask]))
-        itpc_word_val = float(np.mean(itpc_spectrum[:, word_mask]))
-        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
-
-        # Report the frequency of peak ITPC within each band (mean over channels)
+        # Mean over channels, then peak within band (avoids 6.7x bin-count asymmetry)
         mean_sent_spec = np.mean(itpc_spectrum[:, sent_mask], axis=0)
         mean_word_spec = np.mean(itpc_spectrum[:, word_mask], axis=0)
+        itpc_sent_val = float(np.max(mean_sent_spec)) if sent_mask.any() else 0.0
+        itpc_word_val = float(np.max(mean_word_spec)) if word_mask.any() else 0.0
+        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+
+        # Bandwidth-normalized ratio: compare spectral density rather than raw values
+        sent_density = itpc_sent_val / self.SENTENCE_BAND_WIDTH_HZ if self.SENTENCE_BAND_WIDTH_HZ > 0 else 0.0
+        word_density = itpc_word_val / self.WORD_BAND_WIDTH_HZ if self.WORD_BAND_WIDTH_HZ > 0 else 0.0
+        ratio_bw = sent_density / word_density if word_density > 0 else 0.0
+
+        # Report the frequency of peak ITPC within each band
         peak_sent_hz = (
             float(freqs[sent_mask][np.argmax(mean_sent_spec)]) if sent_mask.any() else self.TARGET_SENTENCE_FREQ
         )
@@ -440,6 +450,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "itpc_sentence": itpc_sent_val,
             "itpc_word": itpc_word_val,
             "ratio_sent_word": ratio,
+            "ratio_bw_normalized": ratio_bw,
             "freq_sentence_hz": peak_sent_hz,
             "freq_word_hz": peak_word_hz,
         }
@@ -472,6 +483,11 @@ class LanguageTrackingAnalysis(BasePipeline):
         itpc_word_val = float(np.mean(itpc_data[:, word_mask, :]))
         ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
 
+        # Bandwidth-normalized ratio
+        sent_density = itpc_sent_val / self.SENTENCE_BAND_WIDTH_HZ if self.SENTENCE_BAND_WIDTH_HZ > 0 else 0.0
+        word_density = itpc_word_val / self.WORD_BAND_WIDTH_HZ if self.WORD_BAND_WIDTH_HZ > 0 else 0.0
+        ratio_bw = sent_density / word_density if word_density > 0 else 0.0
+
         # Report frequency of peak mean ITPC within each band
         mean_sent = np.mean(itpc_data[:, sent_mask, :], axis=(0, 2))  # (n_sent_bins,)
         mean_word = np.mean(itpc_data[:, word_mask, :], axis=(0, 2))  # (n_word_bins,)
@@ -482,6 +498,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "itpc_sentence": itpc_sent_val,
             "itpc_word": itpc_word_val,
             "ratio_sent_word": ratio,
+            "ratio_bw_normalized": ratio_bw,
             "freq_sentence_hz": peak_sent_hz,
             "freq_word_hz": peak_word_hz,
         }

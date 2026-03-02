@@ -366,3 +366,35 @@ def test_compute_hemisphere_itpc_returns_valid_metrics(mock_loader):
     for d in (lh, rh):
         assert "itpc_sentence" in d
         assert 0.0 <= d["itpc_sentence"] <= 1.0
+
+
+# --- Band-width fix ---
+
+
+def test_dft_uses_peak_within_band():
+    """DFT extraction uses peak (not mean) within band."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    sfreq = 256.0
+    n_fft = int(np.ceil(sfreq / processor.DFT_FREQ_RESOLUTION))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
+    n_channels = 6
+    # Uniform ITPC at 0.12 everywhere
+    itpc_spectrum = np.ones((n_channels, len(freqs))) * 0.12
+    # Inject peak at word target
+    peak_idx = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
+    itpc_spectrum[:, peak_idx] = 0.40
+    metrics = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    # Peak extraction should capture the 0.40 peak, not average it away
+    assert metrics["itpc_word"] > 0.30
+
+
+def test_bw_normalized_ratio_present(itpc_epochs):
+    """Both metric extractors include ratio_bw_normalized key."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    itpc_data, _ = processor.compute_itpc(itpc_epochs)
+    m_morlet = processor.extract_itpc_metrics(itpc_data)
+    assert "ratio_bw_normalized" in m_morlet
+
+    itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
+    m_dft = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    assert "ratio_bw_normalized" in m_dft
