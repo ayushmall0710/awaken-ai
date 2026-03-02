@@ -34,6 +34,11 @@ ERP_CONFIG = {
     "p300_max_latency_range": (250, 600),  # hard rejection cutoff (ms)
 }
 
+# Event labels used for standard (frequent) stimuli in the oddball paradigm.
+# This is a set to allow for future variants (e.g. "frequent") without changing
+# extraction logic.
+STANDARD_EVENT_LABELS = {"standard", "frequent"}
+
 
 class OddballERPPipeline:
     """Pipeline for extracting and analyzing ERPs from oddball trials."""
@@ -222,7 +227,7 @@ class OddballERPPipeline:
                 }
 
             trial_windows = self._build_trial_windows(epochs35)
-            mapped_df, mapping_diag = self._map_rare_to_trials(
+            mapped_df, mapping_diag = self._map_events_to_trials(
                 rare_events,
                 trial_windows,
                 sfreq=float(epochs35.info["sfreq"]),
@@ -239,17 +244,61 @@ class OddballERPPipeline:
                     "status": "insufficient_epochs",
                 }
 
-            erp = self._compute_erp(epochs)
+            rare_erp, rare_sem = self._compute_erp(epochs)
+
+            # Extract standard events and compute standard ERP + difference wave
+            standard_erp = None
+            standard_sem = None
+            diff_erp = None
+            n_standard_epochs = 0
+
+            standard_events = self._extract_standard_events(aligned_trials)
+            if len(standard_events) > 0:
+                standard_mapped_df, std_diag = self._map_events_to_trials(
+                    standard_events,
+                    trial_windows,
+                    sfreq=float(epochs35.info["sfreq"]),
+                )
+                standard_epochs = self._extract_subepochs(epochs35, standard_mapped_df)
+                n_standard_epochs = len(standard_epochs)
+
+                if n_standard_epochs < 10:
+                    logger.warning(
+                        f"{patient_id} {date}: only {n_standard_epochs} standard epochs — "
+                        f"difference wave will be unstable"
+                    )
+
+                if n_standard_epochs >= ERP_CONFIG["min_epochs"]:
+                    standard_erp, standard_sem = self._compute_erp(standard_epochs)
+                    diff_erp = self._compute_difference_erp(rare_erp, standard_erp)
+
             features = self._quantify_p300(
-                erp,
+                rare_erp,
                 patient_id,
                 date,
                 len(epochs),
                 custom_electrodes=custom_electrodes,
+                diff_erp=diff_erp,
+                n_standard_epochs=n_standard_epochs,
             )
 
-            self._save_outputs(patient_id, date, epochs, erp, features)
-            self._plot_individual_erp(erp, patient_id, date, custom_electrodes=custom_electrodes)
+            self._save_outputs(patient_id, date, epochs, rare_erp, features, standard_erp, diff_erp)
+
+            # Generate plots (3-panel if diff_erp available, else 2-panel legacy)
+            self._plot_erp_figure(
+                rare_erp,
+                rare_sem,
+                standard_erp,
+                standard_sem,
+                diff_erp,
+                features,
+                patient_id,
+                date,
+                custom_electrodes=custom_electrodes,
+            )
+
+            # Generate ERP image (single-trial heatmap)
+            self._plot_erp_image(epochs, patient_id, date)
 
             if custom_electrodes:
                 logger.info(
@@ -266,7 +315,7 @@ class OddballERPPipeline:
                 "date": date,
                 "status": "success",
                 "epochs": epochs,
-                "erp": erp,
+                "erp": rare_erp,
                 "features": pd.DataFrame([features]),
             }
 
@@ -354,6 +403,57 @@ class OddballERPPipeline:
         logger.info(f"Extracted {len(rare_events)} rare events")
         return rare_events
 
+    def _extract_standard_events(self, trials_df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """
+        Extract standard (frequent) beep events with timestamps from oddball trials.
+
+        Args:
+            trials_df: DataFrame of oddball trials
+
+        Returns:
+            List of standard event dictionaries with timestamps
+        """
+        standard_events: List[Dict[str, Any]] = []
+
+        for idx, trial in trials_df.iterrows():
+            try:
+                events = trial["sentences"]
+            except (KeyError, TypeError):
+                logger.warning(f"Trial {idx}: No 'sentences' field found")
+                continue
+
+            if isinstance(events, np.ndarray):
+                events = events.tolist()
+
+            event_len = len(events) if isinstance(events, (list, np.ndarray)) else "N/A"
+            logger.debug(f"Trial {idx} (standard): sentences type = {type(events)}, length = {event_len}")
+
+            if not isinstance(events, list):
+                logger.warning(f"Trial {idx}: sentences is not a list (type: {type(events)})")
+                continue
+
+            standard_count_in_trial = 0
+            for event in events:
+                if not isinstance(event, dict):
+                    logger.debug(f"Trial {idx}: event is not a dict (type: {type(event)})")
+                    continue
+
+                label = event.get("event")
+                if label in STANDARD_EVENT_LABELS and "event_start" in event:
+                    standard_count_in_trial += 1
+                    standard_events.append(
+                        {
+                            "timestamp_unix": event["event_start"],
+                            "date": trial["date"],
+                            "trial_idx": idx,
+                        }
+                    )
+
+            logger.debug(f"Trial {idx}: found {standard_count_in_trial} standard events")
+
+        logger.info(f"Extracted {len(standard_events)} standard events")
+        return standard_events
+
     def _build_trial_windows(self, epochs35: mne.Epochs, window_sec: float = 35.0) -> pd.DataFrame:
         """Build a table of ENG-03 trial start/end times from epoch metadata.
 
@@ -383,16 +483,16 @@ class OddballERPPipeline:
             }
         )
 
-    def _map_rare_to_trials(
+    def _map_events_to_trials(
         self,
-        rare_events: List[Dict[str, Any]],
+        events: List[Dict[str, Any]],
         trial_windows_df: pd.DataFrame,
         sfreq: float,
     ) -> tuple:
-        """Map rare-event timestamps into ENG-03 35s trial windows.
+        """Map event timestamps into ENG-03 35s trial windows.
 
         Args:
-            rare_events: Rare events with ``timestamp_unix`` keys.
+            events: Events with ``timestamp_unix`` keys.
             trial_windows_df: Output of ``_build_trial_windows``.
             sfreq: Sampling frequency of the ENG-03 epochs.
 
@@ -412,7 +512,7 @@ class OddballERPPipeline:
         n_duplicate = 0
         n_boundary = 0
 
-        for event in rare_events:
+        for event in events:
             ts = float(event["timestamp_unix"])
             mask = (starts <= ts) & (ts < starts + window_sec)
             matched = epoch_ids[mask]
@@ -446,15 +546,15 @@ class OddballERPPipeline:
 
         mapped_df = pd.DataFrame(rows)
         diagnostics = {
-            "n_rare_events": len(rare_events),
+            "n_rare_events": len(events),
             "n_mapped": len(mapped_df),
             "n_unmapped": n_unmapped,
             "n_duplicate": n_duplicate,
             "n_boundary_clipped": n_boundary,
-            "mapping_rate": len(mapped_df) / max(len(rare_events), 1),
+            "mapping_rate": len(mapped_df) / max(len(events), 1),
         }
         logger.info(
-            "Rare-event mapping: %d/%d mapped (unmapped=%d, duplicate=%d, boundary=%d)",
+            "Event mapping: %d/%d mapped (unmapped=%d, duplicate=%d, boundary=%d)",
             diagnostics["n_mapped"],
             diagnostics["n_rare_events"],
             n_unmapped,
@@ -472,7 +572,7 @@ class OddballERPPipeline:
 
         Args:
             epochs35: Full 35s epoch objects.
-            mapped_df: Output of ``_map_rare_to_trials`` with start_sample / end_sample.
+            mapped_df: Output of ``_map_events_to_trials`` with start_sample / end_sample.
 
         Returns:
             ``mne.EpochsArray`` of shape (n_events, n_channels, n_times).
@@ -517,11 +617,54 @@ class OddballERPPipeline:
         logger.info(f"Extracted {len(sub_epochs)} sub-epochs from ENG-03 35s trials")
         return sub_epochs
 
-    def _compute_erp(self, epochs: mne.Epochs) -> mne.Evoked:
-        """Average epochs to produce the ERP."""
+    def _compute_erp(self, epochs: mne.Epochs) -> tuple[mne.Evoked, mne.Evoked]:
+        """
+        Average epochs to produce the ERP and compute standard error.
+
+        Returns:
+            Tuple of (erp, erp_sem) where erp is the averaged ERP and erp_sem is the SEM.
+        """
         erp = epochs.average()
+        erp_sem = epochs.standard_error()
         logger.info(f"Computed ERP from {len(epochs)} epochs")
-        return erp
+        return erp, erp_sem
+
+    def _compute_difference_erp(self, rare_erp: mne.Evoked, standard_erp: mne.Evoked) -> mne.Evoked:
+        """
+        Compute difference ERP (rare - standard).
+
+        Args:
+            rare_erp: Rare ERP (mne.Evoked)
+            standard_erp: Standard ERP (mne.Evoked)
+
+        Returns:
+            Difference ERP as mne.EvokedArray
+        """
+        if rare_erp.data.shape != standard_erp.data.shape:
+            logger.error(
+                f"Rare and standard ERPs have mismatched shapes: {rare_erp.data.shape} vs {standard_erp.data.shape}"
+            )
+            raise ValueError("Rare and standard ERPs must have identical channel/time dimensions")
+
+        diff_data = rare_erp.data - standard_erp.data
+        info = rare_erp.info.copy()
+
+        # Set standard montage for topomap support
+        try:
+            if not info.get_montage():
+                montage = mne.channels.make_standard_montage("standard_1020")
+                info.set_montage(montage, on_missing="ignore")
+        except Exception as e:
+            logger.warning(f"Could not set montage for topomap: {e}")
+
+        diff_erp = mne.EvokedArray(
+            diff_data,
+            info=info,
+            tmin=rare_erp.tmin,
+            verbose=False,
+        )
+        logger.info("Computed difference ERP (rare - standard)")
+        return diff_erp
 
     def _generate_qc_notes(self, composite: Dict[str, Any]) -> str:
         """
@@ -531,30 +674,45 @@ class OddballERPPipeline:
             composite: Composite P300 dictionary with validation results
 
         Returns:
-            QC summary string
+            QC summary string with semicolon separator for subtype annotation
         """
         n_valid = composite["n_valid_electrodes"]
         n_flagged = composite["n_flagged_electrodes"]
 
         if n_flagged == 0:
-            return f"All electrodes valid, averaged {n_valid}/3"
-
-        issues = []
-        for electrode in ["Pz", "Cz", "Fz"]:
-            if not composite[f"{electrode}_is_valid"]:
-                electrode_issues = composite[f"{electrode}_issues"]
-                if "negative_or_zero_amplitude" in electrode_issues:
-                    issues.append(f"{electrode} inverted")
-                elif "latency_out_of_range" in electrode_issues:
-                    issues.append(f"{electrode} latency OOR")
-                elif "latency_atypical" in electrode_issues:
-                    issues.append(f"{electrode} atypical latency")
-
-        best = composite["best_electrode"]
-        if n_valid == 1:
-            return f"{', '.join(issues)} (used {best} only)"
+            qc_part = f"All electrodes valid, averaged {n_valid}/3"
         else:
-            return f"{', '.join(issues)}"
+            issues = []
+            for electrode in ["Pz", "Cz", "Fz"]:
+                if not composite[f"{electrode}_is_valid"]:
+                    electrode_issues = composite[f"{electrode}_issues"]
+                    if "negative_or_zero_amplitude" in electrode_issues:
+                        issues.append(f"{electrode} inverted")
+                    elif "latency_out_of_range" in electrode_issues:
+                        issues.append(f"{electrode} latency OOR")
+                    elif "latency_atypical" in electrode_issues:
+                        issues.append(f"{electrode} atypical latency")
+
+            best = composite["best_electrode"]
+            if n_valid == 1:
+                qc_part = f"{', '.join(issues)} (used {best} only)"
+            else:
+                qc_part = f"{', '.join(issues)}"
+
+        # Append subtype with semicolon separator
+        subtype = composite.get("p300_subtype", "unknown")
+        if subtype == "P3a":
+            subtype_note = "P3a pattern (Fz-max) — P3b may be absent"
+        elif subtype == "P3b":
+            subtype_note = "P3b pattern (Pz-max)"
+        elif subtype == "mixed":
+            subtype_note = "Mixed pattern (Cz-max)"
+        elif subtype == "absent":
+            subtype_note = "No P300 detected"
+        else:
+            subtype_note = f"{subtype}"
+
+        return f"{qc_part}; {subtype_note}"
 
     def _quantify_p300(
         self,
@@ -563,16 +721,20 @@ class OddballERPPipeline:
         date: str,
         n_epochs: int,
         custom_electrodes: Optional[List[str]] = None,
+        diff_erp: Optional[mne.Evoked] = None,
+        n_standard_epochs: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Quantify P300 features from ERP.
 
         Args:
-            erp: MNE Evoked object (averaged ERP)
+            erp: MNE Evoked object (averaged rare ERP)
             patient_id: Patient identifier
             date: Session date
-            n_epochs: Number of epochs averaged
+            n_epochs: Number of rare epochs averaged
             custom_electrodes: Optional list of custom electrodes to analyze instead of defaults
+            diff_erp: Optional difference ERP (rare - standard) for primary P300 measurement
+            n_standard_epochs: Number of standard epochs used (for diagnostics)
 
         Returns:
             Dictionary of P300 features
@@ -603,6 +765,13 @@ class OddballERPPipeline:
                 features[f"p300_amplitude_{electrode}_uV"] = p300_features["amplitude"]
                 features[f"p300_latency_{electrode}_ms"] = p300_features["latency"]
 
+            # If difference ERP available, also measure diff_* metrics
+            if diff_erp is not None:
+                for electrode in ERP_CONFIG["midline_electrodes"]:
+                    diff_features = self._detect_p300_peak(diff_erp, electrode)
+                    features[f"diff_amplitude_{electrode}_uV"] = diff_features["amplitude"]
+                    features[f"diff_latency_{electrode}_ms"] = diff_features["latency"]
+
             composite = self._compute_composite_p300(erp, patient_id)
 
             features.update(
@@ -612,6 +781,7 @@ class OddballERPPipeline:
                     "p300_best_electrode": composite["best_electrode"],
                     "p300_n_valid_electrodes": composite["n_valid_electrodes"],
                     "p300_n_flagged_electrodes": composite["n_flagged_electrodes"],
+                    "p300_subtype": composite.get("p300_subtype", "unknown"),
                 }
             )
 
@@ -632,6 +802,10 @@ class OddballERPPipeline:
             for key, value in self._last_epoch_diagnostics.items():
                 if key not in features:
                     features[key] = value
+
+        # Standard epoch diagnostics
+        if n_standard_epochs is not None:
+            features["n_standard_epochs"] = n_standard_epochs
 
         return features
 
@@ -830,6 +1004,23 @@ class OddballERPPipeline:
                     f"issues={data['issues']}"
                 )
 
+        # Determine P3a vs P3b subtype
+        n_valid = composite["n_valid_electrodes"]
+        if n_valid == 0:
+            subtype = "absent"
+        else:
+            best_elec = composite.get("best_electrode")
+            if best_elec == "Pz":
+                subtype = "P3b"
+            elif best_elec == "Fz":
+                subtype = "P3a"
+            elif best_elec == "Cz":
+                subtype = "mixed"
+            else:
+                subtype = "absent"
+
+        composite["p300_subtype"] = subtype
+
         return composite
 
     def _save_outputs(
@@ -839,6 +1030,8 @@ class OddballERPPipeline:
         epochs: mne.Epochs,
         erp: mne.Evoked,
         features: Dict[str, Any],
+        standard_erp: Optional[mne.Evoked] = None,
+        diff_erp: Optional[mne.Evoked] = None,
     ):
         """
         Save ERP and features to disk.
@@ -847,12 +1040,24 @@ class OddballERPPipeline:
             patient_id: Patient identifier
             date: Session date
             epochs: MNE Epochs object (not saved — regenerated on demand from ENG-03)
-            erp: MNE Evoked object
+            erp: MNE Evoked object (rare ERP)
             features: Dictionary of P300 features
+            standard_erp: Optional standard ERP to save
+            diff_erp: Optional difference ERP to save
         """
         erp_file = self._output_paths.erps / f"{patient_id}_{date}_oddball-ave.fif"
         erp.save(erp_file, overwrite=True)
         logger.info(f"Saved ERP: {erp_file}")
+
+        if standard_erp is not None:
+            std_file = self._output_paths.erps / f"{patient_id}_{date}_oddball_standard-ave.fif"
+            standard_erp.save(std_file, overwrite=True)
+            logger.info(f"Saved standard ERP: {std_file}")
+
+        if diff_erp is not None:
+            diff_file = self._output_paths.erps / f"{patient_id}_{date}_oddball_diff-ave.fif"
+            diff_erp.save(diff_file, overwrite=True)
+            logger.info(f"Saved difference ERP: {diff_file}")
 
         features_df = pd.DataFrame([features])
         self._update_master_feature_table(features_df)
@@ -925,7 +1130,221 @@ class OddballERPPipeline:
         axes[1].legend(loc="upper right")
         axes[1].grid(True, alpha=0.3)
 
-    def _plot_individual_erp(
+    def _plot_erp_figure(
+        self,
+        rare_erp: mne.Evoked,
+        rare_sem: mne.Evoked,
+        standard_erp: Optional[mne.Evoked],
+        standard_sem: Optional[mne.Evoked],
+        diff_erp: Optional[mne.Evoked],
+        features: Dict[str, Any],
+        patient_id: str,
+        date: str,
+        custom_electrodes: Optional[List[str]] = None,
+    ):
+        """
+        Generate 3-panel ERP figure: butterfly, rare+standard overlay, difference wave.
+
+        Args:
+            rare_erp: Rare ERP (mne.Evoked)
+            rare_sem: Rare ERP SEM (mne.Evoked)
+            standard_erp: Standard ERP (optional, mne.Evoked)
+            standard_sem: Standard ERP SEM (optional, mne.Evoked)
+            diff_erp: Difference ERP (optional, mne.Evoked)
+            features: P300 features dictionary (for peak info)
+            patient_id: Patient identifier
+            date: Session date
+            custom_electrodes: Optional list of custom electrodes to plot
+        """
+        # If no diff_erp, fall back to 2-panel layout (backward compat)
+        if diff_erp is None or standard_erp is None:
+            self._plot_individual_erp_legacy(rare_erp, patient_id, date, custom_electrodes)
+            return
+
+        # 3-panel layout (butterfly, rare vs standard, difference wave)
+        fig = plt.figure(figsize=(12, 10))
+        gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 1], hspace=0.35)
+
+        # Panel 1: Butterfly (all channels)
+        ax1 = fig.add_subplot(gs[0])
+        times = rare_erp.times * 1000
+        data = rare_erp.data * 1e6
+        for ch_idx in range(data.shape[0]):
+            ax1.plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
+        ax1.axvline(x=0, color="k", linestyle="--", linewidth=1, label="Stimulus")
+        ax1.axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
+        ax1.set_xlabel("Time (ms)")
+        ax1.set_ylabel("Amplitude (µV)")
+        ax1.set_title(f"{patient_id} - {date} - All Channels (Butterfly)")
+        ax1.legend(loc="upper right")
+        ax1.grid(True, alpha=0.3)
+
+        # Panel 2: Rare vs Standard + SEM at Fz/Cz/Pz
+        ax2 = fig.add_subplot(gs[1])
+        electrodes = ["Fz", "Cz", "Pz"]
+        colors = {"Fz": "red", "Cz": "green", "Pz": "blue"}
+
+        ch_names_upper = [ch.upper() for ch in rare_erp.ch_names]
+        for electrode in electrodes:
+            if electrode.upper() not in ch_names_upper:
+                continue
+            ch_idx = ch_names_upper.index(electrode.upper())
+
+            rare_trace = rare_erp.data[ch_idx, :] * 1e6
+            rare_sem_trace = rare_sem.data[ch_idx, :] * 1e6
+            color = colors[electrode]
+
+            # Solid line = rare
+            ax2.plot(times, rare_trace, linewidth=2, color=color, label=f"{electrode} (rare)")
+            ax2.fill_between(times, rare_trace - rare_sem_trace, rare_trace + rare_sem_trace, alpha=0.2, color=color)
+
+            # Dashed line = standard (if available)
+            if standard_erp is not None:
+                std_trace = standard_erp.data[ch_idx, :] * 1e6
+                std_sem_trace = standard_sem.data[ch_idx, :] * 1e6
+                ax2.plot(times, std_trace, linewidth=1.5, color=color, linestyle="--", label=f"{electrode} (std)")
+                ax2.fill_between(times, std_trace - std_sem_trace, std_trace + std_sem_trace, alpha=0.1, color=color)
+
+        ax2.axvline(x=0, color="k", linestyle="--", linewidth=1)
+        ax2.axvspan(300, 600, alpha=0.1, color="gray")
+        ax2.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
+        ax2.set_xlabel("Time (ms)")
+        ax2.set_ylabel("Amplitude (µV)")
+        subtype = features.get("p300_subtype", "unknown")
+        ax2.set_title(f"Rare vs Standard — {subtype}")
+        ax2.legend(loc="upper right", fontsize=8)
+        ax2.grid(True, alpha=0.3)
+
+        # Panel 3: Difference Wave
+        ax3 = fig.add_subplot(gs[2])
+        diff_data = diff_erp.data * 1e6
+        for electrode in electrodes:
+            if electrode.upper() not in ch_names_upper:
+                continue
+            ch_idx = ch_names_upper.index(electrode.upper())
+            diff_trace = diff_data[ch_idx, :]
+            color = colors[electrode]
+
+            ax3.plot(times, diff_trace, linewidth=2, color=color, label=electrode)
+
+        ax3.axvline(x=0, color="k", linestyle="--", linewidth=1)
+        ax3.axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
+        ax3.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
+        ax3.set_xlabel("Time (ms)")
+        ax3.set_ylabel("Amplitude (µV)")
+        ax3.set_title("Difference Wave (Rare - Standard)")
+        ax3.legend(loc="upper right")
+        ax3.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp.png"
+        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        logger.info(f"Saved 3-panel ERP plot: {save_path}")
+
+        # Save standalone topomap
+        self._plot_topomap(diff_erp, patient_id, date)
+
+    def _plot_erp_image(self, epochs: mne.Epochs, patient_id: str, date: str):
+        """
+        Generate ERP image (single-trial heatmap) for rare 900ms epochs at Pz.
+
+        Args:
+            epochs: 900ms EpochsArray (rare events)
+            patient_id: Patient identifier
+            date: Session date
+        """
+        if len(epochs) < 3:
+            logger.debug(f"{patient_id} {date}: skipping ERP image (only {len(epochs)} epochs < 3)")
+            return
+
+        try:
+            ret = mne.viz.plot_epochs_image(
+                epochs,
+                picks=["Pz"],
+                show=False,
+            )
+            fig = ret[0] if isinstance(ret, (list, tuple)) else ret
+
+            # Increase figure size and create very aggressive margins
+            fig.set_size_inches(12, 10)
+            fig.subplots_adjust(top=0.85, bottom=0.15, hspace=0.5)
+
+            # Add title high above plots
+            title_text = f"ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — {patient_id} | {date}"
+            fig.text(
+                0.5,
+                0.98,
+                title_text,
+                ha="center",
+                fontsize=11,
+                fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
+            )
+
+            # Add caption low below plots
+            caption = "Top: Each row = one trial. Bottom: Average. Time 0 = stimulus. Color = voltage (µV)."
+            fig.text(
+                0.5,
+                0.03,
+                caption,
+                ha="center",
+                fontsize=9,
+                style="italic",
+                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
+            )
+
+            save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp_image.png"
+            fig.savefig(save_path, dpi=150, pad_inches=0.4)
+            plt.close(fig)
+            logger.info(f"Saved ERP image: {save_path}")
+        except Exception as e:
+            logger.warning(f"Could not generate ERP image for {patient_id} {date}: {e}")
+
+    def _plot_topomap(self, diff_erp: mne.Evoked, patient_id: str, date: str):
+        """
+        Save topomap series for the difference ERP.
+
+        Generates a series of topographic maps across time, showing spatial distribution
+        of the P300 component (difference wave: target - standard). Maps are plotted at
+        10ms intervals from -200ms to 700ms, allowing visualization of the evolving
+        scalp topography. Electrode positions are shown to aid interpretation of spatial
+        patterns (e.g., frontal vs. parietal maxima for P3a vs. P3b distinction).
+
+        Args:
+            diff_erp: Difference ERP
+            patient_id: Patient identifier
+            date: Session date
+        """
+        try:
+            logger.info(f"Generating topomap series for {patient_id} {date}")
+            times_to_plot = np.arange(-0.2, 0.75, 0.1)
+            logger.debug(f"Topomap times: {times_to_plot}")
+
+            fig = diff_erp.plot_topomap(
+                times=times_to_plot,
+                show=False,
+                colorbar=True,
+                size=5,
+            )
+            logger.debug(f"plot_topomap returned type: {type(fig)}")
+
+            # mne.Evoked.plot_topomap normally returns a matplotlib Figure
+            if isinstance(fig, (list, tuple)):
+                logger.debug(f"plot_topomap returned a {type(fig).__name__} with {len(fig)} items, using first")
+                fig_obj = fig[0]
+            else:
+                fig_obj = fig
+
+            save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_topomap.png"
+            logger.debug(f"Saving topomap to {save_path}")
+            fig_obj.savefig(save_path, dpi=300, bbox_inches="tight")
+            plt.close(fig_obj)
+            logger.info(f"✓ Saved topomap series: {save_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate topomap for {patient_id} {date}: {e}", exc_info=True)
+
+    def _plot_individual_erp_legacy(
         self,
         erp: mne.Evoked,
         patient_id: str,
@@ -933,7 +1352,9 @@ class OddballERPPipeline:
         custom_electrodes: Optional[List[str]] = None,
     ):
         """
-        Generate and save individual ERP plot.
+        Generate and save individual ERP plot (2-panel legacy format).
+
+        Used when standard/diff ERPs are not available.
 
         Args:
             erp: MNE Evoked object
@@ -966,6 +1387,27 @@ class OddballERPPipeline:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close()
         logger.info(f"Saved ERP plot: {save_path}")
+
+    def _plot_individual_erp(
+        self,
+        erp: mne.Evoked,
+        patient_id: str,
+        date: str,
+        custom_electrodes: Optional[List[str]] = None,
+    ):
+        """
+        Generate and save individual ERP plot.
+
+        This is now a backward-compatible wrapper that calls _plot_individual_erp_legacy.
+        For full 3-panel plots, call _plot_erp_figure() directly.
+
+        Args:
+            erp: MNE Evoked object (rare ERP)
+            patient_id: Patient identifier
+            date: Session date
+            custom_electrodes: Optional list of custom electrodes to plot
+        """
+        self._plot_individual_erp_legacy(erp, patient_id, date, custom_electrodes)
 
     def process_all_patients(
         self,

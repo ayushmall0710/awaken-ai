@@ -190,14 +190,16 @@ class TestOddballERPPipeline:
         assert actual_timestamps == expected_timestamps
 
     def test_compute_erp(self, temp_output_dir, mock_epochs):
-        """Test ERP computation (averaging)."""
+        """Test ERP computation (averaging) returns tuple of (erp, sem)."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
-        erp = pipeline._compute_erp(mock_epochs)
+        erp, erp_sem = pipeline._compute_erp(mock_epochs)
 
         assert isinstance(erp, mne.Evoked)
+        assert isinstance(erp_sem, mne.Evoked)
         assert erp.data.ndim == 2
         assert erp.data.shape[0] == len(mock_epochs.ch_names)
+        assert erp_sem.data.shape == erp.data.shape
         assert np.allclose(erp.times, mock_epochs.times)
 
     def test_detect_p300_peak(self, temp_output_dir, mock_evoked):
@@ -224,6 +226,84 @@ class TestOddballERPPipeline:
 
         assert np.isnan(result["amplitude"])
         assert np.isnan(result["latency"])
+
+    def test_extract_standard_events(self, temp_output_dir, mock_aligned_events):
+        """Test extraction of standard (frequent) events."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        standard_events = pipeline._extract_standard_events(mock_aligned_events)
+
+        assert len(standard_events) == 3
+        assert all(e["timestamp_unix"] > 0 for e in standard_events)
+        assert all("timestamp_unix" in e and "date" in e for e in standard_events)
+
+    def test_compute_difference_erp(self, temp_output_dir, mock_evoked):
+        """Test difference ERP computation (rare - standard)."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        # Create two ERPs with slight difference
+        rare_erp = mock_evoked.copy()
+        standard_erp = mock_evoked.copy()
+        standard_erp.data = standard_erp.data * 0.5  # Standard is 50% amplitude
+
+        diff_erp = pipeline._compute_difference_erp(rare_erp, standard_erp)
+
+        assert isinstance(diff_erp, mne.Evoked)
+        assert diff_erp.data.shape == rare_erp.data.shape
+        # Difference should be ~50% of rare (rare - 0.5*rare = 0.5*rare)
+        assert np.allclose(diff_erp.data, rare_erp.data * 0.5, rtol=0.01)
+
+    def test_p3a_subtype_detection(self, temp_output_dir, mock_evoked):
+        """Test P3a subtype when Fz amplitude > Pz amplitude."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        # Zero out midline channels to avoid random noise influencing subtype
+        for elec in ["Fz", "Cz", "Pz"]:
+            elec_idx = mock_evoked.ch_names.index(elec)
+            mock_evoked.data[elec_idx, :] = 0.0
+
+        # Boost Fz amplitude at P300 window relative to Pz
+        fz_idx = mock_evoked.ch_names.index("Fz")
+        pz_idx = mock_evoked.ch_names.index("Pz")
+        time_idx_400ms = np.argmin(np.abs(mock_evoked.times - 0.4))
+
+        mock_evoked.data[fz_idx, time_idx_400ms] = 8e-6  # Fz: +8µV
+        mock_evoked.data[pz_idx, time_idx_400ms] = 2e-6  # Pz: +2µV
+
+        composite = pipeline._compute_composite_p300(mock_evoked, "TEST001")
+
+        assert composite.get("p300_subtype") == "P3a"
+        assert composite["best_electrode"] == "Fz"
+
+    def test_p300_absent_subtype_when_no_valid_electrodes(self, temp_output_dir, mock_evoked):
+        """Test 'absent' subtype when n_valid_electrodes == 0."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        # Zero out all P300 amplitudes to make them invalid (negative)
+        for elec in ["Fz", "Cz", "Pz"]:
+            elec_idx = mock_evoked.ch_names.index(elec)
+            mock_evoked.data[elec_idx, :] = -1e-6  # Force negative amplitude
+
+        composite = pipeline._compute_composite_p300(mock_evoked, "TEST001")
+
+        assert composite["n_valid_electrodes"] == 0
+        assert composite.get("p300_subtype") == "absent"
+
+    def test_qc_notes_with_subtype_separator(self, temp_output_dir, mock_evoked):
+        """Test qc_notes includes subtype with semicolon separator."""
+        pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
+
+        pz_idx = mock_evoked.ch_names.index("Pz")
+        time_idx_400ms = np.argmin(np.abs(mock_evoked.times - 0.4))
+        mock_evoked.data[pz_idx, time_idx_400ms] += 5e-6
+
+        features = pipeline._quantify_p300(mock_evoked, "TEST001", "2024-01-01", n_epochs=3)
+
+        notes = features["qc_notes"]
+        assert ";" in notes
+        # Subtype text should be present (case-insensitive)
+        lowered = notes.lower()
+        assert "p3b" in lowered or "p3a" in lowered or "mixed" in lowered
 
     def test_quantify_p300(self, temp_output_dir, mock_evoked):
         """Test P300 quantification feature schema."""
@@ -470,8 +550,8 @@ class TestTrialMapping:
         with pytest.raises(ValueError, match="no metadata"):
             pipeline._build_trial_windows(epochs)
 
-    def test_map_rare_to_trials_all_mapped(self, temp_output_dir, mock_eng03_epochs):
-        """All rare events inside trial windows should be mapped."""
+    def test_map_events_to_trials_all_mapped(self, temp_output_dir, mock_eng03_epochs):
+        """All events inside trial windows should be mapped."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
         tw = pipeline._build_trial_windows(mock_eng03_epochs)
@@ -482,7 +562,7 @@ class TestTrialMapping:
             {"timestamp_unix": trial_start + 15.0, "date": "2024-01-01", "trial_idx": 0},
         ]
 
-        mapped_df, diag = pipeline._map_rare_to_trials(
+        mapped_df, diag = pipeline._map_events_to_trials(
             rare_events,
             tw,
             sfreq=float(mock_eng03_epochs.info["sfreq"]),
@@ -494,7 +574,7 @@ class TestTrialMapping:
         assert diag["mapping_rate"] == 1.0
         assert len(mapped_df) == 2
 
-    def test_map_rare_to_trials_some_unmapped(self, temp_output_dir, mock_eng03_epochs):
+    def test_map_events_to_trials_some_unmapped(self, temp_output_dir, mock_eng03_epochs):
         """Events outside any trial window should be silently dropped."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
@@ -506,7 +586,7 @@ class TestTrialMapping:
             {"timestamp_unix": trial_start + 999.0, "date": "2024-01-01", "trial_idx": 0},
         ]
 
-        mapped_df, diag = pipeline._map_rare_to_trials(
+        mapped_df, diag = pipeline._map_events_to_trials(
             rare_events,
             tw,
             sfreq=float(mock_eng03_epochs.info["sfreq"]),
@@ -516,7 +596,7 @@ class TestTrialMapping:
         assert diag["n_unmapped"] == 1
         assert len(mapped_df) == 1
 
-    def test_map_rare_to_trials_boundary_clip(self, temp_output_dir, mock_eng03_epochs):
+    def test_map_events_to_trials_boundary_clip(self, temp_output_dir, mock_eng03_epochs):
         """Events whose sub-epoch crosses the trial edge should be excluded."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
@@ -527,7 +607,7 @@ class TestTrialMapping:
             {"timestamp_unix": trial_start + 0.05, "date": "2024-01-01", "trial_idx": 0},
         ]
 
-        mapped_df, diag = pipeline._map_rare_to_trials(
+        mapped_df, diag = pipeline._map_events_to_trials(
             rare_events,
             tw,
             sfreq=float(mock_eng03_epochs.info["sfreq"]),
@@ -548,7 +628,7 @@ class TestTrialMapping:
             {"timestamp_unix": trial_start + 20.0, "date": "2024-01-01", "trial_idx": 0},
         ]
 
-        mapped_df, _ = pipeline._map_rare_to_trials(
+        mapped_df, _ = pipeline._map_events_to_trials(
             rare_events,
             tw,
             sfreq=float(mock_eng03_epochs.info["sfreq"]),
