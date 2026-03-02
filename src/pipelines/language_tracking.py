@@ -66,8 +66,8 @@ class LanguageTrackingAnalysis(BasePipeline):
     #   Word: ~1.3s per word -> ~0.77 Hz, nominal band 0.70-0.90 Hz
     SENTENCE_BAND: tuple = (0.05, 0.08)
     WORD_BAND: tuple = (0.70, 0.90)
-    SENTENCE_BAND_WIDTH_HZ: float = 0.08 - 0.05  # 0.03
-    WORD_BAND_WIDTH_HZ: float = 0.90 - 0.70  # 0.20
+    SENTENCE_BAND_WIDTH_HZ: float = SENTENCE_BAND[1] - SENTENCE_BAND[0]
+    WORD_BAND_WIDTH_HZ: float = WORD_BAND[1] - WORD_BAND[0]
 
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
