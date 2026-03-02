@@ -333,3 +333,36 @@ def test_permutation_reproducible(itpc_epochs):
     null_a = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
     null_b = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
     np.testing.assert_array_equal(null_a, null_b)
+
+
+# --- Lateralization ---
+
+
+def test_lateralization_index_values():
+    """LI = (LH - RH) / (LH + RH) for typical values."""
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.15, 0.10) == pytest.approx(0.2)
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.10, 0.10) == pytest.approx(0.0)
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.0, 0.0) == 0.0
+
+
+def test_preprocess_stores_filtered_epochs(mock_loader):
+    """preprocess() stores _epochs_filtered before channel selection."""
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
+    processor.patient_id = "TEST"
+    processor.load()
+    processor.preprocess()
+    assert processor._epochs_filtered is not None
+    assert len(processor._epochs_filtered.ch_names) >= len(processor.epochs.ch_names)
+
+
+def test_compute_hemisphere_itpc_returns_valid_metrics(mock_loader):
+    """compute_hemisphere_itpc returns valid dict for both hemispheres."""
+    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    processor.patient_id = "TEST"
+    processor.load()
+    processor.preprocess()
+    lh = processor.compute_hemisphere_itpc("LH")
+    rh = processor.compute_hemisphere_itpc("RH")
+    for d in (lh, rh):
+        assert "itpc_sentence" in d
+        assert 0.0 <= d["itpc_sentence"] <= 1.0

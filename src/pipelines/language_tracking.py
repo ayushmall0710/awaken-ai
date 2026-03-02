@@ -94,6 +94,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         self.focus = focus
         self.filter_signal = filter_signal
         self.epochs: Optional[mne.Epochs] = None
+        self._epochs_filtered: Optional[mne.Epochs] = None
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
@@ -114,13 +115,16 @@ class LanguageTrackingAnalysis(BasePipeline):
         self.epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
 
     def preprocess(self) -> None:
-        """Apply optimization steps: channel selection and bandpass filtering."""
+        """Apply optimization steps: bandpass filtering then channel selection."""
         if self.epochs is None:
             raise ValueError("Epochs not loaded. Call load() first.")
 
-        self.epochs = self.select_optimal_channels(self.epochs, focus=self.focus)
         if self.filter_signal:
             self.epochs = self.preprocess_signal(self.epochs)
+
+        # Store pre-channel-selected epochs for lateralization analysis
+        self._epochs_filtered = self.epochs.copy()
+        self.epochs = self.select_optimal_channels(self.epochs, focus=self.focus)
 
         try:
             montage = mne.channels.make_standard_montage("standard_1020")
@@ -159,6 +163,20 @@ class LanguageTrackingAnalysis(BasePipeline):
         p_sentence = self.compute_permutation_pvalue(dft_metrics["itpc_sentence"], null_sentence)
         p_word = self.compute_permutation_pvalue(dft_metrics["itpc_word"], null_word)
 
+        # 5. Lateralization analysis
+        if isinstance(self.focus, str) and self.focus in ("LH", "RH"):
+            contra_focus = "RH" if self.focus == "LH" else "LH"
+            contra_metrics = self.compute_hemisphere_itpc(contra_focus)
+            lh_sent = dft_metrics["itpc_sentence"] if self.focus == "LH" else contra_metrics["itpc_sentence"]
+            rh_sent = contra_metrics["itpc_sentence"] if self.focus == "LH" else dft_metrics["itpc_sentence"]
+            lh_word = dft_metrics["itpc_word"] if self.focus == "LH" else contra_metrics["itpc_word"]
+            rh_word = contra_metrics["itpc_word"] if self.focus == "LH" else dft_metrics["itpc_word"]
+            li_sentence = self.compute_lateralization_index(lh_sent, rh_sent)
+            li_word = self.compute_lateralization_index(lh_word, rh_word)
+        else:
+            lh_sent = rh_sent = lh_word = rh_word = None
+            li_sentence = li_word = None
+
         # Combine results
         result_dict = {
             "patient_id": self.patient_id,
@@ -181,6 +199,13 @@ class LanguageTrackingAnalysis(BasePipeline):
             "dft_p_sentence": p_sentence,
             "dft_p_word": p_word,
             "dft_n_permutations": n_permutations,
+            # Lateralization
+            "lh_dft_itpc_sentence": lh_sent,
+            "rh_dft_itpc_sentence": rh_sent,
+            "lh_dft_itpc_word": lh_word,
+            "rh_dft_itpc_word": rh_word,
+            "lateralization_index_sentence": li_sentence,
+            "lateralization_index_word": li_word,
         }
 
         self.results = pd.DataFrame([result_dict])
@@ -460,6 +485,49 @@ class LanguageTrackingAnalysis(BasePipeline):
             "freq_sentence_hz": peak_sent_hz,
             "freq_word_hz": peak_word_hz,
         }
+
+    @staticmethod
+    def compute_lateralization_index(lh_itpc: float, rh_itpc: float) -> float:
+        """
+        Compute Lateralization Index.
+
+        LI = (LH - RH) / (LH + RH).
+        Positive = left-lateralized (expected for language in right-handed patients).
+
+        Parameters
+        ----------
+        lh_itpc : float
+            Left hemisphere ITPC value.
+        rh_itpc : float
+            Right hemisphere ITPC value.
+
+        Returns
+        -------
+        float
+            Lateralization index in [-1, 1]. Returns 0.0 if both inputs are zero.
+        """
+        denom = lh_itpc + rh_itpc
+        return (lh_itpc - rh_itpc) / denom if denom > 0 else 0.0
+
+    def compute_hemisphere_itpc(self, focus: str) -> dict:
+        """
+        Compute DFT ITPC metrics for a given hemisphere using stored filtered epochs.
+
+        Parameters
+        ----------
+        focus : str
+            "LH" or "RH".
+
+        Returns
+        -------
+        dict
+            Same keys as extract_itpc_metrics_dft.
+        """
+        if self._epochs_filtered is None:
+            raise ValueError("Call preprocess() before compute_hemisphere_itpc().")
+        epochs_hemi = self.select_optimal_channels(self._epochs_filtered, focus=focus)
+        itpc_spectrum, freqs = self.compute_itpc_dft(epochs_hemi)
+        return self.extract_itpc_metrics_dft(itpc_spectrum, freqs)
 
     def compute_itpc_permutation_null(
         self,
