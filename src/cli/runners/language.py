@@ -21,13 +21,10 @@ def run(
     pipeline = LanguageTrackingAnalysis(loader=loader, focus=focus)
 
     for pid in patient_ids:
-        sessions = [session] if session else loader.get_patient_sessions(pid)
-
-        for sess in sessions:
-            typer.echo(f"[language] {pid} / {sess} (Focus: {focus}) ...")
-            try:
-                df = pipeline.run(pid)
-                if not df.empty:
-                    print_table(df, title=f"{pid} / {sess} — Language Tracking Results")
-            except Exception as e:
-                typer.echo(f"  ✗ Failed: {e}", err=True)
+        typer.echo(f"[language] {pid} (Focus: {focus}) ...")
+        try:
+            df = pipeline.run(pid)
+            if not df.empty:
+                print_table(df, title=f"{pid} — Language Tracking Results")
+        except Exception as e:
+            typer.echo(f"  ✗ Failed: {e}", err=True)
