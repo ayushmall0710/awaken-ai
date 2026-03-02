@@ -25,25 +25,18 @@ def main():
     parser = argparse.ArgumentParser(description="Run ITPC Analysis (Morlet + DFT)")
     parser.add_argument("--patients", nargs="+", required=True, help="Patient IDs (e.g., CON008 CON009)")
 
-    # TODO: Currently defaulting to "LH" purely. We should implement an auto-lateralization
-    # check (comparing LH vs RH) pending review from the Professor.
-    #
-    # TODO: We are strictly using focus="LH" (without adding CLINICAL_20 channels) to prevent
-    # the signal dilution bug we observed when computing global ITPC averages. We will keep it pure
-    # LH until we get clarity from the Professor on whether CLINICAL_20 should be included.
     parser.add_argument("--focus", type=str, default="LH", choices=["LH", "RH", "Clinical"], help="Channel focus")
     args = parser.parse_args()
 
-    pipeline = LanguageTrackingAnalysis()
     results = []
 
     for pid in args.patients:
-        res = pipeline.run(patient_id=pid, focus=args.focus)
-        if res:
+        res = pipeline.run(patient_id=pid)
+        if res is not None and not res.empty:
             results.append(res)
 
     if results:
-        df = pd.DataFrame(results)
+        df = pd.concat(results, ignore_index=True)
 
         print("\n=== ITPC Analysis Summary (Morlet vs DFT) ===")
         print(

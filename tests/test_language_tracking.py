@@ -153,8 +153,8 @@ def test_preprocess_signal(mock_language_epochs):
 
     filtered = processor.preprocess_signal(mock_language_epochs)
 
-    assert filtered.info["highpass"] == 0.5
-    assert filtered.info["lowpass"] == 30.0
+    assert filtered.info["highpass"] == pytest.approx(processor.HIGHPASS_FREQ, abs=0.01)
+    assert filtered.info["lowpass"] == pytest.approx(processor.LOWPASS_FREQ, abs=0.1)
     # Input is 1000 Hz -- should be downsampled to TARGET_SFREQ
     assert filtered.info["sfreq"] == processor.TARGET_SFREQ
 
@@ -211,13 +211,13 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     assert itpc_spectrum.shape[1] == len(freqs)
     assert np.all(itpc_spectrum >= 0)
     assert np.all(itpc_spectrum <= 1)
-    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.001 Hz) or finer.
+    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.01 Hz) or finer.
     assert freqs[1] - freqs[0] <= processor.DFT_FREQ_RESOLUTION + 1e-9
     # Sentence and word rate bins must be within half a bin of their targets.
     i_sent = np.argmin(np.abs(freqs - processor.TARGET_SENTENCE_FREQ))
     i_word = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
-    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
-    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
+    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
+    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
 
 
 # --- Metrics ---
@@ -297,3 +297,104 @@ def test_load_no_data():
 
     with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
         processor.load()
+
+
+# --- Permutation test ---
+
+
+def test_permutation_null_shape(itpc_epochs):
+    """Null distribution has correct shape and values in [0, 1]."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    null = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=50, band="sentence")
+    assert null.shape == (50,)
+    assert np.all(null >= 0) and np.all(null <= 1)
+
+
+def test_permutation_null_near_chance(itpc_epochs):
+    """Null ITPC mean should be near theoretical chance 1/sqrt(n_trials)."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    n = len(itpc_epochs)
+    chance = 1.0 / np.sqrt(n)
+    null = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=200, band="sentence", seed=0)
+    assert abs(np.mean(null) - chance) < 0.2 * chance
+
+
+def test_permutation_pvalue_computation():
+    """p-value equals proportion of null >= observed."""
+    observed = 0.14
+    null = np.array([0.10, 0.12, 0.13, 0.15, 0.20])
+    p = LanguageTrackingAnalysis.compute_permutation_pvalue(observed, null)
+    assert p == pytest.approx(2 / 5)
+
+
+def test_permutation_reproducible(itpc_epochs):
+    """Same seed produces identical null distributions."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    null_a = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
+    null_b = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
+    np.testing.assert_array_equal(null_a, null_b)
+
+
+# --- Lateralization ---
+
+
+def test_lateralization_index_values():
+    """LI = (LH - RH) / (LH + RH) for typical values."""
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.15, 0.10) == pytest.approx(0.2)
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.10, 0.10) == pytest.approx(0.0)
+    assert LanguageTrackingAnalysis.compute_lateralization_index(0.0, 0.0) == 0.0
+
+
+def test_preprocess_stores_filtered_epochs(mock_loader):
+    """preprocess() stores _epochs_filtered before channel selection."""
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
+    processor.patient_id = "TEST"
+    processor.load()
+    processor.preprocess()
+    assert processor._epochs_filtered is not None
+    assert len(processor._epochs_filtered.ch_names) >= len(processor.epochs.ch_names)
+
+
+def test_compute_hemisphere_itpc_returns_valid_metrics(mock_loader):
+    """compute_hemisphere_itpc returns valid dict for both hemispheres."""
+    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    processor.patient_id = "TEST"
+    processor.load()
+    processor.preprocess()
+    lh = processor.compute_hemisphere_itpc("LH")
+    rh = processor.compute_hemisphere_itpc("RH")
+    for d in (lh, rh):
+        assert "itpc_sentence" in d
+        assert 0.0 <= d["itpc_sentence"] <= 1.0
+
+
+# --- Band-width fix ---
+
+
+def test_dft_uses_peak_within_band():
+    """DFT extraction uses peak (not mean) within band."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    sfreq = 256.0
+    n_fft = int(np.ceil(sfreq / processor.DFT_FREQ_RESOLUTION))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
+    n_channels = 6
+    # Uniform ITPC at 0.12 everywhere
+    itpc_spectrum = np.ones((n_channels, len(freqs))) * 0.12
+    # Inject peak at word target
+    peak_idx = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
+    itpc_spectrum[:, peak_idx] = 0.40
+    metrics = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    # Peak extraction should capture the 0.40 peak, not average it away
+    assert metrics["itpc_word"] > 0.30
+
+
+def test_bw_normalized_ratio_present(itpc_epochs):
+    """Both metric extractors include ratio_bw_normalized key."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    itpc_data, _ = processor.compute_itpc(itpc_epochs)
+    m_morlet = processor.extract_itpc_metrics(itpc_data)
+    assert "ratio_bw_normalized" in m_morlet
+
+    itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
+    m_dft = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    assert "ratio_bw_normalized" in m_dft
