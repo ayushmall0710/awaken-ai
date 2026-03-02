@@ -53,12 +53,28 @@ class LanguageTrackingAnalysis(BasePipeline):
 
     # ITPC Constants
     # Target frequencies based on Sokoliuk 2021 methodology:
-    # Sentence-rate (~0.0625 - 0.065 Hz) and Word-rate (~0.77 Hz)
+    # Sentence-rate (~0.065 Hz) and Word-rate (~0.77 Hz)
     TARGET_SENTENCE_FREQ = 0.065
     TARGET_WORD_FREQ = 0.77
 
+    # Frequency bands for band-averaged ITPC extraction.
+    # Band-averaging across the entrainment band (rather than a single bin) is
+    # more robust to small ICA-induced power shifts between adjacent bins and
+    # reflects the finite bandwidth of neural entrainment responses.
+    # Bands are taken from the stimulus design:
+    #   Sentence: 12 words over ~15.5s -> ~0.065 Hz, nominal band 0.05-0.08 Hz
+    #   Word: ~1.3s per word -> ~0.77 Hz, nominal band 0.70-0.90 Hz
+    SENTENCE_BAND: tuple = (0.05, 0.08)
+    WORD_BAND: tuple = (0.70, 0.90)
+
     ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
+
+    # Target frequency resolution for the zero-padded DFT.
+    # Padding to 0.001 Hz resolution ensures the nearest DFT bin is within
+    # 0.0005 Hz of the target frequencies, eliminating bin-mismatch artifacts
+    # from short epoch lengths (1/16s = 0.0625 Hz raw resolution).
+    DFT_FREQ_RESOLUTION = 0.001
 
     def __init__(
         self,
@@ -81,7 +97,7 @@ class LanguageTrackingAnalysis(BasePipeline):
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
-        sessions = self.loader.get_patient_sessions(self.patient_id)
+        sessions = self.loader.get_patient(self.patient_id).list_sessions()
         all_epochs = []
 
         for date in sessions:
@@ -311,13 +327,19 @@ class LanguageTrackingAnalysis(BasePipeline):
         """
         Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
 
-        For each trial and electrode, computes the FFT, extracts the phase at each
-        frequency bin, then averages unit phase vectors across trials. This provides
-        a single ITPC spectrum (no time dimension) suitable for cross-validating the
-        Morlet wavelet approach.
+        For each trial and electrode, zero-pads the time series to achieve
+        DFT_FREQ_RESOLUTION (0.001 Hz) frequency resolution, then computes the FFT,
+        extracts per-bin phase, and averages unit phase vectors across trials.
 
-        Frequency resolution = 1 / epoch_duration Hz. For 16s epochs this yields
-        ~0.0625 Hz resolution, comparable to Sokoliuk's 0.07 Hz.
+        Zero-padding interpolates the DFT spectrum (Sinc interpolation) so that
+        np.argmin can resolve the exact target frequencies (0.065 Hz sentence,
+        0.77 Hz word) rather than snapping to the nearest integer multiple of
+        1/epoch_duration_s. Without padding, 16s epochs yield 0.0625 Hz resolution
+        and the sentence-rate bin is 4% below the true target.
+
+        Zero-padding does not add spectral information; it only improves bin
+        alignment. The underlying phase estimates remain determined by the recorded
+        data length.
 
         Args:
             epochs: Preprocessed MNE Epochs object.
@@ -330,18 +352,30 @@ class LanguageTrackingAnalysis(BasePipeline):
         n_trials, n_channels, n_times = data.shape
         sfreq = epochs.info["sfreq"]
 
-        spectra = np.fft.rfft(data, axis=2)
-        freqs = np.fft.rfftfreq(n_times, d=1.0 / sfreq)
+        # Zero-pad to achieve DFT_FREQ_RESOLUTION.
+        # n_pad = sfreq / resolution gives samples per cycle of the coarsest bin.
+        n_pad = int(np.ceil(sfreq / self.DFT_FREQ_RESOLUTION))
+        n_fft = max(n_pad, n_times)  # never truncate real data
+
+        spectra = np.fft.rfft(data, n=n_fft, axis=2)
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
 
         unit_vectors = np.exp(1j * np.angle(spectra))
         itpc_spectrum = np.abs(np.mean(unit_vectors, axis=0))
 
-        logger.info(f"DFT ITPC computed: {n_trials} trials, {n_channels} channels")
+        logger.info(
+            f"DFT ITPC computed: {n_trials} trials, {n_channels} channels, "
+            f"n_fft={n_fft} ({freqs[1] - freqs[0]:.4f} Hz resolution)"
+        )
         return itpc_spectrum, freqs
 
     def extract_itpc_metrics_dft(self, itpc_spectrum: np.ndarray, freqs: np.ndarray) -> dict:
         """
         Extract sentence-rate and word-rate ITPC from a DFT ITPC spectrum.
+
+        Averages ITPC across all bins within SENTENCE_BAND and WORD_BAND rather
+        than extracting a single nearest bin. This matches the gridsearch design
+        and is more robust to ICA-induced bin-level power shifts.
 
         Args:
             itpc_spectrum: DFT ITPC array, shape (n_channels, n_freqs).
@@ -350,60 +384,69 @@ class LanguageTrackingAnalysis(BasePipeline):
         Returns:
             dict with same keys as extract_itpc_metrics for direct comparison.
         """
-        target_sent = self.TARGET_SENTENCE_FREQ
-        idx_sent = np.argmin(np.abs(freqs - target_sent))
-        actual_sent = freqs[idx_sent]
-        itpc_sent_val = float(np.mean(itpc_spectrum[:, idx_sent]))
+        sent_mask = (freqs >= self.SENTENCE_BAND[0]) & (freqs <= self.SENTENCE_BAND[1])
+        word_mask = (freqs >= self.WORD_BAND[0]) & (freqs <= self.WORD_BAND[1])
 
-        target_word = self.TARGET_WORD_FREQ
-        idx_word = np.argmin(np.abs(freqs - target_word))
-        actual_word = freqs[idx_word]
-        itpc_word_val = float(np.mean(itpc_spectrum[:, idx_word]))
-
+        itpc_sent_val = float(np.mean(itpc_spectrum[:, sent_mask]))
+        itpc_word_val = float(np.mean(itpc_spectrum[:, word_mask]))
         ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+
+        # Report the frequency of peak ITPC within each band (mean over channels)
+        mean_sent_spec = np.mean(itpc_spectrum[:, sent_mask], axis=0)
+        mean_word_spec = np.mean(itpc_spectrum[:, word_mask], axis=0)
+        peak_sent_hz = (
+            float(freqs[sent_mask][np.argmax(mean_sent_spec)]) if sent_mask.any() else self.TARGET_SENTENCE_FREQ
+        )
+        peak_word_hz = float(freqs[word_mask][np.argmax(mean_word_spec)]) if word_mask.any() else self.TARGET_WORD_FREQ
 
         return {
             "itpc_sentence": itpc_sent_val,
             "itpc_word": itpc_word_val,
             "ratio_sent_word": ratio,
-            "freq_sentence_hz": actual_sent,
-            "freq_word_hz": actual_word,
-            "idx_sentence": idx_sent,
+            "freq_sentence_hz": peak_sent_hz,
+            "freq_word_hz": peak_word_hz,
         }
 
     def extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
         """
-        Extract ITPC metrics at Sentence (0.065 Hz) and Word (0.77 Hz) rates.
+        Extract band-averaged ITPC metrics for sentence-rate and word-rate bands.
+
+        Averages ITPC across all frequency bins within SENTENCE_BAND (0.05-0.08 Hz)
+        and WORD_BAND (0.70-0.90 Hz), then averages across channels and time. This
+        is more robust than single-bin extraction when ICA shifts power between
+        adjacent bins, and matches the frequency band optimization strategy from
+        the original research design.
 
         Args:
-            itpc_data (np.ndarray): ITPC data array.
-            freqs (np.ndarray, optional): Frequencies corresponding to ITPC data. Defaults to class ITPC_FREQS.
+            itpc_data: Morlet ITPC array, shape (n_channels, n_freqs, n_times).
+            freqs: Frequency axis. Defaults to class ITPC_FREQS.
 
         Returns:
-            dict: Dictionary containing sentence_mean, word_mean, ratio, and actual frequencies.
+            dict with itpc_sentence, itpc_word, ratio_sent_word, freq_sentence_hz,
+            freq_word_hz (peak frequency within each band).
         """
         if freqs is None:
             freqs = self.ITPC_FREQS
 
-        target_sent = self.TARGET_SENTENCE_FREQ
-        idx_sent = np.argmin(np.abs(freqs - target_sent))
-        actual_sent = freqs[idx_sent]
-        itpc_sent_val = np.mean(itpc_data[:, idx_sent, :])
+        sent_mask = (freqs >= self.SENTENCE_BAND[0]) & (freqs <= self.SENTENCE_BAND[1])
+        word_mask = (freqs >= self.WORD_BAND[0]) & (freqs <= self.WORD_BAND[1])
 
-        target_word = self.TARGET_WORD_FREQ
-        idx_word = np.argmin(np.abs(freqs - target_word))
-        actual_word = freqs[idx_word]
-        itpc_word_val = np.mean(itpc_data[:, idx_word, :])
-
+        itpc_sent_val = float(np.mean(itpc_data[:, sent_mask, :]))
+        itpc_word_val = float(np.mean(itpc_data[:, word_mask, :]))
         ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+
+        # Report frequency of peak mean ITPC within each band
+        mean_sent = np.mean(itpc_data[:, sent_mask, :], axis=(0, 2))  # (n_sent_bins,)
+        mean_word = np.mean(itpc_data[:, word_mask, :], axis=(0, 2))  # (n_word_bins,)
+        peak_sent_hz = float(freqs[sent_mask][np.argmax(mean_sent)]) if sent_mask.any() else self.TARGET_SENTENCE_FREQ
+        peak_word_hz = float(freqs[word_mask][np.argmax(mean_word)]) if word_mask.any() else self.TARGET_WORD_FREQ
 
         return {
             "itpc_sentence": itpc_sent_val,
             "itpc_word": itpc_word_val,
             "ratio_sent_word": ratio,
-            "freq_sentence_hz": actual_sent,
-            "freq_word_hz": actual_word,
-            "idx_sentence": idx_sent,
+            "freq_sentence_hz": peak_sent_hz,
+            "freq_word_hz": peak_word_hz,
         }
 
     def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):

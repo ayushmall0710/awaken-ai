@@ -202,7 +202,7 @@ def test_compute_itpc_custom_freqs(itpc_epochs):
 
 
 def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
-    """compute_itpc_dft returns spectrum (n_channels, n_freqs) and freq axis."""
+    """compute_itpc_dft returns spectrum (n_channels, n_freqs) with zero-padded freq axis."""
     processor = LanguageTrackingAnalysis(MagicMock())
     itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
 
@@ -211,15 +211,20 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     assert itpc_spectrum.shape[1] == len(freqs)
     assert np.all(itpc_spectrum >= 0)
     assert np.all(itpc_spectrum <= 1)
-    # Freq resolution ~0.0625 Hz for 16s epochs at 256 Hz
-    assert abs(freqs[1] - freqs[0] - 1.0 / 16.0) < 1e-6
+    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.001 Hz) or finer.
+    assert freqs[1] - freqs[0] <= processor.DFT_FREQ_RESOLUTION + 1e-9
+    # Sentence and word rate bins must be within half a bin of their targets.
+    i_sent = np.argmin(np.abs(freqs - processor.TARGET_SENTENCE_FREQ))
+    i_word = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
+    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
+    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
 
 
 # --- Metrics ---
 
 
 def test_extract_itpc_metrics_structure(itpc_epochs):
-    """extract_itpc_metrics returns all expected keys."""
+    """extract_itpc_metrics returns all expected keys without single-bin index."""
     processor = LanguageTrackingAnalysis(MagicMock())
     itpc_data, _ = processor.compute_itpc(itpc_epochs)
     metrics = processor.extract_itpc_metrics(itpc_data)
@@ -230,21 +235,43 @@ def test_extract_itpc_metrics_structure(itpc_epochs):
         "ratio_sent_word",
         "freq_sentence_hz",
         "freq_word_hz",
-        "idx_sentence",
     }
-
     assert expected_keys.issubset(metrics.keys())
+    # idx_sentence no longer returned (band-averaged, no single bin)
+    assert "idx_sentence" not in metrics
+    assert 0 <= metrics["itpc_sentence"] <= 1
+    assert 0 <= metrics["itpc_word"] <= 1
 
 
 def test_extract_itpc_metrics_zero_word():
-    """Ratio is 0.0 when word ITPC is zero (division safety check)."""
+    """Ratio is 0.0 when all ITPC is zero (division safety check)."""
     processor = LanguageTrackingAnalysis(MagicMock())
     freqs = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     n_channels = 7
-    # All zeros -- worst case
     itpc_data = np.zeros((n_channels, len(freqs), 10))
     metrics = processor.extract_itpc_metrics(itpc_data, freqs=freqs)
     assert metrics["ratio_sent_word"] == 0.0
+
+
+def test_band_averaging_uses_multiple_bins(itpc_epochs):
+    """extract_itpc_metrics averages across all bins in SENTENCE_BAND, not just one."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    freqs = processor.ITPC_FREQS
+    sent_mask = (freqs >= processor.SENTENCE_BAND[0]) & (freqs <= processor.SENTENCE_BAND[1])
+    word_mask = (freqs >= processor.WORD_BAND[0]) & (freqs <= processor.WORD_BAND[1])
+
+    # At least 2 Morlet bins must fall inside each band for averaging to be meaningful.
+    assert sent_mask.sum() >= 2, "Sentence band must span at least 2 Morlet bins"
+    assert word_mask.sum() >= 2, "Word band must span at least 2 Morlet bins"
+
+    # Result must be in valid ITPC range.
+    itpc_data, _ = processor.compute_itpc(itpc_epochs)
+    metrics = processor.extract_itpc_metrics(itpc_data)
+    assert 0.0 <= metrics["itpc_sentence"] <= 1.0
+    assert 0.0 <= metrics["itpc_word"] <= 1.0
+    # Peak frequency must lie within the respective band.
+    assert processor.SENTENCE_BAND[0] <= metrics["freq_sentence_hz"] <= processor.SENTENCE_BAND[1]
+    assert processor.WORD_BAND[0] <= metrics["freq_word_hz"] <= processor.WORD_BAND[1]
 
 
 # --- Channel selection ---
@@ -263,7 +290,9 @@ def test_load_no_data():
     """load raises ValueError when all sessions raise FileNotFoundError."""
     processor = LanguageTrackingAnalysis(MagicMock())
     processor.patient_id = "TEST"
-    processor.loader.get_patient_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    mock_patient = MagicMock()
+    mock_patient.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    processor.loader.get_patient.return_value = mock_patient
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
     with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
