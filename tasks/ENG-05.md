@@ -43,7 +43,7 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 ### Implementation
 - **Core Logic**: `LanguageTrackingAnalysis.compute_itpc` uses Morlet wavelets; `compute_itpc_dft` provides DFT cross-validation.
 - **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.05-0.08 Hz, 4 Morlet bins) and `WORD_BAND` (0.70-0.90 Hz, 3 Morlet bins). Single-bin extraction was replaced after RCA revealed fragility to ICA-induced bin-level shifts.
-- **DFT Zero-Padding**: FFT zero-padded to 0.001 Hz resolution so the sentence band bins align correctly (raw 16s resolution of 0.0625 Hz caused 4% frequency error and spurious < 1.0 ratios).
+- **DFT Zero-Padding**: FFT zero-padded to 0.01 Hz resolution so the sentence band bins align correctly (raw 16s resolution of 0.0625 Hz caused 4% frequency error and spurious < 1.0 ratios).
 - **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects.
 
 ### Verification Results
@@ -60,7 +60,7 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - [x] Unit tests in `tests/test_language_tracking.py` (14 passing).
 - [x] ITPC Analysis implemented: Morlet primary + DFT cross-validation.
 - [x] Band-averaged ITPC extraction (`SENTENCE_BAND`, `WORD_BAND`) replacing single-bin approach.
-- [x] DFT zero-padded to 0.001 Hz resolution to eliminate bin-mismatch artifact.
+- [x] DFT zero-padded to 0.01 Hz resolution to eliminate bin-mismatch artifact.
 - [x] All ratios > 1.0 confirmed on both CON008 and CON009 across BAK and NEW pipeline runs.
 
 ## 6. Next Steps
