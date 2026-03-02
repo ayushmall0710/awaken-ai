@@ -73,10 +73,12 @@ class LanguageTrackingAnalysis(BasePipeline):
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
     # Target frequency resolution for the zero-padded DFT.
-    # Padding to 0.001 Hz resolution ensures the nearest DFT bin is within
-    # 0.0005 Hz of the target frequencies, eliminating bin-mismatch artifacts
-    # from short epoch lengths (1/16s = 0.0625 Hz raw resolution).
-    DFT_FREQ_RESOLUTION = 0.001
+    # Padding to 0.01 Hz resolution ensures the nearest DFT bin is within
+    # 0.005 Hz of the target frequencies, eliminating the 4% bin-mismatch
+    # artifact from raw epoch resolution (1/16s = 0.0625 Hz). This is
+    # sufficient because ITPC is extracted by band-averaging across SENTENCE_BAND
+    # and WORD_BAND, not by isolating a single bin.
+    DFT_FREQ_RESOLUTION = 0.01
 
     def __init__(
         self,
@@ -401,7 +403,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             use_fft=True,
             return_itc=True,
             decim=1,
-            n_jobs=1,
+            n_jobs=-1,
             average=True,
         )
         return itc.data, itc
@@ -411,13 +413,13 @@ class LanguageTrackingAnalysis(BasePipeline):
         Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
 
         For each trial and electrode, zero-pads the time series to achieve
-        DFT_FREQ_RESOLUTION (0.001 Hz) frequency resolution, then computes the FFT,
+        DFT_FREQ_RESOLUTION (0.01 Hz) frequency resolution, then computes the FFT,
         extracts per-bin phase, and averages unit phase vectors across trials.
 
         Zero-padding interpolates the DFT spectrum (Sinc interpolation) so that
-        np.argmin can resolve the exact target frequencies (0.065 Hz sentence,
-        0.77 Hz word) rather than snapping to the nearest integer multiple of
-        1/epoch_duration_s. Without padding, 16s epochs yield 0.0625 Hz resolution
+        band selection correctly includes bins near the target frequencies (0.065 Hz
+        sentence, 0.77 Hz word) rather than snapping to the nearest integer multiple
+        of 1/epoch_duration_s. Without padding, 16s epochs yield 0.0625 Hz resolution
         and the sentence-rate bin is 4% below the true target.
 
         Zero-padding does not add spectral information; it only improves bin
@@ -598,9 +600,15 @@ class LanguageTrackingAnalysis(BasePipeline):
         """
         Generate null ITPC distribution via random-phase scrambling.
 
-        For each surrogate, replaces DFT phases with independent uniform random
-        draws while preserving power spectra. This destroys cross-trial phase
-        consistency, providing the correct null for ITPC.
+        For each surrogate, draws independent uniform random phases for each
+        trial/channel/frequency-bin combination, which destroys cross-trial phase
+        consistency and provides the correct null for ITPC.
+
+        The unit vector of a complex number with random phase is simply
+        exp(i * random_phase), so no real-data FFT or magnitude computation is
+        needed. Random phases are generated only for the band of interest rather
+        than the full spectrum, which reduces memory usage by the ratio of band
+        bins to total FFT bins.
 
         Parameters
         ----------
@@ -627,18 +635,20 @@ class LanguageTrackingAnalysis(BasePipeline):
         n_fft = max(int(np.ceil(sfreq / self.DFT_FREQ_RESOLUTION)), n_times)
         freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
         band_mask = (freqs >= band_limits[0]) & (freqs <= band_limits[1])
-
-        magnitudes = np.abs(np.fft.rfft(data, n=n_fft, axis=2))
+        n_band_bins = int(band_mask.sum())
 
         rng = np.random.default_rng(seed)
         null_values = np.empty(n_permutations)
 
         for i in range(n_permutations):
-            random_phases = rng.uniform(0, 2 * np.pi, size=magnitudes.shape)
-            scrambled = magnitudes * np.exp(1j * random_phases)
-            unit_vecs = np.exp(1j * np.angle(scrambled))
-            itpc_null = np.abs(np.mean(unit_vecs, axis=0))
-            null_values[i] = float(np.mean(itpc_null[:, band_mask]))
+            # Draw random phases only for band bins -- no real-data FFT needed.
+            # exp(i * angle(magnitude * exp(i * phi))) == exp(i * phi), so
+            # magnitudes cancel out and only the random phase determines the
+            # unit vector direction.
+            random_phases = rng.uniform(0, 2 * np.pi, size=(n_trials, n_channels, n_band_bins))
+            unit_vecs = np.exp(1j * random_phases)
+            itpc_null = np.abs(np.mean(unit_vecs, axis=0))  # (n_channels, n_band_bins)
+            null_values[i] = float(np.mean(itpc_null))
 
         return null_values
 

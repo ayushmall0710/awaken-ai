@@ -211,13 +211,13 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     assert itpc_spectrum.shape[1] == len(freqs)
     assert np.all(itpc_spectrum >= 0)
     assert np.all(itpc_spectrum <= 1)
-    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.001 Hz) or finer.
+    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.01 Hz) or finer.
     assert freqs[1] - freqs[0] <= processor.DFT_FREQ_RESOLUTION + 1e-9
     # Sentence and word rate bins must be within half a bin of their targets.
     i_sent = np.argmin(np.abs(freqs - processor.TARGET_SENTENCE_FREQ))
     i_word = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
-    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
-    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
+    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
+    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
 
 
 # --- Metrics ---
