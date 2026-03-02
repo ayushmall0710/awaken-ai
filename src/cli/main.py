@@ -19,7 +19,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from src.cli.cli_utils import resolve_patients
+from src.cli.cli_utils import get_loader, resolve_patients
 from src.cli.commands.inspect_cmd import count_app, info_app, list_app
 from src.cli.commands.setup_cmd import setup_app
 from src.cli.logging_config import setup_logging
@@ -125,7 +125,7 @@ def _check_setup(patient_id: str, session: Optional[str], loader: UnifiedDataLoa
     missing = []
     if not (config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet").exists():
         missing.append("timestamp alignment")
-    sessions = [session] if session else loader.get_patient_sessions(patient_id)
+    sessions = [session] if session else loader.get_patient(patient_id).list_sessions()
     if not any((config.EPOCHS_DIR / patient_id / date).exists() for date in sessions):
         missing.append("artifact rejection")
     return missing
@@ -146,6 +146,17 @@ def main(
     ] = None,
 ) -> None:
     setup_logging(verbose)
+
+
+@app.command("unify-data")
+def unify_data_cmd(
+    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output")] = False,
+) -> None:
+    """Compile and deduplicate all patient CSVs into the global unified Parquet dataset."""
+    from src.cli.commands.setup_cmd import _run_unify_data
+
+    _run_unify_data(verbose)
+    typer.echo(f"\nData unification complete. Saved to: {config.UNIFIED_PARQUET_PATH}\n")
 
 
 @app.command("run")
@@ -180,7 +191,7 @@ def run_cmd(
     from src.cli.runners import language as lang_runner
     from src.cli.runners import oddball as ob_runner
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
     _guard_setup(patient_ids, session, loader)
 

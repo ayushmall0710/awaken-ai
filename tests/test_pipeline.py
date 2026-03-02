@@ -1,6 +1,12 @@
 import pandas as pd
 
-from src.data_processing.pipeline import REQUIRED_COLS, process_stimulus_df
+from src.data_processing.pipeline import (
+    REQUIRED_COLS,
+    filter_latest_sessions,
+    generate_session_ids,
+    generate_trial_ids,
+    process_stimulus_df,
+)
 
 
 class TestProcessStimulusDf:
@@ -34,7 +40,9 @@ class TestProcessStimulusDf:
             }
         )
         result = process_stimulus_df(df, source_name="test.csv")
-        assert list(result.columns) == REQUIRED_COLS
+        # process_stimulus_df outputs base cols (sans session_id, trial_id)
+        base_cols = [c for c in REQUIRED_COLS if c not in ("session_id", "trial_id")]
+        assert list(result.columns) == base_cols
         assert "extra_column" not in result.columns
         assert "another_extra" not in result.columns
 
@@ -141,7 +149,8 @@ class TestProcessStimulusDf:
         )
         result = process_stimulus_df(df, source_name="test.csv")
         assert len(result) == 0
-        assert list(result.columns) == REQUIRED_COLS
+        base_cols = [c for c in REQUIRED_COLS if c not in ("session_id", "trial_id")]
+        assert list(result.columns) == base_cols
 
     def test_sentences_normalization_in_pipeline(self):
         """Sentences should be properly normalized to list of dicts."""
@@ -167,3 +176,108 @@ class TestProcessStimulusDf:
             {"event": "b", "onset_time": None},
         ]
         assert result.iloc[2]["sentences"] == [{"event": "x"}]
+
+
+class TestGenerateSessionIds:
+    """Tests for vectorized session_id generation."""
+
+    def test_basic_format(self):
+        df = pd.DataFrame(
+            {
+                "patient_id": ["CON008", "CON008"],
+                "date": ["2025-01-10", "2025-01-10"],
+            }
+        )
+        result = generate_session_ids(df)
+        assert result.iloc[0] == "s_CON008_202501100000"
+        assert result.iloc[0] == result.iloc[1]  # same session
+
+    def test_different_dates_different_ids(self):
+        df = pd.DataFrame(
+            {
+                "patient_id": ["CON008", "CON008"],
+                "date": ["2025-01-10", "2025-01-11"],
+            }
+        )
+        result = generate_session_ids(df)
+        assert result.iloc[0] != result.iloc[1]
+
+    def test_malformed_date_fallback(self):
+        df = pd.DataFrame(
+            {
+                "patient_id": ["CON008"],
+                "date": ["bad-date_123!"],
+            }
+        )
+        result = generate_session_ids(df)
+        # Should strip non-alphanumeric chars: "bad-date_123!" -> "baddate_123"
+        assert result.iloc[0] == "s_CON008_baddate_123"
+
+
+class TestGenerateTrialIds:
+    """Tests for vectorized trial_id generation."""
+
+    def test_sequential_ids(self):
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430"] * 3,
+                "trial_type": ["language", "oddball", "language"],
+                "start_time": [100.0, 200.0, 300.0],
+            }
+        )
+        result = generate_trial_ids(df)
+        assert list(result) == ["lt1_CON008_202501101430", "obt1_CON008_202501101430", "lt2_CON008_202501101430"]
+
+    def test_unknown_type_fallback(self):
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430"],
+                "trial_type": ["mystery_type"],
+                "start_time": [100.0],
+            }
+        )
+        result = generate_trial_ids(df)
+        assert result.iloc[0] == "unk1_CON008_202501101430"
+
+
+class TestFilterLatestSessions:
+    """Tests for filtering older sessions that map to the same session_id (same minute)."""
+
+    def test_filter_different_minutes(self):
+        """Should keep both rows if they map to different session_ids."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101431"],
+                "date": ["1/10/2025 14:30:15", "1/10/2025 14:31:05"],
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2
+
+    def test_filter_same_minute(self):
+        """Should only keep the row with the actual latest timestamp within the same minute."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101430", "s_CON008_202501101500"],
+                "date": [
+                    "1/10/2025 14:30:15",
+                    "1/10/2025 14:30:45",
+                    "1/10/2025 15:00:00",
+                ],  # 15s vs 45s, and a different session
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2
+        # Should keep the later 14:30 session and the 15:00 session
+        assert list(result["date"]) == ["1/10/2025 14:30:45", "1/10/2025 15:00:00"]
+
+    def test_keep_identical_timestamps(self):
+        """Should keep both rows if their exact timestamps are identical (e.g. from the same actual session)."""
+        df = pd.DataFrame(
+            {
+                "session_id": ["s_CON008_202501101430", "s_CON008_202501101430"],
+                "date": ["1/10/2025 14:30:15", "1/10/2025 14:30:15"],
+            }
+        )
+        result = filter_latest_sessions(df)
+        assert len(result) == 2

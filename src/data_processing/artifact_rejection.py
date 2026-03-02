@@ -613,19 +613,19 @@ class ArtifactRejector:
         """Run ENG-03 for a list of patients.
 
         Returns:
-            Mapping of ``(patient_id, date) -> {trial_type: epochs_fif_path}``.
+            Mapping of ``(patient_id, session_id) -> {trial_type: epochs_fif_path}``.
         """
         out: Dict[Tuple[str, str], Dict[str, Path]] = {}
         for patient_id in patient_ids:
             patient = self.loader.get_patient(patient_id)
-            for date in patient.list_sessions():
-                out[(patient_id, date)] = self.run_session(patient_id, date, save=save)
+            for session_id in patient.list_session_ids():
+                out[(patient_id, session_id)] = self.run_session(patient_id, session_id, save=save)
         return out
 
     def run_session(
         self,
         patient_id: str,
-        date: str,
+        session_id: str,
         save: bool = True,
         return_raw_clean: bool = False,
     ) -> Union[Dict[str, Path], Tuple[Dict[str, Path], mne.io.BaseRaw]]:
@@ -635,7 +635,7 @@ class ArtifactRejector:
 
         Args:
             patient_id: Patient identifier.
-            date: Session date (YYYY-MM-DD).
+            session_id: The unique session ID (e.g. s_CON008_202501100000).
             save: Whether to save epochs and QC parquet to disk.
             return_raw_clean: If True, return (saved_paths, raw_clean) where raw_clean
                 is the ICA-cleaned raw EEG before epoch creation. If False, return only
@@ -645,7 +645,7 @@ class ArtifactRejector:
             saved_paths: Mapping of trial_type -> epochs .fif path.
             raw_clean (optional): ICA-cleaned raw when return_raw_clean=True.
         """
-        raw, session_df, edf_start_unix, timezone_offset = self._load_session_inputs(patient_id, date)
+        raw, session_df, date, edf_start_unix, timezone_offset = self._load_session_inputs(patient_id, session_id)
         raw_clean, ica_summary = self._apply_ica(raw)
 
         saved_paths: Dict[str, Path] = {}
@@ -658,6 +658,7 @@ class ArtifactRejector:
                 trial_type=trial_type,
                 patient_id=patient_id,
                 date=date,
+                session_id=session_id,
                 edf_start_unix=edf_start_unix,
                 timezone_offset=timezone_offset,
                 ica_summary=ica_summary,
@@ -665,13 +666,13 @@ class ArtifactRejector:
             qc_rows.append(qc_row)
 
             if save and epochs is not None and len(epochs) > 0:
-                fif_path = self._epochs_output_path(patient_id, date, trial_type)
+                fif_path = self._epochs_output_path(patient_id, session_id, trial_type)
                 fif_path.parent.mkdir(parents=True, exist_ok=True)
                 epochs.save(fif_path, overwrite=True)
                 saved_paths[trial_type] = fif_path
 
         if save:
-            self._save_qc(qc_rows, patient_id, date)
+            self._save_qc(qc_rows, patient_id, session_id)
 
         if return_raw_clean:
             return saved_paths, raw_clean
@@ -679,30 +680,34 @@ class ArtifactRejector:
 
     # ── I/O helpers ──────────────────────────────────────────────────────
 
-    def _load_session_inputs(self, patient_id: str, date: str) -> Tuple[mne.io.BaseRaw, pd.DataFrame, float, float]:
-        """Load EDF, aligned events, and compute time-conversion constants."""
-        raw = self.loader.load_edf(patient_id, date=date, use_clipped=self.use_clipped)
+    def _load_session_inputs(
+        self, patient_id: str, session_id: str
+    ) -> Tuple[mne.io.BaseRaw, pd.DataFrame, str, float, float]:
+        """Load EDF, aligned events, and compute time-conversion constants. Returns the date as well for QC rows."""
         aligned_df = self.loader.load_aligned_events(patient_id)
-        session_df = aligned_df[aligned_df["date"] == date].copy()
+        session_df = aligned_df[aligned_df["session_id"] == session_id].copy()
 
         if session_df.empty:
             raise FileNotFoundError(
-                f"No aligned events found for {patient_id} date={date}. "
+                f"No aligned events found for {patient_id} session_id={session_id}. "
                 f"Expected {config.ALIGNED_EVENTS_DIR / f'{patient_id}_events.parquet'}"
             )
 
+        date = session_df["date"].iloc[0]
+        raw = self.loader.load_edf(patient_id, date=date, use_clipped=self.use_clipped)
+
         timezone_offset = detect_timezone_offset(raw, session_df)
         edf_start_unix = raw.info["meas_date"].timestamp() if raw.info.get("meas_date") is not None else 0.0
-        return raw, session_df, edf_start_unix, timezone_offset
+        return raw, session_df, date, edf_start_unix, timezone_offset
 
     @staticmethod
-    def _epochs_output_path(patient_id: str, date: str, trial_type: str) -> Path:
+    def _epochs_output_path(patient_id: str, session_id: str, trial_type: str) -> Path:
         safe_tt = str(trial_type).lower().strip()
-        return config.EPOCHS_DIR / patient_id / date / f"{safe_tt}-epo.fif"
+        return config.EPOCHS_DIR / patient_id / session_id / f"{safe_tt}-epo.fif"
 
     @staticmethod
-    def _save_qc(qc_rows: List[Dict[str, Any]], patient_id: str, date: str) -> None:
-        qc_path = config.QC_DIR / patient_id / date / "eng03_qc.parquet"
+    def _save_qc(qc_rows: List[Dict[str, Any]], patient_id: str, session_id: str) -> None:
+        qc_path = config.QC_DIR / patient_id / session_id / "eng03_qc.parquet"
         qc_path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(qc_rows).to_parquet(qc_path, index=False)
 
@@ -752,6 +757,7 @@ class ArtifactRejector:
         trial_type: str,
         patient_id: str,
         date: str,
+        session_id: str,
         edf_start_unix: float,
         timezone_offset: float,
         ica_summary: ICASummary,
@@ -769,6 +775,7 @@ class ArtifactRejector:
             return None, self._qc_row(
                 patient_id=patient_id,
                 date=date,
+                session_id=session_id,
                 trial_type=trial_type,
                 n_total=0,
                 n_dropped=0,
@@ -784,6 +791,7 @@ class ArtifactRejector:
         qc = self._qc_row(
             patient_id=patient_id,
             date=date,
+            session_id=session_id,
             trial_type=trial_type,
             n_total=n_total_before,
             n_dropped=len(dropped),
@@ -862,6 +870,8 @@ class ArtifactRejector:
                     "end_time_unix": valid_df["end_time"].values.astype(float) if "end_time" in valid_df else np.nan,
                     "duration_log_sec": valid_df["duration"].values.astype(float) if "duration" in valid_df else np.nan,
                     "source_file": valid_df["source_file"].values if "source_file" in valid_df else None,
+                    "session_id": valid_df["session_id"].values,
+                    "trial_id": valid_df["trial_id"].values,
                 }
             )
         except Exception:
@@ -893,6 +903,7 @@ class ArtifactRejector:
         *,
         patient_id: str,
         date: str,
+        session_id: str,
         trial_type: str,
         n_total: int,
         n_dropped: int,
@@ -905,6 +916,7 @@ class ArtifactRejector:
         row: Dict[str, Any] = {
             "patient_id": patient_id,
             "date": date,
+            "session_id": session_id,
             "trial_type": str(trial_type).lower().strip(),
             "window_sec": float(_trial_type_window_sec(trial_type, fallback_duration=None) or np.nan),
             "reject_ptp_percentile": float(self.reject_ptp_percentile),

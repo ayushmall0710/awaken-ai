@@ -19,7 +19,7 @@ def _events_done(patient_id: str) -> bool:
 
 
 def _epochs_done(patient_id: str, loader: UnifiedDataLoader) -> bool:
-    sessions = loader.get_patient_sessions(patient_id)
+    sessions = loader.get_patient(patient_id).list_sessions()
     return any((config.EPOCHS_DIR / patient_id / date).exists() for date in sessions)
 
 
@@ -27,6 +27,14 @@ def _run_update_patient_records(verbose: bool) -> bool:
     from src.data_loading.digitize_patient_records import main as digitize_main
 
     digitize_main()
+    return True
+
+
+def _run_unify_data(verbose: bool) -> bool:
+    from src.data_loading import config
+    from src.data_processing.pipeline import unify_stimulus_data
+
+    unify_stimulus_data(config.EEG_DATA_DIR, config.UNIFIED_PARQUET_PATH, verbose=verbose)
     return True
 
 
@@ -149,9 +157,9 @@ def setup_cmd(
     if ctx.invoked_subcommand is not None:
         return
 
-    from src.cli.cli_utils import resolve_patients
+    from src.cli.cli_utils import get_loader, resolve_patients
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
 
     if all_patients and len(patient_ids) > 1 and not force:
@@ -181,9 +189,9 @@ def setup_and_run_cmd(
 
     Runs setup steps first (with Y/n per step unless --force), then dispatches pipelines.
     """
-    from src.cli.cli_utils import resolve_patients
+    from src.cli.cli_utils import get_loader, resolve_patients
 
-    loader = UnifiedDataLoader()
+    loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
 
     if all_patients and len(patient_ids) > 1 and not force:

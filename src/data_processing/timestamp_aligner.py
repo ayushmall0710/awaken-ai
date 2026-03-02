@@ -525,8 +525,10 @@ class TimestampAligner:
             [
                 {
                     "patient_id": self.patient_id,
+                    "session_id": trial["session_id"],
                     "date": trial["date"],
                     "trial_type": trial["trial_type"],
+                    "trial_id": trial["trial_id"],
                     "start_time": trial["start_time"],
                     "end_time": trial["end_time"],
                     "duration": trial["duration"],

@@ -21,7 +21,7 @@ def run(
     pipeline = CommandFollowingAnalysis()
 
     for pid in patient_ids:
-        sessions = [session] if session else loader.get_patient_sessions(pid)
+        sessions = [session] if session else loader.get_patient(pid).list_sessions()
 
         for sess in sessions:
             typer.echo(f"[command-following] {pid} / {sess} ...")
