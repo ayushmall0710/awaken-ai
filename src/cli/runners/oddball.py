@@ -7,6 +7,7 @@ from typing import Optional
 import pandas as pd
 import typer
 
+from src.cli.cli_utils import print_table
 from src.data_loading import UnifiedDataLoader
 from src.data_processing.erp_pipeline import OddballERPPipeline
 
@@ -22,10 +23,7 @@ def run(
     n_success = 0
 
     for pid in patient_ids:
-        sessions = [session] if session else loader.get_patient_sessions(pid)
-        if not sessions:
-            typer.echo(f"[oddball] {pid} ... no sessions found", err=True)
-            continue
+        sessions = [session] if session else loader.get_patient(pid).list_sessions()
 
         for sess in sessions:
             typer.echo(f"[oddball] {pid} / {sess} ...")
@@ -42,26 +40,13 @@ def run(
             status = result.get("status")
             if status == "success":
                 n_success += 1
-                _print_success(result)
+                features = result.get("features")
+                if isinstance(features, pd.DataFrame) and not features.empty:
+                    print_table(features, title=f"{pid} / {sess} — P300 Results")
+                else:
+                    typer.echo("  ✓ Success")
             else:
                 typer.echo(f"  - Skipped ({status})", err=True)
 
     if n_success == 0:
         raise typer.Exit(1)
-
-
-def _print_success(result: dict) -> None:
-    """Print concise oddball success summary."""
-    features = result.get("features")
-    if isinstance(features, pd.DataFrame) and not features.empty:
-        row = features.iloc[0]
-        n_epochs = int(row.get("n_epochs", 0))
-        amp = row.get("p300_amplitude_uV")
-        lat = row.get("p300_latency_ms")
-        if pd.notna(amp) and pd.notna(lat):
-            typer.echo(f"  ✓ Success: epochs={n_epochs}, p300={float(amp):.2f}uV @ {float(lat):.1f}ms")
-        else:
-            typer.echo(f"  ✓ Success: epochs={n_epochs}")
-        return
-
-    typer.echo("  ✓ Success")

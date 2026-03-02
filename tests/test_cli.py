@@ -323,7 +323,7 @@ def test_oddball_runner_partial_failure_does_not_exit(MockPipeline, mock_loader)
         },
     ]
     MockPipeline.return_value = pipeline
-    mock_loader.get_patient_sessions.return_value = ["2025-01-10", "2025-01-11"]
+    mock_loader.get_patient.return_value.list_sessions.return_value = ["2025-01-10", "2025-01-11"]
 
     oddball_runner.run(mock_loader, ["CON008"], None, None)
 
