@@ -398,3 +398,28 @@ def test_bw_normalized_ratio_present(itpc_epochs):
     itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
     m_dft = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
     assert "ratio_bw_normalized" in m_dft
+
+
+# --- Per-session trajectory ---
+
+
+def test_run_per_session_returns_rows(mock_loader):
+    """run_per_session returns DataFrame with one row per session."""
+    mock_loader.get_patient.return_value.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    df = processor.run_per_session("TEST")
+    assert len(df) == 2
+    assert "session_date" in df.columns
+    assert "itpc_sentence" in df.columns
+
+
+def test_run_per_session_skips_missing(mock_loader):
+    """run_per_session skips sessions where epochs are missing."""
+    mock_loader.get_patient.return_value.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
+    mock_loader.load_clean_epochs.side_effect = [
+        mock_loader.load_clean_epochs.return_value,
+        FileNotFoundError("missing"),
+    ]
+    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    df = processor.run_per_session("TEST")
+    assert len(df) == 1

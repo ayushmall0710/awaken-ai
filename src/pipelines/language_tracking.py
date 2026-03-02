@@ -221,6 +221,47 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         return self.results
 
+    def run_per_session(self, patient_id: str) -> pd.DataFrame:
+        """
+        Run ITPC analysis independently per recording session.
+
+        Returns a DataFrame with one row per session, suitable for
+        longitudinal trajectory visualization.
+
+        Parameters
+        ----------
+        patient_id : str
+            Patient identifier.
+
+        Returns
+        -------
+        pd.DataFrame
+            Per-session ITPC metrics with 'session_date' column.
+        """
+        self.patient_id = patient_id
+        sessions = self.loader.get_patient(patient_id).list_sessions()
+
+        rows = []
+        for date in sessions:
+            try:
+                epochs = self.loader.load_clean_epochs(patient_id, date, trial_type="language")
+            except FileNotFoundError:
+                logger.warning(f"No clean epochs for {patient_id} on {date}, skipping.")
+                continue
+
+            if self.filter_signal:
+                epochs = self.preprocess_signal(epochs)
+            epochs = self.select_optimal_channels(epochs, focus=self.focus)
+
+            itpc_spectrum, dft_freqs = self.compute_itpc_dft(epochs)
+            metrics = self.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
+            metrics["session_date"] = date
+            metrics["patient_id"] = patient_id
+            metrics["n_trials"] = len(epochs)
+            rows.append(metrics)
+
+        return pd.DataFrame(rows)
+
     def generate_summary(self) -> Any:
         """Generate summary of language tracking results."""
         if self.results is None or self.results.empty:
