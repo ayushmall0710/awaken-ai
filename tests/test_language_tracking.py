@@ -297,3 +297,39 @@ def test_load_no_data():
 
     with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
         processor.load()
+
+
+# --- Permutation test ---
+
+
+def test_permutation_null_shape(itpc_epochs):
+    """Null distribution has correct shape and values in [0, 1]."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    null = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=50, band="sentence")
+    assert null.shape == (50,)
+    assert np.all(null >= 0) and np.all(null <= 1)
+
+
+def test_permutation_null_near_chance(itpc_epochs):
+    """Null ITPC mean should be near theoretical chance 1/sqrt(n_trials)."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    n = len(itpc_epochs)
+    chance = 1.0 / np.sqrt(n)
+    null = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=200, band="sentence", seed=0)
+    assert abs(np.mean(null) - chance) < 0.2 * chance
+
+
+def test_permutation_pvalue_computation():
+    """p-value equals proportion of null >= observed."""
+    observed = 0.14
+    null = np.array([0.10, 0.12, 0.13, 0.15, 0.20])
+    p = LanguageTrackingAnalysis.compute_permutation_pvalue(observed, null)
+    assert p == pytest.approx(2 / 5)
+
+
+def test_permutation_reproducible(itpc_epochs):
+    """Same seed produces identical null distributions."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    null_a = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
+    null_b = processor.compute_itpc_permutation_null(itpc_epochs, n_permutations=30, seed=99)
+    np.testing.assert_array_equal(null_a, null_b)

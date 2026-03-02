@@ -151,6 +151,14 @@ class LanguageTrackingAnalysis(BasePipeline):
         itpc_spectrum, dft_freqs = self.compute_itpc_dft(self.epochs)
         dft_metrics = self.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
 
+        # 4. Permutation test for statistical significance
+        n_permutations = kwargs.get("n_permutations", 1000)
+        logger.info(f"[{self.patient_id}] Running permutation test ({n_permutations} surrogates)...")
+        null_sentence = self.compute_itpc_permutation_null(self.epochs, n_permutations, band="sentence")
+        null_word = self.compute_itpc_permutation_null(self.epochs, n_permutations, band="word")
+        p_sentence = self.compute_permutation_pvalue(dft_metrics["itpc_sentence"], null_sentence)
+        p_word = self.compute_permutation_pvalue(dft_metrics["itpc_word"], null_word)
+
         # Combine results
         result_dict = {
             "patient_id": self.patient_id,
@@ -169,6 +177,10 @@ class LanguageTrackingAnalysis(BasePipeline):
             "dft_ratio_sent_word": dft_metrics["ratio_sent_word"],
             "dft_freq_sentence_hz": dft_metrics["freq_sentence_hz"],
             "dft_freq_word_hz": dft_metrics["freq_word_hz"],
+            # Permutation test
+            "dft_p_sentence": p_sentence,
+            "dft_p_word": p_word,
+            "dft_n_permutations": n_permutations,
         }
 
         self.results = pd.DataFrame([result_dict])
@@ -448,6 +460,79 @@ class LanguageTrackingAnalysis(BasePipeline):
             "freq_sentence_hz": peak_sent_hz,
             "freq_word_hz": peak_word_hz,
         }
+
+    def compute_itpc_permutation_null(
+        self,
+        epochs: mne.Epochs,
+        n_permutations: int = 1000,
+        band: str = "sentence",
+        seed: int = 42,
+    ) -> np.ndarray:
+        """
+        Generate null ITPC distribution via random-phase scrambling.
+
+        For each surrogate, replaces DFT phases with independent uniform random
+        draws while preserving power spectra. This destroys cross-trial phase
+        consistency, providing the correct null for ITPC.
+
+        Parameters
+        ----------
+        epochs : mne.Epochs
+            Preprocessed epochs (same as passed to compute_itpc_dft).
+        n_permutations : int
+            Number of surrogates.
+        band : str
+            "sentence" or "word" -- which band to average over.
+        seed : int
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        null_values : np.ndarray, shape (n_permutations,)
+            Null ITPC values (one per surrogate).
+        """
+        band_limits = self.SENTENCE_BAND if band == "sentence" else self.WORD_BAND
+
+        data = epochs.get_data()
+        n_trials, n_channels, n_times = data.shape
+        sfreq = epochs.info["sfreq"]
+
+        n_fft = max(int(np.ceil(sfreq / self.DFT_FREQ_RESOLUTION)), n_times)
+        freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
+        band_mask = (freqs >= band_limits[0]) & (freqs <= band_limits[1])
+
+        magnitudes = np.abs(np.fft.rfft(data, n=n_fft, axis=2))
+
+        rng = np.random.default_rng(seed)
+        null_values = np.empty(n_permutations)
+
+        for i in range(n_permutations):
+            random_phases = rng.uniform(0, 2 * np.pi, size=magnitudes.shape)
+            scrambled = magnitudes * np.exp(1j * random_phases)
+            unit_vecs = np.exp(1j * np.angle(scrambled))
+            itpc_null = np.abs(np.mean(unit_vecs, axis=0))
+            null_values[i] = float(np.mean(itpc_null[:, band_mask]))
+
+        return null_values
+
+    @staticmethod
+    def compute_permutation_pvalue(observed: float, null_distribution: np.ndarray) -> float:
+        """
+        Compute one-sided p-value: proportion of null >= observed.
+
+        Parameters
+        ----------
+        observed : float
+            Observed ITPC value.
+        null_distribution : np.ndarray
+            Null ITPC values from compute_itpc_permutation_null.
+
+        Returns
+        -------
+        float
+            p-value in [0, 1].
+        """
+        return float(np.mean(null_distribution >= observed))
 
     def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
         """
