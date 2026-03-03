@@ -32,12 +32,12 @@ ITPC is extracted by **averaging over all frequency bins within each band**, not
 
 | Band | Frequencies | Morlet bins | DFT bins (zero-padded) |
 | :--- | :--- | :--- | :--- |
-| Sentence | 0.05 - 0.08 Hz | 4 bins | 31 bins |
-| Word | 0.70 - 0.90 Hz | 3 bins | 201 bins |
+| Sentence | 0.05 - 0.08 Hz | 4 bins | 3 bins |
+| Word | 0.70 - 0.90 Hz | 3 bins | 20 bins |
 
 ### DFT Zero-Padding
 
-The DFT path zero-pads the time series to achieve 0.001 Hz frequency resolution before computing the FFT. Without padding, the 16s epoch raw resolution (0.0625 Hz) causes the 0.065 Hz sentence target to fall between bins (4% error). Zero-padding allows band-selection to correctly include the appropriate bins in both bands.
+The DFT path zero-pads the time series to achieve 0.01 Hz frequency resolution before computing the FFT. Without padding, the 16s epoch raw resolution (0.0625 Hz) causes the 0.065 Hz sentence target to fall between bins (4% error). Zero-padding allows band-selection to correctly include the appropriate bins in both bands.
 
 ### Statistical Validation
 To distinguish high-level comprehension from basic acoustic processing, we compare band-averaged ITPC at the **Sentence Rate** versus the **Word Rate**.
@@ -94,7 +94,7 @@ The analysis is inspired by Sokoliuk et al. (2021). The following intentional di
 | **Downsample to 256 Hz** | Applied in `preprocess_signal` | Source EDFs record at 512 Hz; downsampling to 256 Hz halves ITPC computation time |
 | **Discard first 2.28 s** | Not applied | Our epochs start at `tmin=0.0` (stimulus onset) with 16s window -- no pre-stimulus period to discard |
 | **Single-bin ITPC at 0.065 Hz** | Band-averaged across 0.05-0.08 Hz | Matches gridsearch design from `docs/language_tracking.md`; robust to small ICA-induced bin shifts |
-| **ITPC via DFT** | Morlet primary; zero-padded DFT for cross-validation | Morlet provides time-frequency resolution; DFT zero-padded to 0.001 Hz resolution for accurate band alignment |
+| **ITPC via DFT** | Morlet primary; zero-padded DFT for cross-validation | Morlet provides time-frequency resolution; DFT zero-padded to 0.01 Hz resolution for accurate band alignment |
 | **Spearman / Bootstrap / Regression** | Deferred | Requires larger N; planned for group-level analysis |
 
 ## 5. Execution Steps
