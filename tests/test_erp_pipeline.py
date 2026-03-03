@@ -498,12 +498,8 @@ class TestOddballERPPipeline:
         )
 
         # Build mapping QC table (Table 3)
-        qc_df1 = pd.DataFrame(
-            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 3}]
-        )
-        qc_df2 = pd.DataFrame(
-            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 5}]
-        )
+        qc_df1 = pd.DataFrame([{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 3}])
+        qc_df2 = pd.DataFrame([{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 5}])
 
         # First batch
         pipeline._update_master_feature_tables(clinical_df1, detail_df1, qc_df1)

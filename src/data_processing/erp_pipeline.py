@@ -1074,9 +1074,7 @@ class OddballERPPipeline:
 
         self._update_master_feature_tables(clinical_df, detail_df, qc_df)
 
-    def _build_clinical_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_clinical_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """
         Build Table 1: Main analysis table (one row per patient-session).
 
@@ -1088,10 +1086,7 @@ class OddballERPPipeline:
         Returns:
             Single-row DataFrame with clinical features
         """
-        qc_pass = (
-            features.get("p300_n_valid_electrodes", 0) >= 2
-            and features.get("p300_subtype") != "absent"
-        )
+        qc_pass = features.get("p300_n_valid_electrodes", 0) >= 2 and features.get("p300_subtype") != "absent"
 
         return pd.DataFrame(
             [
@@ -1120,9 +1115,7 @@ class OddballERPPipeline:
             ]
         )
 
-    def _build_electrode_detail_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_electrode_detail_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """
         Build Table 2: Per-electrode breakdown (one row per electrode per session).
 
@@ -1172,9 +1165,7 @@ class OddballERPPipeline:
 
         return pd.DataFrame(rows)
 
-    def _build_mapping_qc_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_mapping_qc_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """
         Build Table 3: Mapping & QC diagnostics (one row per patient-session).
 
@@ -1222,19 +1213,13 @@ class OddballERPPipeline:
         clinical_path = self._output_paths.features / "p300_oddball_clinical.parquet"
         if clinical_path.exists():
             master_clinical = pd.read_parquet(clinical_path)
-            clinical_combined = pd.concat(
-                [master_clinical, clinical_df], ignore_index=True
-            )
+            clinical_combined = pd.concat([master_clinical, clinical_df], ignore_index=True)
         else:
             clinical_combined = clinical_df.copy()
 
-        clinical_combined = clinical_combined.drop_duplicates(
-            subset=["patient_id", "session_date"], keep="last"
-        )
+        clinical_combined = clinical_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
         clinical_combined.to_parquet(clinical_path, index=False)
-        logger.info(
-            f"Updated clinical table: {clinical_path} ({len(clinical_combined)} rows)"
-        )
+        logger.info(f"Updated clinical table: {clinical_path} ({len(clinical_combined)} rows)")
 
         # Table 2: Electrode detail
         detail_path = self._output_paths.features / "p300_oddball_electrode_detail.parquet"
@@ -1248,9 +1233,7 @@ class OddballERPPipeline:
             subset=["patient_id", "session_date", "electrode"], keep="last"
         )
         detail_combined.to_parquet(detail_path, index=False)
-        logger.info(
-            f"Updated electrode detail table: {detail_path} ({len(detail_combined)} rows)"
-        )
+        logger.info(f"Updated electrode detail table: {detail_path} ({len(detail_combined)} rows)")
 
         # Table 3: Mapping QC
         qc_path = self._output_paths.features / "p300_oddball_mapping_qc.parquet"
@@ -1260,9 +1243,7 @@ class OddballERPPipeline:
         else:
             qc_combined = qc_df.copy()
 
-        qc_combined = qc_combined.drop_duplicates(
-            subset=["patient_id", "session_date"], keep="last"
-        )
+        qc_combined = qc_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
         qc_combined.to_parquet(qc_path, index=False)
         logger.info(f"Updated mapping QC table: {qc_path} ({len(qc_combined)} rows)")
 

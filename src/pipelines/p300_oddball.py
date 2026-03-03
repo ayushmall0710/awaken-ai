@@ -12,7 +12,6 @@ into a BasePipeline-compatible class for CLI orchestration.
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -78,7 +77,13 @@ class P300OddballPipeline(BasePipeline):
         loader: Optional[UnifiedDataLoader] = None,
         verbose: bool = False,
     ):
-        super().__init__(loader=loader or UnifiedDataLoader(data_root=data_root or config.LOCAL_DATA_ROOT, verbose=verbose))
+        super().__init__(
+            loader=loader
+            or UnifiedDataLoader(
+                data_root=data_root or config.LOCAL_DATA_ROOT,
+                verbose=verbose,
+            )
+        )
         self.data_root = data_root or config.LOCAL_DATA_ROOT
         self.output_dir = output_dir or config.PROCESSED_DATA_DIR
         self.verbose = verbose
@@ -135,9 +140,7 @@ class P300OddballPipeline(BasePipeline):
         if self.aligned_events is None or self.aligned_events.empty:
             raise ValueError(f"No aligned events found for patient {self.patient_id}")
 
-        oddball_trials = self.aligned_events[
-            self.aligned_events["trial_type"].str.lower() == "oddball"
-        ].copy()
+        oddball_trials = self.aligned_events[self.aligned_events["trial_type"].str.lower() == "oddball"].copy()
 
         if oddball_trials.empty:
             raise ValueError(f"No oddball trials found for patient {self.patient_id}")
@@ -154,7 +157,7 @@ class P300OddballPipeline(BasePipeline):
                     session_id=session_id,
                     trial_type="oddball",
                 )
-            except FileNotFoundError as e:
+            except FileNotFoundError:
                 logger.error(
                     f"ENG-03 oddball epochs not found for {self.patient_id} - {date}. "
                     "Run ENG-03 (ArtifactRejector.run_session) first.",
@@ -564,8 +567,7 @@ class P300OddballPipeline(BasePipeline):
         """Compute difference ERP (rare - standard)."""
         if rare_erp.data.shape != standard_erp.data.shape:
             logger.error(
-                "Rare and standard ERPs have mismatched shapes: "
-                f"{rare_erp.data.shape} vs {standard_erp.data.shape}",
+                f"Rare and standard ERPs have mismatched shapes: {rare_erp.data.shape} vs {standard_erp.data.shape}",
             )
             raise ValueError("Rare and standard ERPs must have identical channel/time dimensions")
 
@@ -777,8 +779,7 @@ class P300OddballPipeline(BasePipeline):
             validation["is_on_time"] = False
             validation["issues"].append("latency_out_of_range")
             logger.warning(
-                f"{patient_id} - {electrode}: Latency {latency:.1f}ms outside acceptable range "
-                f"[{min_lat}-{max_lat}ms]",
+                f"{patient_id} - {electrode}: Latency {latency:.1f}ms outside acceptable range [{min_lat}-{max_lat}ms]",
             )
 
         exp_min, exp_max = ERP_CONFIG["p300_expected_latency_range"]
@@ -931,14 +932,9 @@ class P300OddballPipeline(BasePipeline):
 
         self._update_master_feature_tables(clinical_df, detail_df, qc_df)
 
-    def _build_clinical_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_clinical_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 1: Main analysis table (one row per patient-session)."""
-        qc_pass = (
-            features.get("p300_n_valid_electrodes", 0) >= 2
-            and features.get("p300_subtype") != "absent"
-        )
+        qc_pass = features.get("p300_n_valid_electrodes", 0) >= 2 and features.get("p300_subtype") != "absent"
 
         return pd.DataFrame(
             [
@@ -965,9 +961,7 @@ class P300OddballPipeline(BasePipeline):
             ]
         )
 
-    def _build_electrode_detail_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_electrode_detail_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 2: Per-electrode breakdown (one row per electrode per session)."""
         rows = []
         for electrode in ["Fz", "Cz", "Pz"]:
@@ -1006,9 +1000,7 @@ class P300OddballPipeline(BasePipeline):
 
         return pd.DataFrame(rows)
 
-    def _build_mapping_qc_table(
-        self, patient_id: str, date: str, features: Dict[str, Any]
-    ) -> pd.DataFrame:
+    def _build_mapping_qc_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 3: Mapping & QC diagnostics (one row per patient-session)."""
         return pd.DataFrame(
             [
@@ -1039,19 +1031,13 @@ class P300OddballPipeline(BasePipeline):
         clinical_path = self._output_paths.features / "p300_oddball_clinical.parquet"
         if clinical_path.exists():
             master_clinical = pd.read_parquet(clinical_path)
-            clinical_combined = pd.concat(
-                [master_clinical, clinical_df], ignore_index=True
-            )
+            clinical_combined = pd.concat([master_clinical, clinical_df], ignore_index=True)
         else:
             clinical_combined = clinical_df.copy()
 
-        clinical_combined = clinical_combined.drop_duplicates(
-            subset=["patient_id", "session_date"], keep="last"
-        )
+        clinical_combined = clinical_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
         clinical_combined.to_parquet(clinical_path, index=False)
-        logger.info(
-            "Updated clinical table: %s (%d rows)", clinical_path, len(clinical_combined)
-        )
+        logger.info("Updated clinical table: %s (%d rows)", clinical_path, len(clinical_combined))
 
         # Table 2: Electrode detail
         detail_path = self._output_paths.features / "p300_oddball_electrode_detail.parquet"
@@ -1079,9 +1065,7 @@ class P300OddballPipeline(BasePipeline):
         else:
             qc_combined = qc_df.copy()
 
-        qc_combined = qc_combined.drop_duplicates(
-            subset=["patient_id", "session_date"], keep="last"
-        )
+        qc_combined = qc_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
         qc_combined.to_parquet(qc_path, index=False)
         logger.info("Updated mapping QC table: %s (%d rows)", qc_path, len(qc_combined))
 
@@ -1242,10 +1226,7 @@ class P300OddballPipeline(BasePipeline):
             fig.set_size_inches(12, 10)
             fig.subplots_adjust(top=0.85, bottom=0.15, hspace=0.5)
 
-            title_text = (
-                "ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — "
-                f"{patient_id} | {date}"
-            )
+            title_text = f"ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — {patient_id} | {date}"
             fig.text(
                 0.5,
                 0.98,
@@ -1256,10 +1237,7 @@ class P300OddballPipeline(BasePipeline):
                 bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
             )
 
-            caption = (
-                "Top: Each row = one trial. Bottom: Average. Time 0 = stimulus. "
-                "Color = voltage (µV)."
-            )
+            caption = "Top: Each row = one trial. Bottom: Average. Time 0 = stimulus. Color = voltage (µV)."
             fig.text(
                 0.5,
                 0.03,
@@ -1339,4 +1317,3 @@ class P300OddballPipeline(BasePipeline):
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         logger.info("Saved ERP plot: %s", save_path)
-
