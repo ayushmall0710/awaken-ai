@@ -29,6 +29,7 @@ def main():
     args = parser.parse_args()
 
     results = []
+    pipeline = LanguageTrackingAnalysis(focus=args.focus)
 
     for pid in args.patients:
         res = pipeline.run(patient_id=pid)
