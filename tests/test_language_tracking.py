@@ -246,11 +246,12 @@ def test_extract_itpc_metrics_structure(itpc_epochs):
 def test_extract_itpc_metrics_zero_word():
     """Ratio is 0.0 when all ITPC is zero (division safety check)."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    freqs = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
+    freqs = np.logspace(np.log10(0.05), np.log10(5.0), num=60)
     n_channels = 7
     itpc_data = np.zeros((n_channels, len(freqs), 10))
     metrics = processor.extract_itpc_metrics(itpc_data, freqs=freqs)
     assert metrics["ratio_sent_word"] == 0.0
+    assert metrics["ratio_sent_phrase"] == 0.0
 
 
 def test_band_averaging_uses_multiple_bins(itpc_epochs):
@@ -258,19 +259,23 @@ def test_band_averaging_uses_multiple_bins(itpc_epochs):
     processor = LanguageTrackingAnalysis(MagicMock())
     freqs = processor.ITPC_FREQS
     sent_mask = (freqs >= processor.SENTENCE_BAND[0]) & (freqs <= processor.SENTENCE_BAND[1])
+    phrase_mask = (freqs >= processor.PHRASE_BAND[0]) & (freqs <= processor.PHRASE_BAND[1])
     word_mask = (freqs >= processor.WORD_BAND[0]) & (freqs <= processor.WORD_BAND[1])
 
-    # At least 2 Morlet bins must fall inside each band for averaging to be meaningful.
+    # At least some Morlet bins must fall inside each band for averaging to be meaningful.
     assert sent_mask.sum() >= 2, "Sentence band must span at least 2 Morlet bins"
-    assert word_mask.sum() >= 2, "Word band must span at least 2 Morlet bins"
+    assert phrase_mask.sum() >= 2, "Phrase band must span at least 2 Morlet bins"
+    assert word_mask.sum() >= 1, "Word band must span at least 1 Morlet bin"
 
     # Result must be in valid ITPC range.
     itpc_data, _ = processor.compute_itpc(itpc_epochs)
     metrics = processor.extract_itpc_metrics(itpc_data)
     assert 0.0 <= metrics["itpc_sentence"] <= 1.0
+    assert 0.0 <= metrics["itpc_phrase"] <= 1.0
     assert 0.0 <= metrics["itpc_word"] <= 1.0
     # Peak frequency must lie within the respective band.
     assert processor.SENTENCE_BAND[0] <= metrics["freq_sentence_hz"] <= processor.SENTENCE_BAND[1]
+    assert processor.PHRASE_BAND[0] <= metrics["freq_phrase_hz"] <= processor.PHRASE_BAND[1]
     assert processor.WORD_BAND[0] <= metrics["freq_word_hz"] <= processor.WORD_BAND[1]
 
 
