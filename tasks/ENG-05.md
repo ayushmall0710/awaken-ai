@@ -18,7 +18,7 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Data Loading**: Uses `UnifiedDataLoader.load_clean_epochs` to fetch pre-cleaned data from ENG-03.
 - **Language Processor**: `src/data_processing/language_optimization.py`
     - **Input**: Expects `ArtifactRejector` to have been run first (generates `-epo.fif` files).
-    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3).
+    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3) and strictly validates focus inputs (`LH`, `RH`, `Clinical`).
     - **Filtering**: Applies 0.5-30Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
     - **Output**: Returns `mne.Epochs` restricted to optimal channels.
 
@@ -35,28 +35,33 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Visualization**: `eda/visualize_language_optimization.py` generates diagnostic plots (Sensor Map, ERP, PSD, Spectrogram).
 - **Signal Quality**: `eda/analyze_language_signals.py` computes quantitative metrics (Amplitude ~8uV, 1/f spectral scaling) to confirm physiological plausibility.
 
-## 4. ITPC Analysis (New Feature)
+## 4. ITPC Analysis
 ### Objectives
-- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of sentence structure (~0.065 Hz).
-- **Statistical Validation**: Compare Sentence Rate ITPC vs Word Rate ITPC (~0.77 Hz) to distinguish linguistic processing from acoustic envelope tracking.
+- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of sentence structure.
+- **Statistical Validation**: Compare Sentence Band ITPC vs Word Band ITPC to distinguish linguistic processing from acoustic envelope tracking.
 
 ### Implementation
-- **Core Logic**: `LanguageProcessor.compute_itpc` uses Morlet wavelets to extract phase information.
-- **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects and computes the Sentence/Word ITPC ratio.
+- **Core Logic**: `LanguageTrackingAnalysis.compute_itpc` uses Morlet wavelets; `compute_itpc_dft` provides DFT cross-validation.
+- **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.05-0.08 Hz, 4 Morlet bins) and `WORD_BAND` (0.70-0.90 Hz, 3 Morlet bins). Single-bin extraction was replaced after RCA revealed fragility to ICA-induced bin-level shifts.
+- **DFT Zero-Padding**: FFT zero-padded to 0.001 Hz resolution so the sentence band bins align correctly (raw 16s resolution of 0.0625 Hz caused 4% frequency error and spurious < 1.0 ratios).
+- **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects.
 
 ### Verification Results
-- **Subjects**: `CON008` & `CON009`.
-- **Finding**: Both subjects show **Sentence ITPC > Word ITPC** (Ratio ~1.1-1.2), indicating hierarchical processing.
+- **Subjects**: `CON008` & `CON009` (68 trials each, LH focus).
+- **Finding**: All subjects/sources show **Sentence ITPC > Word ITPC** (Ratio 1.10-2.09), indicating hierarchical processing.
+- **Morlet ratios**: CON008 1.16-1.23, CON009 1.16-1.23.
+- **DFT ratios**: CON008 1.75-2.09, CON009 1.10-1.66.
 - **Visuals**: Topomaps confirm left-lateralized activation consistent with language networks.
 
 ## 5. Definition of Done
-- [x] `src/data_processing/language_optimization.py` refactored to use ENG-03 outputs.
-- [x] Function to return `mne.Epochs` restricted to optimal channels.
-- [x] Unit tests in `tests/test_language_optimization.py`.
-- [x] Verification script `eda/verify_language_optimization.py` passing for CON008.
-- [x] Visualization script `eda/visualize_language_optimization.py` created and tested.
-- [x] Signal analysis script `eda/analyze_language_signals.py` confirming data quality.
-- [x] ITPC Analysis implemented and verified (Ratio > 1.0).
+- [x] `src/pipelines/language_tracking.py` refactored from `LanguageProcessor` to `LanguageTrackingAnalysis`, inheriting `BasePipeline`.
+- [x] `load()`, `preprocess()`, `analyze()` pipeline methods implemented and CLI-integrated.
+- [x] Channel selection (`select_optimal_channels`) with LH/RH/Clinical focus and strict parameter validation.
+- [x] Unit tests in `tests/test_language_tracking.py` (14 passing).
+- [x] ITPC Analysis implemented: Morlet primary + DFT cross-validation.
+- [x] Band-averaged ITPC extraction (`SENTENCE_BAND`, `WORD_BAND`) replacing single-bin approach.
+- [x] DFT zero-padded to 0.001 Hz resolution to eliminate bin-mismatch artifact.
+- [x] All ratios > 1.0 confirmed on both CON008 and CON009 across BAK and NEW pipeline runs.
 
 ## 6. Next Steps
 - **Group Statistics**: As N increases, run cluster-based permutation tests on the group level.

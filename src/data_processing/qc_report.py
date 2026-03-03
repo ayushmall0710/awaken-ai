@@ -1,7 +1,7 @@
 """
-ENG-06: QC Report Generation
+Analysis: QC Report Generation
 
-Aggregates per-session QC metadata produced by ENG-03 (artifact rejection) and
+Aggregates per-session QC metadata produced by preprocessing (artifact rejection) and
 generates an HTML dashboard showing artifact rejection rates, SNR metrics,
 epoch counts, and ICA summaries per patient and trial type.
 
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 class QCDataCollector:
-    """Discover and load ENG-03 QC parquet files from the processed QC directory."""
+    """Discover and load preprocessing QC parquet files from the processed QC directory."""
 
     def __init__(self, qc_dir: Path | None = None) -> None:
         self.qc_dir = Path(qc_dir) if qc_dir is not None else config.QC_DIR
@@ -78,7 +78,7 @@ class QCDataCollector:
 
 
 def _empty_qc_dataframe() -> pd.DataFrame:
-    """Return an empty DataFrame with the standard ENG-03 QC columns."""
+    """Return an empty DataFrame with the standard preprocessing QC columns."""
     cols = [
         "patient_id",
         "date",
@@ -106,7 +106,7 @@ def _empty_qc_dataframe() -> pd.DataFrame:
 
 
 class QCMetricsCalculator:
-    """Compute derived QC metrics from raw ENG-03 QC data.
+    """Compute derived QC metrics from raw preprocessing QC data.
 
     All ``compute_*`` methods return a *new* DataFrame (the original is not mutated).
     ``compute_all_metrics()`` chains every computation and returns a single enriched DF.
@@ -212,7 +212,7 @@ class QCMetricsCalculator:
     def parse_drop_reasons(self) -> pd.DataFrame:
         """Add ``primary_drop_reason`` column from the ``drop_reason`` field.
 
-        ``drop_reason`` in ENG-03 is a single string label per row (e.g.
+        ``drop_reason`` in preprocessing is a single string label per row (e.g.
         ``"ENG03_PTP_GT_P95"``).  This method normalises it to a clean label
         and stores it as ``primary_drop_reason`` for easy grouping.
         """
@@ -310,7 +310,7 @@ def _count_iclabel_artifact_types(
     Strategy:
     1. If ``iclabel_labels`` exists and the per-type lists are empty, derive
        counts from the labels of the *excluded* component indices.
-    2. Otherwise fall back to the per-type lists stored by ENG-03.
+    2. Otherwise fall back to the per-type lists stored by preprocessing.
     """
     counts: dict[str, int] = {"eog": 0, "ecg": 0, "muscle": 0, "line_noise": 0, "channel_noise": 0}
     labels = d.get("iclabel_labels")
@@ -625,7 +625,7 @@ class QCReportGenerator:
         return _build_html_table([headers_map.get(c, c) for c in available], rows)
 
     def _render_session_notes(self, pdf: pd.DataFrame) -> str:
-        """Render ENG-03 session notes as a small HTML list.
+        """Render session notes as a small HTML list.
 
         The ``notes`` column stores a JSON array of strings (e.g.
         ``["noisy session", "audio on left side only"]``).

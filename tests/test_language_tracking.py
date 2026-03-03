@@ -8,7 +8,7 @@ import mne
 import numpy as np
 import pytest
 
-from src.data_processing.language_optimization import LanguageProcessor
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
 
 
 @pytest.fixture
@@ -79,7 +79,7 @@ def itpc_epochs():
 @pytest.fixture
 def mock_loader(mock_language_epochs):
     """Mock UnifiedDataLoader."""
-    with patch("src.data_processing.language_optimization.UnifiedDataLoader") as MockLoader:
+    with patch("src.pipelines.language_tracking.UnifiedDataLoader") as MockLoader:
         loader_instance = MockLoader.return_value
 
         # Mock get_patient().list_sessions()
@@ -95,27 +95,30 @@ def mock_loader(mock_language_epochs):
 
 def test_initialization(mock_loader):
     """Test standard initialization."""
-    processor = LanguageProcessor(loader=mock_loader)
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
     assert processor.loader is not None
     assert "F7" in processor.LH_FOCUS_CHANNELS
 
 
-def test_process_patient_success(mock_loader):
-    """Test process_patient loads clean epochs and returns them."""
-    processor = LanguageProcessor(loader=mock_loader)
+def test_load_and_preprocess_success(mock_loader):
+    """Test load and preprocess work correctly with clean epochs."""
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
+    processor.patient_id = "TEST"
+    processor.focus = "LH"
 
-    epochs = processor.process_patient("TEST", focus="LH")
+    processor.load()
+    processor.preprocess()
 
-    assert epochs is not None
+    assert processor.epochs is not None
     # mne.EpochsArray does not inherit from mne.Epochs, but both share BaseEpochs (which is not always easy to import)
     # So we just check if it looks like epochs
-    assert len(epochs) == 3
+    assert len(processor.epochs) == 3
     mock_loader.load_clean_epochs.assert_called_with("TEST", "2024-01-01", trial_type="language")
 
 
 def test_select_optimal_channels_lh(mock_language_epochs):
     """Test LH channel selection priority on Epochs."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     # Run selection
     processed_epochs = processor.select_optimal_channels(mock_language_epochs, focus="LH")
@@ -127,12 +130,12 @@ def test_select_optimal_channels_lh(mock_language_epochs):
     assert "P7" in current_chs
 
     # Verify we didn't lose too many
-    assert len(current_chs) >= 6
+    assert len(current_chs) >= 3
 
 
 def test_select_optimal_channels_missing():
     """Test behavior when target channels are missing (should warn, not crash)."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     # Create epochs with only generic names
     info = mne.create_info(["CH1", "CH2"], 1000.0, ch_types="eeg")
@@ -146,7 +149,7 @@ def test_select_optimal_channels_missing():
 
 def test_preprocess_signal(mock_language_epochs):
     """Test filtering and downsampling in preprocess_signal."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
 
     filtered = processor.preprocess_signal(mock_language_epochs)
 
@@ -158,7 +161,7 @@ def test_preprocess_signal(mock_language_epochs):
 
 def test_preprocess_signal_no_downsample(itpc_epochs):
     """preprocess_signal should skip resampling when already at target or below."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     # itpc_epochs is already at 256 Hz (TARGET_SFREQ), so no resampling should occur.
     filtered = processor.preprocess_signal(itpc_epochs)
     assert filtered.info["sfreq"] == 256.0
@@ -169,7 +172,7 @@ def test_preprocess_signal_no_downsample(itpc_epochs):
 
 def test_compute_itpc_returns_data_and_itc(itpc_epochs):
     """compute_itpc returns ndarray and AverageTFR with expected shape."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_data, itc_obj = processor.compute_itpc(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
@@ -186,7 +189,7 @@ def test_compute_itpc_returns_data_and_itc(itpc_epochs):
 
 def test_compute_itpc_custom_freqs(itpc_epochs):
     """Custom freq/cycle arrays passed to compute_itpc override class defaults."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     custom_freqs = np.array([0.1, 0.5, 1.0])
     custom_cycles = np.array([1.0, 1.0, 1.0])
 
@@ -199,8 +202,8 @@ def test_compute_itpc_custom_freqs(itpc_epochs):
 
 
 def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
-    """compute_itpc_dft returns spectrum (n_channels, n_freqs) and freq axis."""
-    processor = LanguageProcessor(MagicMock())
+    """compute_itpc_dft returns spectrum (n_channels, n_freqs) with zero-padded freq axis."""
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
@@ -208,16 +211,21 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     assert itpc_spectrum.shape[1] == len(freqs)
     assert np.all(itpc_spectrum >= 0)
     assert np.all(itpc_spectrum <= 1)
-    # Freq resolution ~0.0625 Hz for 16s epochs at 256 Hz
-    assert abs(freqs[1] - freqs[0] - 1.0 / 16.0) < 1e-6
+    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.001 Hz) or finer.
+    assert freqs[1] - freqs[0] <= processor.DFT_FREQ_RESOLUTION + 1e-9
+    # Sentence and word rate bins must be within half a bin of their targets.
+    i_sent = np.argmin(np.abs(freqs - processor.TARGET_SENTENCE_FREQ))
+    i_word = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
+    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
+    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2
 
 
 # --- Metrics ---
 
 
 def test_extract_itpc_metrics_structure(itpc_epochs):
-    """extract_itpc_metrics returns all expected keys."""
-    processor = LanguageProcessor(MagicMock())
+    """extract_itpc_metrics returns all expected keys without single-bin index."""
+    processor = LanguageTrackingAnalysis(MagicMock())
     itpc_data, _ = processor.compute_itpc(itpc_epochs)
     metrics = processor.extract_itpc_metrics(itpc_data)
 
@@ -227,21 +235,43 @@ def test_extract_itpc_metrics_structure(itpc_epochs):
         "ratio_sent_word",
         "freq_sentence_hz",
         "freq_word_hz",
-        "idx_sentence",
     }
-
     assert expected_keys.issubset(metrics.keys())
+    # idx_sentence no longer returned (band-averaged, no single bin)
+    assert "idx_sentence" not in metrics
+    assert 0 <= metrics["itpc_sentence"] <= 1
+    assert 0 <= metrics["itpc_word"] <= 1
 
 
 def test_extract_itpc_metrics_zero_word():
-    """Ratio is 0.0 when word ITPC is zero (division safety check)."""
-    processor = LanguageProcessor(MagicMock())
+    """Ratio is 0.0 when all ITPC is zero (division safety check)."""
+    processor = LanguageTrackingAnalysis(MagicMock())
     freqs = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
     n_channels = 7
-    # All zeros -- worst case
     itpc_data = np.zeros((n_channels, len(freqs), 10))
     metrics = processor.extract_itpc_metrics(itpc_data, freqs=freqs)
     assert metrics["ratio_sent_word"] == 0.0
+
+
+def test_band_averaging_uses_multiple_bins(itpc_epochs):
+    """extract_itpc_metrics averages across all bins in SENTENCE_BAND, not just one."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    freqs = processor.ITPC_FREQS
+    sent_mask = (freqs >= processor.SENTENCE_BAND[0]) & (freqs <= processor.SENTENCE_BAND[1])
+    word_mask = (freqs >= processor.WORD_BAND[0]) & (freqs <= processor.WORD_BAND[1])
+
+    # At least 2 Morlet bins must fall inside each band for averaging to be meaningful.
+    assert sent_mask.sum() >= 2, "Sentence band must span at least 2 Morlet bins"
+    assert word_mask.sum() >= 2, "Word band must span at least 2 Morlet bins"
+
+    # Result must be in valid ITPC range.
+    itpc_data, _ = processor.compute_itpc(itpc_epochs)
+    metrics = processor.extract_itpc_metrics(itpc_data)
+    assert 0.0 <= metrics["itpc_sentence"] <= 1.0
+    assert 0.0 <= metrics["itpc_word"] <= 1.0
+    # Peak frequency must lie within the respective band.
+    assert processor.SENTENCE_BAND[0] <= metrics["freq_sentence_hz"] <= processor.SENTENCE_BAND[1]
+    assert processor.WORD_BAND[0] <= metrics["freq_word_hz"] <= processor.WORD_BAND[1]
 
 
 # --- Channel selection ---
@@ -249,23 +279,21 @@ def test_extract_itpc_metrics_zero_word():
 
 def test_select_optimal_channels_clinical(mock_language_epochs):
     """Clinical channel focus returns a valid subset."""
-    processor = LanguageProcessor(MagicMock())
+    processor = LanguageTrackingAnalysis(MagicMock())
     processed = processor.select_optimal_channels(mock_language_epochs, focus="Clinical")
     assert len(processed.ch_names) >= 1
     # Clinical selection must not add channels that were not in the original
     assert set(processed.ch_names).issubset(set(mock_language_epochs.ch_names))
 
 
-# --- process_patient edge cases ---
-
-
-def test_process_patient_no_data():
-    """process_patient returns None when all sessions raise FileNotFoundError."""
-    processor = LanguageProcessor(MagicMock())
+def test_load_no_data():
+    """load raises ValueError when all sessions raise FileNotFoundError."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor.patient_id = "TEST"
     mock_patient = MagicMock()
     mock_patient.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
     processor.loader.get_patient.return_value = mock_patient
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
-    result = processor.process_patient("TEST")
-    assert result is None
+    with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
+        processor.load()

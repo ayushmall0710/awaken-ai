@@ -9,10 +9,6 @@ import typer
 
 from src.data_loading import UnifiedDataLoader, config
 
-setup_app = typer.Typer(
-    help="Set up prerequisites for a patient, then optionally run analysis.", invoke_without_command=True
-)
-
 
 def _events_done(patient_id: str) -> bool:
     return (config.ALIGNED_EVENTS_DIR / f"{patient_id}_events.parquet").exists()
@@ -142,9 +138,7 @@ def _do_setup(patient_id: str, verbose: bool, force: bool, loader: UnifiedDataLo
         typer.echo(f"\nSetup complete for {patient_id}.")
 
 
-@setup_app.callback()
 def setup_cmd(
-    ctx: typer.Context,
     patients: Annotated[
         Optional[list[str]],
         typer.Argument(help="Patient IDs to set up (e.g. CON008 CON009). Omit if using --all."),
@@ -154,8 +148,6 @@ def setup_cmd(
     force: Annotated[bool, typer.Option("--force", "-f", help="Skip Y/n prompts and run all steps")] = False,
 ) -> None:
     """Set up prerequisites (patient records, alignment, artifact rejection) for one or more patients."""
-    if ctx.invoked_subcommand is not None:
-        return
 
     from src.cli.cli_utils import get_loader, resolve_patients
 
@@ -169,54 +161,3 @@ def setup_cmd(
         _do_setup(pid, verbose, force, loader)
 
     typer.echo("\nAll done.")
-
-
-@setup_app.command("run")
-def setup_and_run_cmd(
-    patients: Annotated[
-        Optional[list[str]],
-        typer.Argument(help="Patient IDs (e.g. CON008 CON009). Omit if using --all."),
-    ] = None,
-    all_patients: Annotated[bool, typer.Option("--all", "-a", help="Run for all available patients")] = False,
-    force: Annotated[bool, typer.Option("--force", "-f", help="Skip Y/n prompts and run all setup steps")] = False,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output for each step")] = False,
-    pipeline: Annotated[
-        Optional[str], typer.Option("--pipeline", "-p", help="Which pipeline to run after setup")
-    ] = None,
-    session: Annotated[Optional[str], typer.Option("--session", "-s", help="Restrict to a specific session")] = None,
-) -> None:
-    """Set up prerequisites and then run analysis pipelines.
-
-    Runs setup steps first (with Y/n per step unless --force), then dispatches pipelines.
-    """
-    from src.cli.cli_utils import get_loader, resolve_patients
-
-    loader = get_loader()
-    patient_ids = resolve_patients(patients, all_patients, loader)
-
-    if all_patients and len(patient_ids) > 1 and not force:
-        typer.confirm(f"Run setup for all {len(patient_ids)} patients?", default=True, abort=True)
-
-    for pid in patient_ids:
-        _do_setup(pid, verbose, force, loader)
-
-    typer.echo("\nSetup done. Starting analysis...\n")
-
-    # Reuse main.py's run dispatch — import lazily to avoid circular refs
-    from src.cli.main import Pipeline, _detect_pipelines, _dispatch_pipelines, _guard_setup
-    from src.cli.runners import command_following as cf_runner
-    from src.cli.runners import language as lang_runner
-    from src.cli.runners import oddball as ob_runner
-
-    _guard_setup(patient_ids, loader)
-    pl = Pipeline(pipeline) if pipeline else None
-    pipelines_to_run = {pl} if pl else _detect_pipelines(patient_ids, session, loader)
-
-    if not pipelines_to_run:
-        typer.echo("No applicable pipelines found for the given patients/session.", err=True)
-        raise typer.Exit(1)
-
-    typer.echo(f"Running pipelines: {', '.join(p.value for p in sorted(pipelines_to_run, key=lambda x: x.value))}")
-    _dispatch_pipelines(
-        pipelines_to_run, loader, patient_ids, session, 0.05, "LH", None, cf_runner, lang_runner, ob_runner
-    )

@@ -7,8 +7,10 @@ Update these paths to match your system setup.
 import os
 from pathlib import Path
 
-# Project root directory (adjust if needed)
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# Project root directory
+# Since the package might be installed in site-packages, we default to the current working directory,
+# or allow overriding via the AWAKEN_PROJECT_ROOT environment variable.
+PROJECT_ROOT = Path(os.environ.get("AWAKEN_PROJECT_ROOT", Path.cwd()))
 
 ONEDRIVE_ROOT = os.environ.get(
     "ONEDRIVE_ROOT",
@@ -33,11 +35,11 @@ EEG_DATA_DIR = LOCAL_DATA_ROOT / "EEG"
 PROCESSED_DATA_DIR = LOCAL_DATA_ROOT / "processed"
 ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 
-# ENG-03 outputs
+# Preprocessing (ENG-03) outputs
 EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
 QC_DIR = PROCESSED_DATA_DIR / "qc"
 
-# ENG-06 outputs
+# Analysis (ENG-06) outputs
 REPORTS_DIR = PROCESSED_DATA_DIR / "reports"
 
 # Audio directories (relative to LOCAL_DATA_ROOT)
