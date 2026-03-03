@@ -69,7 +69,7 @@ INSTRUCTION_COLOR = "#fbbf24"  # yellow
 
 @dataclass
 class CommandPair:
-    """Paired keep-stop segments cropped from clean ENG-03 epochs."""
+    """Paired keep-stop segments cropped from clean preprocessed epochs."""
 
     keep: mne.Epochs
     stop: mne.Epochs
@@ -222,10 +222,10 @@ class CommandFollowingAnalysis(BasePipeline):
 
     def load(self) -> None:
         """
-        Load clean epochs (from ENG-03 artifact rejection) and extract
+        Load clean epochs (from artifact rejection) and extract
         paired keep-stop command segments.
 
-        ENG-03 saves artifact-rejected epochs per trial type as .fif files.
+        Preprocessing saves artifact-rejected epochs per trial type as .fif files.
         This method loads those clean epochs, picks ROI channels, then uses
         Epochs.crop() to extract individual keep/stop segments directly.
         """
@@ -381,7 +381,7 @@ class CommandFollowingAnalysis(BasePipeline):
     def preprocess(self) -> None:
         """Apply bandpass filter (8-30Hz) to isolate alpha/beta bands.
 
-        Note: Artifact rejection (ICA) is already done by ENG-03.
+        Note: Artifact rejection (ICA) is already done during preprocessing.
         Bandpass is still needed to isolate motor-relevant frequencies.
         """
         if len(self.pairs) == 0:

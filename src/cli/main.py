@@ -21,7 +21,7 @@ import typer
 
 from src.cli.cli_utils import get_loader, resolve_patients
 from src.cli.commands.inspect_cmd import count_app, info_app, list_app
-from src.cli.commands.setup_cmd import setup_app
+from src.cli.commands.setup_cmd import _do_setup, setup_cmd
 from src.cli.logging_config import setup_logging
 from src.data_loading import UnifiedDataLoader, config
 
@@ -37,7 +37,7 @@ app = typer.Typer(
 app.add_typer(list_app, name="list")
 app.add_typer(info_app, name="info")
 app.add_typer(count_app, name="count")
-app.add_typer(setup_app, name="setup")
+app.command(name="setup")(setup_cmd)
 
 
 @app.command("qc")
@@ -182,6 +182,7 @@ def run_cmd(
         Optional[str],
         typer.Option("--electrodes", help="Comma-separated electrodes for oddball pipeline (e.g. --electrodes Pz,Cz)"),
     ] = None,
+    setup: Annotated[bool, typer.Option("--setup", help="Run guided setup before executing the pipeline")] = False,
 ) -> None:
     """Run analysis pipelines for one or more patients.
 
@@ -193,6 +194,11 @@ def run_cmd(
 
     loader = get_loader()
     patient_ids = resolve_patients(patients, all_patients, loader)
+
+    if setup:
+        for pid in patient_ids:
+            _do_setup(pid, verbose=False, force=False, loader=loader)
+
     _guard_setup(patient_ids, session, loader)
 
     pipelines_to_run = {pipeline} if pipeline else _detect_pipelines(patient_ids, session, loader)
