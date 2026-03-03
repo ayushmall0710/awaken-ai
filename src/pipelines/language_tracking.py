@@ -11,7 +11,6 @@ References:
 """
 
 import logging
-from pathlib import Path
 from typing import Any, Iterable, Optional, Union
 
 import mne
@@ -81,6 +80,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         loader: Optional[UnifiedDataLoader] = None,
         focus: Union[str, Iterable[str]] = "LH",
         filter_signal: bool = True,
+        session_id: Optional[str] = None,
     ):
         """
         Initialize the LanguageTrackingAnalysis.
@@ -89,23 +89,27 @@ class LanguageTrackingAnalysis(BasePipeline):
             loader: Optional UnifiedDataLoader instance.
             focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
             filter_signal: Whether to apply bandpass filtering.
+            session_id: Optional specific session ID to load. If None, loads all sessions.
         """
         super().__init__(loader=loader)
         self.focus = focus
         self.filter_signal = filter_signal
+        self.session_id = session_id
         self.epochs: Optional[mne.Epochs] = None
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
-        sessions = self.loader.get_patient(self.patient_id).list_sessions()
+        sessions = [self.session_id] if self.session_id else self.loader.get_patient(self.patient_id).list_sessions()
         all_epochs = []
 
-        for date in sessions:
+        for session_id in sessions:
             try:
-                epochs = self.loader.load_clean_epochs(self.patient_id, date, trial_type="language")
+                epochs = self.loader.load_clean_epochs(self.patient_id, session_id, trial_type="language")
                 all_epochs.append(epochs)
             except FileNotFoundError:
-                logger.warning(f"No clean language epochs found for {self.patient_id} on {date}. Skipping session.")
+                logger.warning(
+                    f"No clean language epochs found for {self.patient_id} on {session_id}. Skipping session."
+                )
                 continue
 
         if not all_epochs:
@@ -133,7 +137,9 @@ class LanguageTrackingAnalysis(BasePipeline):
         Compute ITPC (Morlet and DFT) and return results.
         """
         if self.epochs is None:
-            raise ValueError("Epochs not preprocessed. Call preprocess() first.")
+            logger.info(f"[{self.patient_id}] Epochs not loaded. Calling load() and preprocess()...")
+            self.load()
+            self.preprocess()
 
         focus_name = self.focus if isinstance(self.focus, str) else "Custom"
 
@@ -141,10 +147,6 @@ class LanguageTrackingAnalysis(BasePipeline):
         logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
         itpc_data, itc_obj = self.compute_itpc(self.epochs)
         morlet_metrics = self.extract_itpc_metrics(itpc_data)
-
-        # Generate output plots
-        output_dir = config.LOCAL_DATA_ROOT / "outputs" / self.patient_id
-        self.plot_itpc_results(itc_obj, self.patient_id, str(output_dir), morlet_metrics)
 
         # 3. Compute DFT ITPC (Sokoliuk Method)
         logger.info(f"[{self.patient_id}] Computing DFT ITPC...")
@@ -448,66 +450,3 @@ class LanguageTrackingAnalysis(BasePipeline):
             "freq_sentence_hz": peak_sent_hz,
             "freq_word_hz": peak_word_hz,
         }
-
-    def plot_itpc_results(self, itc, patient_id: str, output_dir: str, metrics: dict):
-        """
-        Generate and save enhanced ITPC plots (Topomap and TFR).
-
-        Args:
-            itc: MNE AverageTFR object.
-            patient_id: Patient ID string.
-            output_dir: Path to save outputs.
-            metrics: Metrics dictionary from extract_itpc_metrics.
-        """
-        import matplotlib.pyplot as plt
-
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        target_freq = metrics["freq_sentence_hz"]
-        word_freq = metrics["freq_word_hz"]
-
-        fig_topo, ax_topo = plt.subplots(1, 1, figsize=(10, 8))
-        itc.plot_topomap(
-            tmin=0,
-            tmax=None,
-            fmin=target_freq - 0.01,
-            fmax=target_freq + 0.01,
-            baseline=None,
-            mode=None,
-            axes=ax_topo,
-            show=False,
-            cmap="viridis",
-            colorbar=True,
-            vlim=(0, 0.3),
-        )
-        ax_topo.set_title(f"ITPC Topomap @ {target_freq:.3f} Hz\n{patient_id}", fontsize=14, fontweight="bold")
-        topo_path = output_dir / f"{patient_id}_language_ITPC_topomap.png"
-        fig_topo.savefig(topo_path, dpi=300, bbox_inches="tight")
-        plt.close(fig_topo)
-
-        fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(14, 8))
-        itc.plot(
-            baseline=None,
-            mode=None,
-            axes=ax_tfr,
-            show=False,
-            combine="mean",
-            cmap="viridis",
-            vlim=(0, 0.3),
-            colorbar=True,
-        )
-        ax_tfr.axhline(
-            y=target_freq, color="white", linestyle="--", linewidth=2, label=f"Sentence ({target_freq:.3f} Hz)"
-        )
-        ax_tfr.text(
-            itc.times[0], target_freq, " Sentence", color="white", verticalalignment="bottom", fontweight="bold"
-        )
-        ax_tfr.axhline(y=word_freq, color="white", linestyle=":", linewidth=2, label=f"Word ({word_freq:.3f} Hz)")
-        ax_tfr.text(itc.times[0], word_freq, " Word", color="white", verticalalignment="bottom", fontweight="bold")
-        ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - Hemisphere Mean", fontsize=16)
-        ax_tfr.set_xlabel("Time (s)", fontsize=12)
-        ax_tfr.set_ylabel("Frequency (Hz)", fontsize=12)
-
-        tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
-        fig_tfr.savefig(tfr_path, dpi=300, bbox_inches="tight")
-        plt.close(fig_tfr)
