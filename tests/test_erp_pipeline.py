@@ -42,6 +42,7 @@ def mock_aligned_events():
             {
                 "patient_id": "TEST001",
                 "date": "2024-01-01",
+                "session_id": "1",
                 "trial_type": "oddball",
                 "start_time": 1704110400.0,
                 "end_time": 1704110432.0,
@@ -360,30 +361,81 @@ class TestOddballERPPipeline:
             assert trials.iloc[0]["trial_type"] == "oddball"
 
     def test_save_outputs(self, temp_output_dir, mock_epochs, mock_evoked):
-        """Test saving ERPs and features.
+        """Test saving ERPs and three feature tables.
 
         900ms epochs are not saved (regenerated from ENG-03).
-        Per-session parquets are not saved (redundant with master table).
+        Three master tables created: clinical, electrode_detail, mapping_qc.
         """
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
         features = {
             "patient_id": "TEST001",
             "date": "2024-01-01",
+            "n_epochs": 5,
+            "n_standard_epochs": 8,
+            "baseline_std_uV": 1.5,
             "p300_amplitude_uV": 4.5,
+            "p300_latency_ms": 350,
+            "p300_amplitude_Pz_uV": 5.0,
+            "p300_latency_Pz_ms": 360,
+            "p300_amplitude_Cz_uV": 2.0,
+            "p300_latency_Cz_ms": 340,
+            "p300_amplitude_Fz_uV": 1.0,
+            "p300_latency_Fz_ms": 370,
+            "diff_amplitude_Pz_uV": 3.0,
+            "diff_latency_Pz_ms": 350,
+            "diff_amplitude_Cz_uV": 1.5,
+            "diff_latency_Cz_ms": 340,
+            "diff_amplitude_Fz_uV": 0.8,
+            "diff_latency_Fz_ms": 360,
+            "p300_best_electrode": "Pz",
+            "p300_subtype": "P3b",
+            "p300_n_valid_electrodes": 3,
+            "p300_n_flagged_electrodes": 0,
+            "qc_notes": "All electrodes valid",
+            "n_rare_events": 10,
+            "n_mapped": 9,
+            "n_unmapped": 1,
+            "n_boundary_clipped": 0,
+            "mapping_rate": 0.9,
+            "processing_timestamp": "2024-01-01T00:00:00",
         }
 
         pipeline._save_outputs("TEST001", "2024-01-01", mock_epochs, mock_evoked, features)
 
-        epochs_file = temp_output_dir / "epochs" / "TEST001_2024-01-01_oddball-epo.fif"
+        # Check ERPs saved
         erp_file = temp_output_dir / "erps" / "TEST001_2024-01-01_oddball-ave.fif"
-        session_features_file = temp_output_dir / "features" / "TEST001_2024-01-01_p300_features.parquet"
-        master_features_file = temp_output_dir / "features" / "p300_features.parquet"
-
-        assert not epochs_file.exists(), "900ms epochs should not be saved to disk"
         assert erp_file.exists()
-        assert not session_features_file.exists(), "per-session parquet should not be saved"
-        assert master_features_file.exists()
+
+        # Check three master tables created
+        clinical_file = temp_output_dir / "features" / "p300_oddball_clinical.parquet"
+        detail_file = temp_output_dir / "features" / "p300_oddball_electrode_detail.parquet"
+        qc_file = temp_output_dir / "features" / "p300_oddball_mapping_qc.parquet"
+
+        assert clinical_file.exists(), "Clinical table should exist"
+        assert detail_file.exists(), "Electrode detail table should exist"
+        assert qc_file.exists(), "Mapping QC table should exist"
+
+        # Verify clinical table structure
+        clinical = pd.read_parquet(clinical_file)
+        assert len(clinical) == 1
+        assert clinical.iloc[0]["patient_id"] == "TEST001"
+        assert clinical.iloc[0]["session_date"] == "2024-01-01"
+        assert "p300_diff_amplitude_Pz_uV" in clinical.columns
+        assert "qc_pass" in clinical.columns
+
+        # Verify electrode detail table structure
+        detail = pd.read_parquet(detail_file)
+        assert len(detail) == 3  # One row per electrode (Fz, Cz, Pz)
+        assert set(detail["electrode"].unique()) == {"Fz", "Cz", "Pz"}
+        assert "is_valid" in detail.columns
+        assert "flagged_reason" in detail.columns
+
+        # Verify mapping QC table structure
+        qc = pd.read_parquet(qc_file)
+        assert len(qc) == 1
+        assert qc.iloc[0]["n_rare_mapped"] == 9
+        assert "pipeline_version" in qc.columns
 
         loaded_erp = mne.read_evokeds(erp_file, verbose=False)[0]
         assert loaded_erp.data.shape == mock_evoked.data.shape
@@ -421,19 +473,62 @@ class TestOddballERPPipeline:
 
         assert grand_avg.nave == 2
 
-    def test_update_master_feature_table_deduplicates_session(self, temp_output_dir):
-        """Master table should keep latest row for the same patient/date key."""
+    def test_update_master_feature_tables_deduplicates_session(self, temp_output_dir):
+        """Master tables should keep latest row for the same patient/session key."""
         pipeline = OddballERPPipeline(output_dir=temp_output_dir, verbose=False)
 
-        df1 = pd.DataFrame([{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 3, "p300_amplitude_uV": 4.0}])
-        df2 = pd.DataFrame([{"patient_id": "TEST001", "date": "2024-01-01", "n_epochs": 5, "p300_amplitude_uV": 6.0}])
+        # Build clinical table (Table 1)
+        clinical_df1 = pd.DataFrame(
+            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_epochs": 3, "p300_amplitude_uV": 4.0}]
+        )
+        clinical_df2 = pd.DataFrame(
+            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_epochs": 5, "p300_amplitude_uV": 6.0}]
+        )
 
-        pipeline._update_master_feature_table(df1)
-        master = pipeline._update_master_feature_table(df2)
+        # Build electrode detail table (Table 2)
+        detail_df1 = pd.DataFrame(
+            [
+                {"patient_id": "TEST001", "session_date": "2024-01-01", "electrode": "Pz", "p300_amplitude_uV": 4.0},
+            ]
+        )
+        detail_df2 = pd.DataFrame(
+            [
+                {"patient_id": "TEST001", "session_date": "2024-01-01", "electrode": "Pz", "p300_amplitude_uV": 6.0},
+            ]
+        )
 
-        assert len(master) == 1
-        assert int(master.iloc[0]["n_epochs"]) == 5
-        assert float(master.iloc[0]["p300_amplitude_uV"]) == 6.0
+        # Build mapping QC table (Table 3)
+        qc_df1 = pd.DataFrame(
+            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 3}]
+        )
+        qc_df2 = pd.DataFrame(
+            [{"patient_id": "TEST001", "session_date": "2024-01-01", "n_rare_mapped": 5}]
+        )
+
+        # First batch
+        pipeline._update_master_feature_tables(clinical_df1, detail_df1, qc_df1)
+
+        # Second batch (should dedupe and keep latest)
+        pipeline._update_master_feature_tables(clinical_df2, detail_df2, qc_df2)
+
+        # Verify clinical table
+        clinical_path = temp_output_dir / "features" / "p300_oddball_clinical.parquet"
+        clinical = pd.read_parquet(clinical_path)
+        assert len(clinical) == 1
+        assert int(clinical.iloc[0]["n_rare_epochs"]) == 5
+        assert float(clinical.iloc[0]["p300_amplitude_uV"]) == 6.0
+
+        # Verify electrode detail table
+        detail_path = temp_output_dir / "features" / "p300_oddball_electrode_detail.parquet"
+        detail = pd.read_parquet(detail_path)
+        assert len(detail) == 1
+        assert float(detail.iloc[0]["p300_amplitude_uV"]) == 6.0
+
+        # Verify mapping QC table
+        qc_path = temp_output_dir / "features" / "p300_oddball_mapping_qc.parquet"
+        qc = pd.read_parquet(qc_path)
+        assert len(qc) == 1
+        assert int(qc.iloc[0]["n_rare_mapped"]) == 5
 
     def test_generate_qc_report(self, temp_output_dir):
         """Test QC report generation."""
@@ -670,6 +765,7 @@ class TestIntegration:
                 {
                     "patient_id": "TEST001",
                     "date": "2024-01-01",
+                    "session_id": "1",
                     "trial_type": "oddball",
                     "start_time": trial_start,
                     "end_time": trial_start + 35.0,
@@ -860,6 +956,7 @@ class TestENG03Integration:
                 {
                     "patient_id": "TEST001",
                     "date": "2024-01-01",
+                    "session_id": "1",
                     "trial_type": "oddball",
                     "start_time": trial_start,
                     "end_time": trial_start + 35.0,

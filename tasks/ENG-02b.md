@@ -100,7 +100,9 @@ data/processed/
 │   ├── {patient_id}_{date}_oddball_diff-ave.fif         ← difference ERP (if computed)
 │   └── grand_average_oddball-ave.fif
 ├── features/
-│   └── p300_features.parquet
+│   ├── p300_oddball_clinical.parquet          ← Table 1: Main analysis (one row per session)
+│   ├── p300_oddball_electrode_detail.parquet  ← Table 2: Per-electrode detail (3 rows per session)
+│   └── p300_oddball_mapping_qc.parquet        ← Table 3: Mapping & QC diagnostics (one row per session)
 ├── plots/erp/
 │   ├── {patient_id}_{date}_oddball_erp.png              ← 3-panel (butterfly, rare+std, diff)
 │   ├── {patient_id}_{date}_oddball_topomap.png          ← standalone topomap series (diff ERP)
@@ -126,7 +128,7 @@ data/processed/
 
 ### Feature Schema
 
-The pipeline outputs columns focused on P300 analysis:
+The pipeline outputs **three structured tables** for different analytical purposes:
 
 #### Metadata
 | Column | Type | Description |
@@ -200,22 +202,6 @@ An electrode passes QC if:
 1. Amplitude > 0 µV (must be positive)
 2. Latency in 250-600ms (healthy controls usually 300-500ms)
 3. No NaN values
-
-### Legacy Field Aliases
-
-Two additional fields provide simplified access to the composite metrics:
-- `p300_amplitude_uV` → Alias for `p300_composite_amplitude_uV`
-- `p300_latency_ms` → Alias for `p300_composite_latency_ms`
-
-### Example: Patient with Inverted Pz
-```
-p300_composite_amplitude_uV: 10.05  ← Used Fz (only valid electrode)
-p300_composite_latency_ms: 314.5
-p300_best_electrode: "Fz"
-p300_n_valid_electrodes: 1
-p300_n_flagged_electrodes: 2
-qc_notes: "Pz inverted, Cz inverted (used Fz only)"
-```
 
 ### Electrode Selection Modes
 
