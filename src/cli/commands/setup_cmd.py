@@ -15,8 +15,8 @@ def _events_done(patient_id: str) -> bool:
 
 
 def _epochs_done(patient_id: str, loader: UnifiedDataLoader) -> bool:
-    sessions = loader.get_patient(patient_id).list_sessions()
-    return any((config.EPOCHS_DIR / patient_id / date).exists() for date in sessions)
+    sessions = loader.get_patient(patient_id).list_session_ids()
+    return any((config.EPOCHS_DIR / patient_id / sess).exists() for sess in sessions)
 
 
 def _run_update_patient_records(verbose: bool) -> bool:
