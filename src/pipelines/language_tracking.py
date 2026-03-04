@@ -74,8 +74,8 @@ class LanguageTrackingAnalysis(BasePipeline):
     PHRASE_BAND_WIDTH_HZ: float = PHRASE_BAND[1] - PHRASE_BAND[0]
     WORD_BAND_WIDTH_HZ: float = WORD_BAND[1] - WORD_BAND[0]
 
-    # Epoch cropping: discard 1.28s from start (= one phrase file duration) to remove
-    # filter/ICA edge artifacts, yielding a clean 14.08s analysis window.
+    # Epoch cropping: discard 2.28s from start to remove filter/ICA edge artifacts,
+    # yielding a clean 13.08s analysis window.
     CROP_TMIN = 2.28
     CROP_TMAX = 15.36
 

@@ -18,8 +18,8 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Data Loading**: Uses `UnifiedDataLoader.load_clean_epochs` to fetch pre-cleaned data from ENG-03.
 - **Language Processor**: `src/data_processing/language_optimization.py`
     - **Input**: Expects `ArtifactRejector` to have been run first (generates `-epo.fif` files).
-    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3) and strictly validates focus inputs (`LH`, `RH`, `Clinical`).
-    - **Filtering**: Applies 0.5-30Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
+    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (Fp1, F7, T7, F3, C3, P3) and strictly validates focus inputs (`LH`, `RH`, `Clinical`).
+    - **Filtering**: Applies 0.02-25.0 Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
     - **Output**: Returns `mne.Epochs` restricted to optimal channels.
 
 ### Key Decisions
@@ -27,7 +27,7 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 - **Shared Utilities**: Channel name normalization logic was centralized in `src/utils/signal_processing.py` to be shared between `ArtifactRejector` and `LanguageProcessor`.
 
 ### Constraints & Limitations
-- **Filter Cutoff Note**: The default high-pass filter for `ArtifactRejector` (ENG-03) has been updated to **0.5 Hz** (previously 1.0 Hz) to support sentence-level frequency analysis (Delta band). While this enables the analysis, care should be taken to monitor ICA stability, as low-frequency drift can sometimes affect component separation. The `LanguageProcessor` continues to apply its own 0.5-30 Hz bandpass as a safety measure.
+- **Filter Cutoff Note**: The default high-pass filter for `ArtifactRejector` (ENG-03) has been updated to **0.5 Hz** (previously 1.0 Hz) to support sentence-level frequency analysis (Delta band). While this enables the analysis, care should be taken to monitor ICA stability, as low-frequency drift can sometimes affect component separation. The `LanguageProcessor` applies a 0.02-25.0 Hz bandpass as a safety measure.
 
 ### Verification & Analysis
 - **Unit Tests**: `tests/test_language_optimization.py` covers initialization, channel selection, filtering, and end-to-end processing with mocked `load_clean_epochs`.
