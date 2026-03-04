@@ -37,31 +37,32 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 
 ## 4. ITPC Analysis
 ### Objectives
-- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of sentence structure.
-- **Statistical Validation**: Compare Sentence Band ITPC vs Word Band ITPC to distinguish linguistic processing from acoustic envelope tracking.
+- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of hierarchial language structure.
+- **Statistical Validation**: Compare Sentence Band vs Phrase Band vs Word Band ITPC using trial-level phase-scrambled permutation testing to distinguish true linguistic processing from random 1/f noise characteristics.
 
 ### Implementation
-- **Core Logic**: `LanguageTrackingAnalysis.compute_itpc` uses Morlet wavelets; `compute_itpc_dft` provides DFT cross-validation.
-- **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.05-0.08 Hz, 4 Morlet bins) and `WORD_BAND` (0.70-0.90 Hz, 3 Morlet bins). Single-bin extraction was replaced after RCA revealed fragility to ICA-induced bin-level shifts.
-- **DFT Zero-Padding**: FFT zero-padded to 0.01 Hz resolution so the sentence band bins align correctly (raw 16s resolution of 0.0625 Hz caused 4% frequency error and spurious < 1.0 ratios).
-- **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects.
+- **Core Logic**: `LanguageTrackingAnalysis.compute_itpc` uses Morlet wavelets; `compute_itpc_dft` provides zero-padding DFT cross-validation.
+- **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.71-0.85 Hz), `PHRASE_BAND` (1.49-1.63 Hz), and `WORD_BAND` (3.05-3.20 Hz).
+- **DFT Zero-Padding**: FFT zero-padded to 0.01 Hz resolution so the sentence band bins align correctly.
+- **Permutation Test**: Rigorous chance-level validation by randomly scrambling relative trial phases (0 to 2pi uniform) across iterations, then computing null distribution boundaries at exact subject levels.
+- **Batch Analysis**: `awakenai run language` orchestrates processing across subjects.
 
 ### Verification Results
-- **Subjects**: `CON008` & `CON009` (68 trials each, LH focus).
-- **Finding**: All subjects/sources show **Sentence ITPC > Word ITPC** (Ratio 1.10-2.09), indicating hierarchical processing.
-- **Morlet ratios**: CON008 1.16-1.23, CON009 1.16-1.23.
-- **DFT ratios**: CON008 1.75-2.09, CON009 1.10-1.66.
-- **Visuals**: Topomaps confirm left-lateralized activation consistent with language networks.
+- **Subjects**: `CON008` & `CON009` (68-69 trials each, LH focus).
+- **Finding**: While previously single-bin misaligned extractions showed false Sentence > Word trends, utilizing the exact acoustic stimulus speeds (Sentence: ~0.78Hz, Phrase: ~1.56Hz, Word: ~3.125Hz) reveals strong entrainment mostly tracking acoustically salient bounds (Word + Phrase frequencies), with Sentence-level synchronization remaining weak or failing the robust mathematical phase-scrambling permutation test (`p > 0.05`).
+- **CON008 DFT**: Sentence (0.08, p=0.72), Phrase (0.14, p=0.17), Word (0.41, p<0.01). Strongest entrainment is at the direct acoustic word rate (3.125 Hz).
+- **CON009 DFT**: Sentence (0.06, p=0.98), Phrase (0.13, p=0.17), Word (0.16, p=0.06). Marginal significance tracking word acoustic structures, poor hierarchical processing.
+- **Visuals**: Topomaps and bar-charts automatically scale, accurately reflecting the localized low-SNR of higher tier hierarchies unless stimulus variations are completely controlled.
 
 ## 5. Definition of Done
 - [x] `src/pipelines/language_tracking.py` refactored from `LanguageProcessor` to `LanguageTrackingAnalysis`, inheriting `BasePipeline`.
-- [x] `load()`, `preprocess()`, `analyze()` pipeline methods implemented and CLI-integrated.
-- [x] Channel selection (`select_optimal_channels`) with LH/RH/Clinical focus and strict parameter validation.
+- [x] CLI-integrated standard executions `awakenai run language`.
+- [x] Channel selection (`select_optimal_channels`) with LH/RH/Clinical focus (using Fp1/Fp2).
 - [x] Unit tests in `tests/test_language_tracking.py` (14 passing).
 - [x] ITPC Analysis implemented: Morlet primary + DFT cross-validation.
-- [x] Band-averaged ITPC extraction (`SENTENCE_BAND`, `WORD_BAND`) replacing single-bin approach.
-- [x] DFT zero-padded to 0.01 Hz resolution to eliminate bin-mismatch artifact.
-- [x] All ratios > 1.0 confirmed on both CON008 and CON009 across BAK and NEW pipeline runs.
+- [x] Band-averaged ITPC extraction mapped perfectly to stimulation structure (0.78Hz, 1.56Hz, 3.125Hz).
+- [x] Formal statistical rigor built into the framework via intra-trial phase-scrambled permutation testing.
+- [x] Extracted measurements successfully logged persistently per patient under outputs.
 
 ## 6. Next Steps
 - **Group Statistics**: As N increases, run cluster-based permutation tests on the group level.
