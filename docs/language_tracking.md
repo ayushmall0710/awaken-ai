@@ -66,9 +66,9 @@ Traditional language tracking studies use **high-density EEG arrays** (128-256 e
 ### Hierarchical Structure
 
 **Key Concept:** The stimulus has **multiple temporal frequencies**:
-1. **Word Rate:** ~0.77 Hz (1 word every 1.3 seconds).
-2. **Phrase Rate:** ~0.38 Hz (2-word phrases).
-3. **Sentence Rate:** ~0.065 Hz (12-word sentences over 15.5 seconds).
+1. **Sentence Rate:** ~0.065 Hz (12 audio files over ~15.5 seconds).
+2. **Phrase Rate:** ~0.78 Hz (1 audio file every 1.28 seconds. *Note: As each file represents a structural part of the 12-file sequence, we assume each file corresponds to a phrase*).
+3. **Word Rate:** ~3.1 Hz (4 words presented within each 1.28-second audio file).
 
 **Hypothesis:** If the brain is **comprehending** the speech (not just hearing sounds), neural activity should **entrain** (synchronize) to the **sentence-level structure**, not just the word rate.
 
@@ -169,7 +169,7 @@ CON008,2025-08-14,language,"[10, 29, 19, 25, 15, 24, 12, 22, 16, 1, 8, 5]",17552
 
 **Metadata Needed:**
 - Word-level transcripts (e.g., "The cat sat on the mat").
-- Audio duration per word (~1.3s).
+- Audio duration per phrase file (~1.28s) containing 4 words.
 - Onset times of each word within the trial.
 
 **Action Item:** Create `stimulus_manifest.csv` mapping IDs to text content.
@@ -471,8 +471,9 @@ plt.savefig('outputs/CON008_language_ITPC_tfr.png', dpi=300)
 ### Expected Results (Control Data)
 
 For **awake, healthy control subjects**:
-- **ITPC at Sentence Frequency:** 0.25 - 0.45 (moderate to strong coherence).
-- **ITPC at Word Frequency:** 0.10 - 0.20 (weak; we want sentence-level tracking).
+- **ITPC at Sentence Frequency (~0.065 Hz):** 0.25 - 0.45 (moderate to strong coherence).
+- **ITPC at Phrase Frequency (~0.78 Hz):** Expect some entrainment due to 1.28s acoustic boundaries.
+- **ITPC at Word Frequency (~3.1 Hz):** Weak to moderate tracking of individual words.
 - **Topography:** Peak ITPC at **T7** (left temporal) and **F7** (left frontal).
 
 ### Red Flags (Indicates Pipeline Error)

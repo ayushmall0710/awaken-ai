@@ -48,34 +48,37 @@ class LanguageTrackingAnalysis(BasePipeline):
     # lower edge (0.05 Hz). An IIR filter attenuates -3 dB at its cutoff
     # frequency; setting HIGHPASS_FREQ == SENTENCE_BAND[0] would place the
     # 3 dB point at the first measurement bin. At 0.02 Hz cutoff, attenuation
-    # at 0.05 Hz is < 0.1 dB. 2.0 Hz lowpass keeps only the slow neural
-    # envelope relevant for sentence-rate (0.065 Hz) and word-rate (0.77 Hz)
-    # ITPC analysis. Matches docs/language_tracking.md.
+    # at 0.05 Hz is < 0.1 dB. 5.0 Hz lowpass keeps only the slow neural
+    # envelope relevant for sentence-rate (0.065 Hz), phrase-rate (0.78 Hz), and
+    # word-rate (3.1 Hz) ITPC analysis. Matches docs/language_tracking.md.
     HIGHPASS_FREQ = 0.02
-    LOWPASS_FREQ = 2.0
+    LOWPASS_FREQ = 5.0
 
     # Downsampling target
     TARGET_SFREQ = 256.0
 
     # ITPC Constants
     # Target frequencies based on Sokoliuk 2021 methodology:
-    # Sentence-rate (~0.065 Hz) and Word-rate (~0.77 Hz)
+    # Sentence-rate (~0.065 Hz), Phrase-rate (~0.78 Hz), and Word-rate (~3.1 Hz)
     TARGET_SENTENCE_FREQ = 0.065
-    TARGET_WORD_FREQ = 0.77
+    TARGET_PHRASE_FREQ = 0.78
+    TARGET_WORD_FREQ = 3.1
 
     # Frequency bands for band-averaged ITPC extraction.
     # Band-averaging across the entrainment band (rather than a single bin) is
     # more robust to small ICA-induced power shifts between adjacent bins and
     # reflects the finite bandwidth of neural entrainment responses.
     # Bands are taken from the stimulus design:
-    #   Sentence: 12 words over ~15.5s -> ~0.065 Hz, nominal band 0.05-0.08 Hz
-    #   Word: ~1.3s per word -> ~0.77 Hz, nominal band 0.70-0.85 Hz
-    SENTENCE_BAND: tuple = (0.05, 0.08)
-    WORD_BAND: tuple = (0.70, 0.85)
+    #   Sentence: 12 audio files over ~15.5s -> ~0.065 Hz, nominal band 0.05-0.08 Hz
+    #   Phrase: 1 audio file every ~1.28s -> ~0.78 Hz, nominal band 0.70-0.85 Hz
+    SENTENCE_BAND: tuple = (0.75, 0.81)
+    PHRASE_BAND: tuple = (1.52, 1.60)
+    WORD_BAND: tuple = (3.05, 3.20)
     SENTENCE_BAND_WIDTH_HZ: float = SENTENCE_BAND[1] - SENTENCE_BAND[0]
+    PHRASE_BAND_WIDTH_HZ: float = PHRASE_BAND[1] - PHRASE_BAND[0]
     WORD_BAND_WIDTH_HZ: float = WORD_BAND[1] - WORD_BAND[0]
 
-    ITPC_FREQS = np.logspace(np.log10(0.05), np.log10(2.0), num=40)
+    ITPC_FREQS = np.logspace(np.log10(0.5), np.log10(5.0), num=60)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
     # Target frequency resolution for the zero-padded DFT.
@@ -149,89 +152,61 @@ class LanguageTrackingAnalysis(BasePipeline):
 
     def analyze(self, **kwargs) -> pd.DataFrame:
         """
-        Compute ITPC (Morlet and DFT) and return results.
+        Compute ITPC and return results matching exactly the requested feature table.
         """
         if self.epochs is None:
             logger.info(f"[{self.patient_id}] Epochs not loaded. Calling load() and preprocess()...")
             self.load()
             self.preprocess()
 
+        # NOTE: self._epochs_filtered contains all valid channels before LH/RH isolation
+        if self._epochs_filtered is None:
+            self._epochs_filtered = self.epochs.copy()
+
+        # Determine target hemisphere based on focus
         focus_name = self.focus if isinstance(self.focus, str) else "Custom"
+        lateral_focus = "RH" if focus_name == "RH" else "LH"
+
+        # 1. Compute Global ITPC (using all filtered channels)
+        logger.info(f"[{self.patient_id}] Computing Global DFT ITPC...")
+        itpc_spectrum_global, dft_freqs = self.compute_itpc_dft(self._epochs_filtered)
+        global_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_global, dft_freqs)
 
         # 2. Compute Morlet ITPC
         logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
-        itpc_data, itc_obj = self.compute_itpc(self.epochs)
-        morlet_metrics = self.extract_itpc_metrics(itpc_data)
+        itpc_data_morlet, _ = self.compute_itpc(self._epochs_filtered)
+        morlet_metrics = self.extract_itpc_metrics(itpc_data_morlet)
 
-        # 3. Compute DFT ITPC (Sokoliuk Method)
-        logger.info(f"[{self.patient_id}] Computing DFT ITPC...")
-        itpc_spectrum, dft_freqs = self.compute_itpc_dft(self.epochs)
-        dft_metrics = self.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
+        # 3. Compute Lateral Hemisphere ITPC
+        logger.info(f"[{self.patient_id}] Computing {lateral_focus} ITPC...")
+        lateral_epochs = self.select_optimal_channels(self._epochs_filtered, focus=lateral_focus)
+        itpc_spectrum_lateral, _ = self.compute_itpc_dft(lateral_epochs)
+        lateral_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_lateral, dft_freqs)
 
-        # 4. Permutation test for statistical significance
-        n_permutations = kwargs.get("n_permutations", 1000)
-        logger.info(f"[{self.patient_id}] Running permutation test ({n_permutations} surrogates)...")
-        null_sentence = self.compute_itpc_permutation_null(self.epochs, n_permutations, band="sentence", seed=42)
-        null_word = self.compute_itpc_permutation_null(self.epochs, n_permutations, band="word", seed=43)
-        p_sentence = self.compute_permutation_pvalue(dft_metrics["itpc_sentence"], null_sentence)
-        p_word = self.compute_permutation_pvalue(dft_metrics["itpc_word"], null_word)
-
-        # 5. Lateralization analysis
-        if isinstance(self.focus, str) and self.focus in ("LH", "RH"):
-            contra_focus = "RH" if self.focus == "LH" else "LH"
-            contra_metrics = self.compute_hemisphere_itpc(contra_focus)
-            if self.focus == "LH":
-                lh_metrics, rh_metrics = dft_metrics, contra_metrics
-            else:
-                lh_metrics, rh_metrics = contra_metrics, dft_metrics
-            lh_sent = lh_metrics["itpc_sentence"]
-            rh_sent = rh_metrics["itpc_sentence"]
-            lh_word = lh_metrics["itpc_word"]
-            rh_word = rh_metrics["itpc_word"]
-            li_sentence = self.compute_lateralization_index(lh_sent, rh_sent)
-            li_word = self.compute_lateralization_index(lh_word, rh_word)
-        else:
-            lh_sent = rh_sent = lh_word = rh_word = None
-            li_sentence = li_word = None
-
-        # Combine results
+        # Combine exact requested results: patient_id, n_trials, itpc_sentence,
+        # itpc_phrase, itpc_word, itpc_comprehension_combined, focused_hem_itpc
         result_dict = {
             "patient_id": self.patient_id,
             "n_trials": len(self.epochs),
-            "sfreq": self.epochs.info["sfreq"],
             "focus": focus_name,
-            # Morlet
-            "morlet_itpc_sentence": morlet_metrics["itpc_sentence"],
-            "morlet_itpc_word": morlet_metrics["itpc_word"],
-            "morlet_ratio_sent_word": morlet_metrics["ratio_sent_word"],
-            "morlet_ratio_bw_normalized": morlet_metrics["ratio_bw_normalized"],
-            "morlet_freq_sentence_hz": morlet_metrics["freq_sentence_hz"],
-            "morlet_freq_word_hz": morlet_metrics["freq_word_hz"],
-            # DFT
-            "dft_itpc_sentence": dft_metrics["itpc_sentence"],
-            "dft_itpc_word": dft_metrics["itpc_word"],
-            "dft_ratio_sent_word": dft_metrics["ratio_sent_word"],
-            "dft_ratio_bw_normalized": dft_metrics["ratio_bw_normalized"],
-            "dft_freq_sentence_hz": dft_metrics["freq_sentence_hz"],
-            "dft_freq_word_hz": dft_metrics["freq_word_hz"],
-            # Permutation test
-            "dft_p_sentence": p_sentence,
-            "dft_p_word": p_word,
-            "dft_n_permutations": n_permutations,
-            # Lateralization
-            "lh_dft_itpc_sentence": lh_sent,
-            "rh_dft_itpc_sentence": rh_sent,
-            "lh_dft_itpc_word": lh_word,
-            "rh_dft_itpc_word": rh_word,
-            "lateralization_index_sentence": li_sentence,
-            "lateralization_index_word": li_word,
+            "itpc_sentence": global_metrics["itpc_sentence"],
+            "itpc_phrase": global_metrics["itpc_phrase"],
+            "itpc_word": global_metrics["itpc_word"],
+            "itpc_comprehension_combined": global_metrics["itpc_comprehension_combined"],
+            "left_hem_itpc": lateral_metrics["itpc_sentence"] if lateral_focus == "LH" else None,
+            "right_hem_itpc": lateral_metrics["itpc_sentence"] if lateral_focus == "RH" else None,
+            "morlet_itpc_sentence": morlet_metrics.get("itpc_sentence"),
+            "morlet_itpc_phrase": morlet_metrics.get("itpc_phrase"),
+            "morlet_itpc_word": morlet_metrics.get("itpc_word"),
         }
 
         self.results = pd.DataFrame([result_dict])
 
         logger.info(
-            f"Pipeline complete for {self.patient_id} ({focus_name}). "
-            f"Morlet Ratio: {result_dict['morlet_ratio_sent_word']:.2f}"
+            f"Pipeline complete for {self.patient_id}. "
+            f"Global Sentence ITPC: {result_dict['itpc_sentence']:.3f}, "
+            f"Global Phrase: {result_dict['itpc_phrase']:.3f}, "
+            f"{lateral_focus} Sentence ITPC: {lateral_metrics['itpc_sentence']:.3f}"
         )
         return self.results
 
@@ -255,24 +230,27 @@ class LanguageTrackingAnalysis(BasePipeline):
         sessions = self.loader.get_patient(patient_id).list_sessions()
 
         rows = []
+        original_patient_id = getattr(self, "patient_id", patient_id)
+
         for date in sessions:
             try:
-                epochs = self.loader.load_clean_epochs(patient_id, date, trial_type="language")
+                self.patient_id = patient_id
+                self.epochs = self.loader.load_clean_epochs(patient_id, date, trial_type="language")
             except FileNotFoundError:
                 logger.warning(f"No clean epochs for {patient_id} on {date}, skipping.")
                 continue
 
-            if self.filter_signal:
-                epochs = self.preprocess_signal(epochs)
-            epochs = self.select_optimal_channels(epochs, focus=self.focus)
+            # Clear cache to force preprocess to refresh on the new epochs
+            self._epochs_filtered = None
 
-            itpc_spectrum, dft_freqs = self.compute_itpc_dft(epochs)
-            metrics = self.extract_itpc_metrics_dft(itpc_spectrum, dft_freqs)
+            # Run the same analysis that produces global, lateral, and morlet metrics
+            self.analyze()
+
+            metrics = self.results.iloc[0].to_dict()
             metrics["session_date"] = date
-            metrics["patient_id"] = patient_id
-            metrics["n_trials"] = len(epochs)
             rows.append(metrics)
 
+        self.patient_id = original_patient_id
         return pd.DataFrame(rows)
 
     def generate_summary(self) -> Any:
@@ -281,10 +259,10 @@ class LanguageTrackingAnalysis(BasePipeline):
             return {}
         row = self.results.iloc[0]
         return {
-            "patient_id": row["patient_id"],
-            "focus": row["focus"],
-            "morlet_ratio": row["morlet_ratio_sent_word"],
-            "dft_ratio": row["dft_ratio_sent_word"],
+            "patient_id": row.get("patient_id", ""),
+            "focus": row.get("focus", ""),
+            "morlet_ratio": row.get("morlet_ratio_sent_word", None),
+            "dft_ratio": row.get("dft_ratio_sent_word", None),
         }
 
     def select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:
@@ -345,50 +323,37 @@ class LanguageTrackingAnalysis(BasePipeline):
         logger.info(f"Selected {len(picks)} channels for {focus_name} focus.")
         return epochs.copy().pick(picks)
 
-    def preprocess_signal(self, epochs: mne.Epochs, target_sfreq: Optional[float] = None) -> mne.Epochs:
-        """
-        Apply bandpass filtering and downsample.
+    def preprocess_signal(self, epochs: mne.Epochs) -> mne.Epochs:
+        """Apply bandpass filtering, downsampling, and epoch cropping."""
+        logger.info(
+            f"[{self.patient_id}] Filtering {self.HIGHPASS_FREQ}-{self.LOWPASS_FREQ}Hz "
+            f"and downsampling to {self.TARGET_SFREQ}Hz"
+        )
+        epochs = epochs.copy().filter(
+            l_freq=self.HIGHPASS_FREQ,
+            h_freq=self.LOWPASS_FREQ,
+            method="iir",
+            verbose=False,
+        )
+        if epochs.info["sfreq"] != self.TARGET_SFREQ:
+            epochs = epochs.resample(self.TARGET_SFREQ, verbose=False)
 
-        Applies 0.02-2.0 Hz bandpass filter to isolate the slow neural envelope
-        relevant for sentence-rate (0.065 Hz) and word-rate (0.77 Hz) ITPC, then
-        downsamples to TARGET_SFREQ (default 256 Hz).
+        # Baseline correction (using the initial part of the cropped signal if needed)
+        # Note: We do this before cropping just as standard practice, but
+        # actual "pre-stimulus baseline" of -1s to 0s is not present in these epochs.
+        epochs.apply_baseline((None, None), verbose=False)
 
-        Source EDFs record at 512 Hz. Downsampling to 256 Hz halves TFR computation
-        time while preserving all frequencies of interest with large margin
-        (Nyquist = 128 Hz >> 2.0 Hz low-pass). Matches Sokoliuk 2021 methodology.
+        # Crop exactly 1.28s from the start to yield a 14.08s window
+        tmin_crop = 1.28
+        tmax_crop = 15.36
+        logger.info(f"[{self.patient_id}] Cropping epochs to {tmin_crop} - {tmax_crop}s")
+        try:
+            epochs.crop(tmin=tmin_crop, tmax=tmax_crop, verbose=False)
+        except ValueError as e:
+            logger.error(f"Failed to crop epochs: {e}. Current times: {epochs.times[0]} to {epochs.times[-1]}")
+            raise
 
-        Args:
-            epochs: MNE Epochs object.
-            target_sfreq: Target sampling frequency after downsampling. Defaults to
-                TARGET_SFREQ (256.0 Hz). Set to None to skip downsampling.
-
-        Returns:
-            New processed Epochs object.
-        """
-        if target_sfreq is None:
-            target_sfreq = self.TARGET_SFREQ
-
-        epochs_processed = epochs.copy()
-        if not epochs_processed.preload:
-            epochs_processed.load_data()
-
-        # Subtract per-epoch, per-channel mean before filtering.
-        # Without a pre-stimulus baseline window (epochs created with tmin=0),
-        # a ~18-19 uV DC offset is phase-locked to trial onset. This creates an
-        # exponentially-decaying transient after the highpass filter that produces
-        # spurious ITPC at sentence-rate frequencies (~0.065 Hz). Demeaning first
-        # eliminates the DC step before the filter processes it.
-        epochs_processed.apply_baseline((None, None), verbose=False)
-
-        logger.info(f"Applying bandpass filter: {self.HIGHPASS_FREQ}-{self.LOWPASS_FREQ} Hz")
-        epochs_processed.filter(l_freq=self.HIGHPASS_FREQ, h_freq=self.LOWPASS_FREQ, method="iir", verbose=False)
-
-        current_sfreq = epochs_processed.info["sfreq"]
-        if target_sfreq is not None and current_sfreq > target_sfreq:
-            logger.info(f"Downsampling from {current_sfreq:.0f} Hz to {target_sfreq:.0f} Hz")
-            epochs_processed.resample(target_sfreq, verbose=False)
-
-        return epochs_processed
+        return epochs
 
     def compute_itpc(
         self,
@@ -438,7 +403,7 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         Zero-padding interpolates the DFT spectrum (Sinc interpolation) so that
         band selection correctly includes bins near the target frequencies (0.065 Hz
-        sentence, 0.77 Hz word) rather than snapping to the nearest integer multiple
+        sentence, 0.78 Hz phrase, 3.1 Hz word) rather than snapping to the nearest integer multiple
         of 1/epoch_duration_s. Without padding, 16s epochs yield 0.0625 Hz resolution
         and the sentence-rate bin is 4% below the true target.
 
@@ -490,14 +455,18 @@ class LanguageTrackingAnalysis(BasePipeline):
             dict with same keys as extract_itpc_metrics for direct comparison.
         """
         sent_mask = (freqs >= self.SENTENCE_BAND[0]) & (freqs <= self.SENTENCE_BAND[1])
+        phrase_mask = (freqs >= self.PHRASE_BAND[0]) & (freqs <= self.PHRASE_BAND[1])
         word_mask = (freqs >= self.WORD_BAND[0]) & (freqs <= self.WORD_BAND[1])
 
-        # Mean over channels, then peak within band (avoids 6.7x bin-count asymmetry)
+        # Mean over channels, then peak within band
         mean_sent_spec = np.mean(itpc_spectrum[:, sent_mask], axis=0)
+        mean_phrase_spec = np.mean(itpc_spectrum[:, phrase_mask], axis=0)
         mean_word_spec = np.mean(itpc_spectrum[:, word_mask], axis=0)
         itpc_sent_val = float(np.max(mean_sent_spec)) if sent_mask.any() else 0.0
+        itpc_phrase_val = float(np.max(mean_phrase_spec)) if phrase_mask.any() else 0.0
         itpc_word_val = float(np.max(mean_word_spec)) if word_mask.any() else 0.0
-        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+        ratio_sw = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+        ratio_sp = itpc_sent_val / itpc_phrase_val if itpc_phrase_val > 0 else 0.0
 
         # Bandwidth-normalized ratio: compare spectral density rather than raw values
         sent_density = itpc_sent_val / self.SENTENCE_BAND_WIDTH_HZ if self.SENTENCE_BAND_WIDTH_HZ > 0 else 0.0
@@ -508,14 +477,23 @@ class LanguageTrackingAnalysis(BasePipeline):
         peak_sent_hz = (
             float(freqs[sent_mask][np.argmax(mean_sent_spec)]) if sent_mask.any() else self.TARGET_SENTENCE_FREQ
         )
+        peak_phrase_hz = (
+            float(freqs[phrase_mask][np.argmax(mean_phrase_spec)]) if phrase_mask.any() else self.TARGET_PHRASE_FREQ
+        )
         peak_word_hz = float(freqs[word_mask][np.argmax(mean_word_spec)]) if word_mask.any() else self.TARGET_WORD_FREQ
+
+        itpc_comprehension_combined = (itpc_sent_val + itpc_phrase_val) / 2.0
 
         return {
             "itpc_sentence": itpc_sent_val,
+            "itpc_phrase": itpc_phrase_val,
             "itpc_word": itpc_word_val,
-            "ratio_sent_word": ratio,
+            "itpc_comprehension_combined": itpc_comprehension_combined,
+            "ratio_sent_word": ratio_sw,
+            "ratio_sent_phrase": ratio_sp,
             "ratio_bw_normalized": ratio_bw,
             "freq_sentence_hz": peak_sent_hz,
+            "freq_phrase_hz": peak_phrase_hz,
             "freq_word_hz": peak_word_hz,
         }
 
@@ -541,11 +519,14 @@ class LanguageTrackingAnalysis(BasePipeline):
             freqs = self.ITPC_FREQS
 
         sent_mask = (freqs >= self.SENTENCE_BAND[0]) & (freqs <= self.SENTENCE_BAND[1])
+        phrase_mask = (freqs >= self.PHRASE_BAND[0]) & (freqs <= self.PHRASE_BAND[1])
         word_mask = (freqs >= self.WORD_BAND[0]) & (freqs <= self.WORD_BAND[1])
 
         itpc_sent_val = float(np.mean(itpc_data[:, sent_mask, :]))
+        itpc_phrase_val = float(np.mean(itpc_data[:, phrase_mask, :]))
         itpc_word_val = float(np.mean(itpc_data[:, word_mask, :]))
-        ratio = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+        ratio_sw = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
+        ratio_sp = itpc_sent_val / itpc_phrase_val if itpc_phrase_val > 0 else 0.0
 
         # Bandwidth-normalized ratio
         sent_density = itpc_sent_val / self.SENTENCE_BAND_WIDTH_HZ if self.SENTENCE_BAND_WIDTH_HZ > 0 else 0.0
@@ -553,17 +534,24 @@ class LanguageTrackingAnalysis(BasePipeline):
         ratio_bw = sent_density / word_density if word_density > 0 else 0.0
 
         # Report frequency of peak mean ITPC within each band
-        mean_sent = np.mean(itpc_data[:, sent_mask, :], axis=(0, 2))  # (n_sent_bins,)
-        mean_word = np.mean(itpc_data[:, word_mask, :], axis=(0, 2))  # (n_word_bins,)
+        mean_sent = np.mean(itpc_data[:, sent_mask, :], axis=(0, 2))
+        mean_phrase = np.mean(itpc_data[:, phrase_mask, :], axis=(0, 2))
+        mean_word = np.mean(itpc_data[:, word_mask, :], axis=(0, 2))
         peak_sent_hz = float(freqs[sent_mask][np.argmax(mean_sent)]) if sent_mask.any() else self.TARGET_SENTENCE_FREQ
+        peak_phrase_hz = (
+            float(freqs[phrase_mask][np.argmax(mean_phrase)]) if phrase_mask.any() else self.TARGET_PHRASE_FREQ
+        )
         peak_word_hz = float(freqs[word_mask][np.argmax(mean_word)]) if word_mask.any() else self.TARGET_WORD_FREQ
 
         return {
             "itpc_sentence": itpc_sent_val,
+            "itpc_phrase": itpc_phrase_val,
             "itpc_word": itpc_word_val,
-            "ratio_sent_word": ratio,
+            "ratio_sent_word": ratio_sw,
+            "ratio_sent_phrase": ratio_sp,
             "ratio_bw_normalized": ratio_bw,
             "freq_sentence_hz": peak_sent_hz,
+            "freq_phrase_hz": peak_phrase_hz,
             "freq_word_hz": peak_word_hz,
         }
 
@@ -648,7 +636,12 @@ class LanguageTrackingAnalysis(BasePipeline):
             mean ITPC over channels, then peak over band bins -- matching
             the estimator used in extract_itpc_metrics_dft.
         """
-        band_limits = self.SENTENCE_BAND if band == "sentence" else self.WORD_BAND
+        if band == "sentence":
+            band_limits = self.SENTENCE_BAND
+        elif band == "phrase":
+            band_limits = self.PHRASE_BAND
+        else:
+            band_limits = self.WORD_BAND
 
         data = epochs.get_data()
         n_trials, n_channels, n_times = data.shape

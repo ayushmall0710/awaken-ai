@@ -22,6 +22,7 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     target_freq = metrics["freq_sentence_hz"]
+    phrase_freq = metrics["freq_phrase_hz"]
     word_freq = metrics["freq_word_hz"]
 
     vlim_max = max(float(np.percentile(itc.data, 95)) * 1.2, 0.05)
@@ -58,6 +59,8 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     )
     ax_tfr.axhline(y=target_freq, color="white", linestyle="--", linewidth=2, label=f"Sentence ({target_freq:.3f} Hz)")
     ax_tfr.text(itc.times[0], target_freq, " Sentence", color="white", verticalalignment="bottom", fontweight="bold")
+    ax_tfr.axhline(y=phrase_freq, color="white", linestyle="-.", linewidth=2, label=f"Phrase ({phrase_freq:.3f} Hz)")
+    ax_tfr.text(itc.times[0], phrase_freq, " Phrase", color="white", verticalalignment="bottom", fontweight="bold")
     ax_tfr.axhline(y=word_freq, color="white", linestyle=":", linewidth=2, label=f"Word ({word_freq:.3f} Hz)")
     ax_tfr.text(itc.times[0], word_freq, " Word", color="white", verticalalignment="bottom", fontweight="bold")
     ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - Hemisphere Mean", fontsize=16)
@@ -77,6 +80,7 @@ def plot_itpc_channel_bar(
     n_trials: int,
     freqs: np.ndarray,
     sentence_band: tuple,
+    phrase_band: tuple,
     word_band: tuple,
 ) -> None:
     """
@@ -98,15 +102,19 @@ def plot_itpc_channel_bar(
         Frequency axis matching itpc_data axis 1.
     sentence_band : tuple
         (low, high) Hz bounds for the sentence band.
+    phrase_band : tuple
+        (low, high) Hz bounds for the phrase band.
     word_band : tuple
         (low, high) Hz bounds for the word band.
     """
     import matplotlib.pyplot as plt
 
     sent_mask = (freqs >= sentence_band[0]) & (freqs <= sentence_band[1])
+    phrase_mask = (freqs >= phrase_band[0]) & (freqs <= phrase_band[1])
     word_mask = (freqs >= word_band[0]) & (freqs <= word_band[1])
 
     sent_per_ch = np.mean(itpc_data[:, sent_mask, :], axis=(1, 2))
+    phrase_per_ch = np.mean(itpc_data[:, phrase_mask, :], axis=(1, 2))
     word_per_ch = np.mean(itpc_data[:, word_mask, :], axis=(1, 2))
     chance = 1.0 / np.sqrt(n_trials)
 
@@ -115,8 +123,10 @@ def plot_itpc_channel_bar(
 
     x = np.arange(len(ch_names))
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(x - 0.15, sent_per_ch, 0.3, label="Sentence band", color="#2166ac")
-    ax.bar(x + 0.15, word_per_ch, 0.3, label="Word band", color="#b2182b")
+    width = 0.25
+    ax.bar(x - width, sent_per_ch, width, label="Sentence band", color="#2166ac")
+    ax.bar(x, phrase_per_ch, width, label="Phrase band", color="#f4a582")
+    ax.bar(x + width, word_per_ch, width, label="Word band", color="#b2182b")
     ax.axhline(
         chance,
         color="gray",
@@ -130,9 +140,10 @@ def plot_itpc_channel_bar(
     ax.set_title(f"{patient_id}: Per-Channel ITPC")
     ax.legend()
 
-    for i, (s, w) in enumerate(zip(sent_per_ch, word_per_ch)):
-        ax.text(i - 0.15, s + 0.003, f"{s:.3f}", ha="center", va="bottom", fontsize=8)
-        ax.text(i + 0.15, w + 0.003, f"{w:.3f}", ha="center", va="bottom", fontsize=8)
+    for i, (s, p, w) in enumerate(zip(sent_per_ch, phrase_per_ch, word_per_ch)):
+        ax.text(i - width, s + 0.003, f"{s:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.text(i, p + 0.003, f"{p:.3f}", ha="center", va="bottom", fontsize=8)
+        ax.text(i + width, w + 0.003, f"{w:.3f}", ha="center", va="bottom", fontsize=8)
 
     plt.tight_layout()
     fig.savefig(out_dir / f"{patient_id}_language_ITPC_channels.png", dpi=300, bbox_inches="tight")
