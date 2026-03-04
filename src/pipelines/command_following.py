@@ -202,11 +202,16 @@ class CommandFollowingAnalysis(BasePipeline):
     def run(
         self,
         patient_id: str,
+        session_id: Optional[str] = None,
         alpha: float = 0.05,
     ) -> pd.DataFrame:
-        """Run the full analysis pipeline for a patient."""
+        """Run the full analysis pipeline for a patient (or single session)."""
         self.patient_id = patient_id
-        self.aligned_events = self.loader.load_aligned_events(patient_id)
+        events = self.loader.load_aligned_events(patient_id)
+        if session_id:
+            events = events[events["session_id"] == session_id]
+        self.aligned_events = events
+
         self.pairs = []
         self.erd_results = None
 
