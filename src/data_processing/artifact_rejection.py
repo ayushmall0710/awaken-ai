@@ -818,9 +818,22 @@ class ArtifactRejector:
         if trials_df.empty:
             return None
 
-        window_sec = _trial_type_window_sec(trial_type, fallback_duration=float(trials_df["duration"].median()))
-        if window_sec is None:
-            return None
+        # Determine requested window size (tmax - tmin) and the tmin offset.
+        # For 'language' trials, we use tmin = -1.0 and tmax = 16.0 (total 17 seconds).
+        # This pushes any downsampling edge artifacts into the baseline or post-stimulus padding,
+        # which will be safely discarded during precise cropping in the pipeline.
+        # For other trials, we generally start at 0.0.
+        tt_lower = str(trial_type).lower().strip()
+        if tt_lower == "language":
+            tmin = -1.0
+            tmax = 16.0
+            window_sec = 17.0
+        else:
+            tmin = 0.0
+            window_sec = _trial_type_window_sec(trial_type, fallback_duration=float(trials_df["duration"].median()))
+            if window_sec is None:
+                return None
+            tmax = float(window_sec)
 
         sfreq = float(raw.info["sfreq"])
         max_time = float(raw.times[-1])
@@ -829,8 +842,9 @@ class ArtifactRejector:
         # Vectorized time conversion (replaces iterrows).
         start_unix = trials_df["start_time"].values.astype(float)
         valid_mask = ~np.isnan(start_unix)
+        # Note: we need enough padding so that `start_edf + tmin` is >= 0
         start_edf = start_unix[valid_mask] - edf_start_unix + timezone_offset
-        in_range = (start_edf >= 0) & (start_edf + window_sec <= max_time)
+        in_range = (start_edf + tmin >= 0) & (start_edf + tmax <= max_time)
         start_edf = start_edf[in_range]
 
         if len(start_edf) == 0:
@@ -845,13 +859,13 @@ class ArtifactRejector:
             ]
         )
 
-        event_id = {str(trial_type).lower().strip(): 1}
+        event_id = {tt_lower: 1}
         epochs = mne.Epochs(
             raw,
             events_arr,
             event_id=event_id,
-            tmin=0.0,
-            tmax=float(window_sec),
+            tmin=tmin,
+            tmax=tmax,
             picks=picks_eeg,
             baseline=None,
             preload=True,

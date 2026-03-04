@@ -93,7 +93,7 @@ CLINICAL_20 = [
 LH_FOCUS_CHANNELS = [
     "F7",
     "T7",
-    "P7",  # Inferior/Lateral Left
+    "Fp1",  # Inferior/Lateral/Frontal Left
     "F3",
     "C3",
     "P3",  # Superior/Medial Left
@@ -104,7 +104,7 @@ LH_FOCUS_CHANNELS = [
 RH_FOCUS_CHANNELS = [
     "F8",
     "T8",
-    "P8",  # Inferior/Lateral Right
+    "Fp2",  # Inferior/Lateral/Frontal Right
     "F4",
     "C4",
     "P4",  # Superior/Medial Right

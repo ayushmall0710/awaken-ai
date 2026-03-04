@@ -107,8 +107,6 @@ def plot_itpc_channel_bar(
     word_band : tuple
         (low, high) Hz bounds for the word band.
     """
-    import matplotlib.pyplot as plt
-
     sent_mask = (freqs >= sentence_band[0]) & (freqs <= sentence_band[1])
     phrase_mask = (freqs >= phrase_band[0]) & (freqs <= phrase_band[1])
     word_mask = (freqs >= word_band[0]) & (freqs <= word_band[1])
