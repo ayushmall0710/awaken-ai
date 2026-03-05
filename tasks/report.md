@@ -164,6 +164,50 @@ pure CSS `<details>` behaviour.
 
 ---
 
+---
+
+## Language Tracking Report — `src/reports/language_tracking_report.py`
+
+### Usage
+
+```python
+from src.reports.language_tracking_report import LanguageTrackingReport
+
+# Single session
+pipeline.run("CON008")
+rpt = LanguageTrackingReport(pipeline, session_id="sess_01")
+rpt.generate()  # writes <session>_language_report.html to outputs dir
+
+# Multi-session combined report — via CLI runner
+rpt.build_session_html()  # returns collapsible <details> fragment
+```
+
+### Sections
+
+| Section | Content |
+|---------|---------|
+| Overview cards | Trials analyzed, comprehension ITPC, significance badge, lateralization badge |
+| Global Entrainment table | Word / phrase / sentence ITPC, comprehension combined, cognitive/acoustic ratio, permutation p-values |
+| Hemisphere Lateralization table | LH and RH ITPC per rate, lateralization index (LI = (LH-RH)/(LH+RH)) |
+| DFT frequency spectrum plot | Channel-averaged ITPC vs 0.5–4 Hz with annotated target lines |
+| DFT topomap plots | Spatial ITPC maps at word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz) |
+| Morlet TFR plot | Time-frequency ITPC (if `_morlet_itc` is available on the pipeline) |
+| Metrics legend | Definitions and color-coded interpretation ranges for all metrics |
+
+### Constructor
+
+```python
+LanguageTrackingReport(lt_obj, session_id, output_dir=None)
+```
+
+- `lt_obj` — `LanguageTrackingAnalysis` after `run()` has been called. Must have `.patient_id`, `.results`, `._dft_spectrum_full`, `._dft_freqs`, `._dft_info`.
+- `session_id` — used in the report filename and section header.
+- `output_dir` — defaults to `config.REPORTS_DIR / patient_id / session_id / language_tracking`.
+
+Raises `ValueError` if `lt_obj.patient_id` is falsy.
+
+---
+
 ## CSS classes provided by `render_uw_css()`
 
 | Class | Element | Purpose |
