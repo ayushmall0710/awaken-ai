@@ -104,7 +104,6 @@ def test_load_and_preprocess_success(mock_loader):
     """Test load and preprocess work correctly with clean epochs."""
     processor = LanguageTrackingAnalysis(loader=mock_loader)
     processor.patient_id = "TEST"
-    processor.focus = "LH"
 
     processor.load()
     processor.preprocess()
