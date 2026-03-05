@@ -107,6 +107,7 @@ def qc_cmd(
 
 class Pipeline(str, Enum):
     command_following = "command-following"
+    command_following_svm = "command-following-svm"
     language = "language"
     oddball = "oddball"
 
@@ -190,6 +191,7 @@ def run_cmd(
     Without --pipeline, auto-detects which pipelines apply based on available trial types.
     """
     from src.cli.runners import command_following as cf_runner
+    from src.cli.runners import command_following_claassen as cf_svm_runner
     from src.cli.runners import language as lang_runner
     from src.cli.runners import oddball as ob_runner
 
@@ -220,6 +222,7 @@ def run_cmd(
         focus,
         parsed_electrodes,
         cf_runner,
+        cf_svm_runner,
         lang_runner,
         ob_runner,
     )
@@ -267,12 +270,15 @@ def _dispatch_pipelines(
     focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
+    cf_svm_runner: types.ModuleType,
     lang_runner: types.ModuleType,
     ob_runner: types.ModuleType,
 ) -> None:
     """Dispatch to each applicable pipeline runner."""
     if Pipeline.command_following in pipelines:
         cf_runner.run(loader, patient_ids, session, alpha, report)
+    if Pipeline.command_following_svm in pipelines:
+        cf_svm_runner.run(loader, patient_ids, session, alpha)
     if Pipeline.language in pipelines:
         lang_runner.run(loader, patient_ids, session, focus)
     if Pipeline.oddball in pipelines:
