@@ -93,7 +93,7 @@ class LanguageTrackingReport:
         metrics = row.to_dict()
         paths = {}
 
-        paths["dft_spectrum"] = plot_itpc_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
+        paths["itpc_spectrum"] = plot_itpc_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
 
         word_idx = int(np.argmin(np.abs(freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
         vmax = float(np.percentile(spectrum[:, word_idx], 95)) * 1.2 or 0.1
@@ -237,8 +237,8 @@ class LanguageTrackingReport:
     def _build_plots_section(self, plot_paths: dict) -> str:
         sections = []
 
-        if "dft_spectrum" in plot_paths:
-            img = self._embed_image(plot_paths["dft_spectrum"], "DFT ITPC Frequency Spectrum")
+        if "itpc_spectrum" in plot_paths:
+            img = self._embed_image(plot_paths["itpc_spectrum"], "DFT ITPC Frequency Spectrum")
             sections.append(
                 "<h3>Cortical Tracking Frequency Spectrum (DFT)</h3>"
                 f"<div class='plot-card'>{img}"

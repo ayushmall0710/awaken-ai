@@ -163,15 +163,16 @@ def plot_itpc_spectrum(
     method_label: str = "DFT",
 ) -> Path:
     """
-    Line plot of channel-averaged DFT ITPC vs frequency (0.5-4.0 Hz).
+    Line plot of channel-averaged ITPC vs frequency (0.5-4.0 Hz).
 
     Vertical dashed lines mark word (3.125 Hz), phrase (1.56 Hz), and sentence
     (0.78 Hz) rates. Each line is annotated with the ITPC value and p-value.
+    The plot title and output filename reflect method_label.
 
     Parameters
     ----------
     itpc_spectrum : np.ndarray
-        Shape (n_channels, n_freqs). DFT ITPC per channel and frequency.
+        Shape (n_channels, n_freqs). ITPC per channel and frequency.
     freqs : np.ndarray
         Frequency axis in Hz, matching axis 1 of itpc_spectrum.
     patient_id : str
@@ -179,8 +180,13 @@ def plot_itpc_spectrum(
     output_dir : str or Path
         Directory to save the PNG.
     metrics : dict
-        Must contain: itpc_word, itpc_phrase, itpc_sentence,
-        dft_p_word, dft_p_phrase, dft_p_sentence.
+        Must contain: itpc_word, itpc_phrase, itpc_sentence.
+        P-values are read from keys dft_p_word, dft_p_phrase, dft_p_sentence
+        (these keys reflect the naming convention in the metrics dict, not the
+        analysis method).
+    method_label : str, optional
+        Label for the analysis method (e.g., "DFT", "Morlet"). Used in the
+        plot title and output filename. Defaults to "DFT".
 
     Returns
     -------
@@ -243,10 +249,11 @@ def plot_itpc_topomap(
     method_label: str = "DFT",
 ) -> Path:
     """
-    Topomap of DFT ITPC values across electrodes at a single target frequency.
+    Topomap of ITPC values across electrodes at a single target frequency.
 
-    Extracts the closest DFT bin to target_freq and renders a scalp topography
-    using mne.viz.plot_topomap. Montage must already be set on the info object.
+    Extracts the closest frequency bin to target_freq and renders a scalp
+    topography using mne.viz.plot_topomap. Montage must already be set on the
+    info object.
 
     Parameters
     ----------
@@ -266,6 +273,9 @@ def plot_itpc_topomap(
         Directory to save the PNG.
     vlim : tuple, optional
         (vmin, vmax). If None, auto-scales from data 95th percentile.
+    method_label : str, optional
+        Label for the analysis method (e.g., "DFT", "Morlet"). Used in the
+        plot title and output filename. Defaults to "DFT".
 
     Returns
     -------
