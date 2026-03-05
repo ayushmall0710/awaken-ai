@@ -9,6 +9,7 @@ import numpy as np
 
 import src.reports.style_utils as style_utils
 from src.data_loading import config
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
 from src.viz.language_plots import plot_dft_spectrum, plot_dft_topomap, plot_itpc_results
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,40 @@ _ENTRAINMENT_COLS = [
 ]
 
 
+_TARGET_FREQS = [
+    (LanguageTrackingAnalysis.TARGET_WORD_FREQ, "Word"),
+    (LanguageTrackingAnalysis.TARGET_PHRASE_FREQ, "Phrase"),
+    (LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ, "Sentence"),
+]
+
+_MORLET_METRICS = {
+    "freq_sentence_hz": LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ,
+    "freq_phrase_hz": LanguageTrackingAnalysis.TARGET_PHRASE_FREQ,
+    "freq_word_hz": LanguageTrackingAnalysis.TARGET_WORD_FREQ,
+}
+
+_PLOT_CSS = """
+        .plot-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+        .plot-card {
+            background: #fff;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 0.75rem;
+            text-align: center;
+        }
+        .plot-card figcaption {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-top: 0.4rem;
+        }
+        """
+
+
 class LanguageTrackingReport:
     """Generates an HTML report for Language Tracking Analysis."""
 
@@ -43,9 +78,13 @@ class LanguageTrackingReport:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.report_file = self.output_dir / f"{self.session_id}_language_report.html"
+        self._plot_paths: Optional[dict] = None
 
     def _save_plots(self) -> dict:
-        """Generate all plots to output_dir. Returns {key: Path}."""
+        """Generate all plots to output_dir. Returns {key: Path}. Result is cached."""
+        if self._plot_paths is not None:
+            return self._plot_paths
+
         row = self.lt_obj.results.iloc[0]
         pid = self.lt_obj.patient_id
         spectrum = self.lt_obj._dft_spectrum_full
@@ -56,37 +95,34 @@ class LanguageTrackingReport:
 
         paths["dft_spectrum"] = plot_dft_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
 
-        word_idx = int(np.argmin(np.abs(freqs - 3.125)))
+        word_idx = int(np.argmin(np.abs(freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
         vmax = float(np.percentile(spectrum[:, word_idx], 95)) * 1.2 or 0.1
         vlim = (0.0, vmax)
 
-        for freq, label in [(3.125, "Word"), (1.56, "Phrase"), (0.78, "Sentence")]:
-            key = f"topomap_{label.lower()}"
-            paths[key] = plot_dft_topomap(spectrum, freqs, info, freq, label, pid, self.output_dir, vlim=vlim)
+        for freq, label in _TARGET_FREQS:
+            paths[f"topomap_{label.lower()}"] = plot_dft_topomap(
+                spectrum, freqs, info, freq, label, pid, self.output_dir, vlim=vlim
+            )
 
         if self.lt_obj._morlet_itc is not None:
             try:
-                morlet_metrics = {
-                    "freq_sentence_hz": 0.78,
-                    "freq_phrase_hz": 1.56,
-                    "freq_word_hz": 3.125,
-                }
-                plot_itpc_results(self.lt_obj._morlet_itc, pid, str(self.output_dir), morlet_metrics)
+                plot_itpc_results(self.lt_obj._morlet_itc, pid, str(self.output_dir), _MORLET_METRICS)
                 tfr_path = self.output_dir / f"{pid}_language_ITPC_tfr.png"
                 if tfr_path.exists():
                     paths["morlet_tfr"] = tfr_path
             except Exception as e:
                 logger.warning(f"Morlet TFR plot failed: {e}")
 
+        self._plot_paths = paths
         return paths
 
     @staticmethod
     def _embed_image(path: Path, alt: str = "") -> str:
-        if not path or not Path(path).exists():
+        try:
+            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+            return f"<img src='data:image/png;base64,{b64}' alt='{alt}' style='width:100%;max-width:100%;' />"
+        except (FileNotFoundError, OSError):
             return f"<p><em>Plot unavailable: {alt}</em></p>"
-        data = Path(path).read_bytes()
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"<img src='data:image/png;base64,{b64}' alt='{alt}' style='width:100%;max-width:100%;' />"
 
     def _format_cell(self, key: str, val: Any) -> str:
         if val is None or (isinstance(val, float) and not np.isfinite(val)):
@@ -114,26 +150,7 @@ class LanguageTrackingReport:
         return str(val)
 
     def _build_css_extensions(self) -> str:
-        return """
-        .plot-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        .plot-card {
-            background: #fff;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 0.75rem;
-            text-align: center;
-        }
-        .plot-card figcaption {
-            font-size: 0.8rem;
-            color: #64748b;
-            margin-top: 0.4rem;
-        }
-        """
+        return _PLOT_CSS
 
     def _build_overview_cards(self) -> str:
         row = self.lt_obj.results.iloc[0]
@@ -232,7 +249,7 @@ class LanguageTrackingReport:
             )
 
         topo_html = ""
-        for freq, label in [(3.125, "Word"), (1.56, "Phrase"), (0.78, "Sentence")]:
+        for freq, label in _TARGET_FREQS:
             key = f"topomap_{label.lower()}"
             if key in plot_paths:
                 img = self._embed_image(plot_paths[key], f"{label} Topomap")

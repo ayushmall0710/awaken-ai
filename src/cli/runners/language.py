@@ -58,7 +58,7 @@ def run(
                     typer.echo(f"  Saved arrays to: {npz_file}")
 
                 if report:
-                    from src.reports.language_tracking_report import LanguageTrackingReport
+                    from src.reports.language_tracking_report import _PLOT_CSS, LanguageTrackingReport
 
                     rpt = LanguageTrackingReport(pipeline, session_id=sess, output_dir=out_dir)
                     if len(sessions) == 1:
@@ -66,7 +66,7 @@ def run(
                         typer.echo(f"  Report: {path}")
                     else:
                         if not extra_css:
-                            extra_css = rpt._build_css_extensions()
+                            extra_css = _PLOT_CSS
                         report_fragments.append(rpt.build_session_html())
 
             except Exception as e:

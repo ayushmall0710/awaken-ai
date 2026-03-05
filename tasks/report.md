@@ -164,8 +164,6 @@ pure CSS `<details>` behaviour.
 
 ---
 
----
-
 ## Language Tracking Report — `src/reports/language_tracking_report.py`
 
 ### Usage
