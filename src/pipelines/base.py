@@ -28,14 +28,20 @@ class BasePipeline(ABC):
     def __init__(self, loader: Optional[UnifiedDataLoader] = None):
         self.loader = loader or UnifiedDataLoader()
         self.patient_id: Optional[str] = None
+        self.session_id: Optional[str] = None
         self.aligned_events: Optional[pd.DataFrame] = None
         self.results: Optional[pd.DataFrame] = None
         self._qc_metrics: dict[str, Any] = {}
 
-    def run(self, patient_id: str, **kwargs) -> pd.DataFrame:
+    def run(self, patient_id: str, session_id: Optional[str] = None, **kwargs) -> pd.DataFrame:
         """Template method: load → preprocess → analyze."""
         self.patient_id = patient_id
-        self.aligned_events = self.loader.load_aligned_events(patient_id)
+        self.session_id = session_id
+
+        events = self.loader.load_aligned_events(patient_id)
+        if session_id:
+            events = events[events["session_id"] == session_id]
+        self.aligned_events = events
         self.load()
         self.preprocess()
         self.results = self.analyze(**kwargs)

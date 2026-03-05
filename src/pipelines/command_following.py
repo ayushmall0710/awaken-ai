@@ -200,13 +200,14 @@ class CommandFollowingAnalysis(BasePipeline):
     def run(
         self,
         patient_id: str,
+        session_id: Optional[str] = None,
         alpha: float = 0.05,
     ) -> pd.DataFrame:
-        """Run the full analysis pipeline for a patient."""
+        """Run the full analysis pipeline for a patient (or single session)."""
         self.pairs = []
         self.erd_results = None
         self.viz = CommandFollowingVisualizer(self.bands)
-        return super().run(patient_id, alpha=alpha)
+        return super().run(patient_id, session_id=session_id, alpha=alpha)
 
     def analyze(self, alpha: float = 0.05, **kwargs) -> Any:
         """Delegate to domain-specific calculate_erd()."""
