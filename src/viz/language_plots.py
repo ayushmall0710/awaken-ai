@@ -13,6 +13,17 @@ import numpy as np
 if TYPE_CHECKING:
     import mne
 
+# Stimulus linguistic rate constants (Hz) — must match LanguageTrackingAnalysis.TARGET_*_FREQ
+_TARGET_WORD_FREQ = 3.125
+_TARGET_PHRASE_FREQ = 1.56
+_TARGET_SENTENCE_FREQ = 0.78
+
+_ITPC_TARGET_SPECS = [
+    (_TARGET_WORD_FREQ, "Word", "#b2182b"),
+    (_TARGET_PHRASE_FREQ, "Phrase", "#2166ac"),
+    (_TARGET_SENTENCE_FREQ, "Sentence", "#4dac26"),
+]
+
 
 def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     """
@@ -201,21 +212,14 @@ def plot_itpc_spectrum(
     mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
 
     target_specs = [
-        (3.125, "Word", metrics.get("itpc_word", 0), metrics.get("p_word", metrics.get("dft_p_word", 1)), "#b2182b"),
         (
-            1.56,
-            "Phrase",
-            metrics.get("itpc_phrase", 0),
-            metrics.get("p_phrase", metrics.get("dft_p_phrase", 1)),
-            "#2166ac",
-        ),
-        (
-            0.78,
-            "Sentence",
-            metrics.get("itpc_sentence", 0),
-            metrics.get("p_sentence", metrics.get("dft_p_sentence", 1)),
-            "#4dac26",
-        ),
+            freq,
+            lbl,
+            metrics.get("itpc_" + lbl.lower(), 0),
+            metrics.get("p_" + lbl.lower(), metrics.get("dft_p_" + lbl.lower(), 1)),
+            color,
+        )
+        for freq, lbl, color in _ITPC_TARGET_SPECS
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))

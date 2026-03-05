@@ -73,7 +73,7 @@ def run(
                 typer.echo(f"  Failed: {e}", err=True)
 
         # Multi-session combined report
-        if report and len(report_fragments) > 1:
+        if report and len(report_fragments) >= 1:
             from src.reports import style_utils
 
             combined_dir = config.LOCAL_DATA_ROOT / "outputs" / "language" / timestamp

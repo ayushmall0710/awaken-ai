@@ -321,6 +321,8 @@ class LanguageTrackingAnalysis(BasePipeline):
 
             # Preprocess fresh epochs before analysis
             self._epochs_filtered = None
+            self._morlet_phases = None
+            self._morlet_itc = None
             self.preprocess()
             self.analyze()
 
@@ -696,8 +698,8 @@ class LanguageTrackingAnalysis(BasePipeline):
         from mne.time_frequency import tfr_morlet
 
         target_freqs = np.array([self.TARGET_WORD_FREQ, self.TARGET_PHRASE_FREQ, self.TARGET_SENTENCE_FREQ])
-        # Same n_cycles formula as compute_itpc — keeps wavelet widths consistent
-        n_cycles = np.array([self.ITPC_CYCLES[int(np.argmin(np.abs(self.ITPC_FREQS - f)))] for f in target_freqs])
+        # Same formula as ITPC_CYCLES = [max(0.5, f * 2.0) for f in ITPC_FREQS], applied at exact target freqs
+        n_cycles = np.array([max(0.5, f * 2.0) for f in target_freqs])
 
         epoch_tfr = tfr_morlet(
             epochs,
@@ -783,22 +785,8 @@ class LanguageTrackingAnalysis(BasePipeline):
         spectra = np.fft.rfft(data, n=n_fft, axis=2)
 
         def get_surrogate_itpc(bin_idx):
-            # Extract true phases for the specific bin
-            # unit_vectors: shape (n_trials, n_channels)
             unit_vectors = np.exp(1j * np.angle(spectra[:, :, bin_idx]))
-
-            # Generate random phase offsets per trial (identical across channels to preserve spatial covariance)
-            # rand_phase: shape (n_permutations, n_trials, 1)
-            rand_phase = rng.uniform(0, 2 * np.pi, size=(n_permutations, n_trials, 1))
-
-            # Broadcast random phase across channels: (n_permutations, n_trials, n_channels)
-            shifted_vectors = unit_vectors * np.exp(1j * rand_phase)
-
-            # Calculate ITPC for each permutation
-            # 1. Mean unit vector across trials: shape (n_permutations, n_channels)
-            # 2. Magnitude (ITPC) per channel: np.abs
-            # 3. Global average across channels: shape (n_permutations,)
-            return np.mean(np.abs(np.mean(shifted_vectors, axis=1)), axis=1)
+            return self._compute_surrogate_itpc(unit_vectors, n_permutations, rng)
 
         if metric == "sentence":
             return get_surrogate_itpc(sent_idx)
@@ -842,13 +830,10 @@ class LanguageTrackingAnalysis(BasePipeline):
             raise ValueError("_morlet_phases not set. Call analyze() before running Morlet permutation tests.")
 
         phases = self._morlet_phases  # (n_trials, n_channels, 3)
-        n_trials = phases.shape[0]
 
         def surrogate_itpc(freq_idx: int) -> np.ndarray:
             unit_vectors = np.exp(1j * phases[:, :, freq_idx])  # (n_trials, n_channels)
-            rand_phase = rng.uniform(0, 2 * np.pi, size=(n_permutations, n_trials, 1))
-            shifted = unit_vectors * np.exp(1j * rand_phase)  # (n_permutations, n_trials, n_channels)
-            return np.mean(np.abs(np.mean(shifted, axis=1)), axis=1)  # (n_permutations,)
+            return self._compute_surrogate_itpc(unit_vectors, n_permutations, rng)
 
         if metric in self._MORLET_FREQ_IDX:
             return surrogate_itpc(self._MORLET_FREQ_IDX[metric])
@@ -858,6 +843,34 @@ class LanguageTrackingAnalysis(BasePipeline):
             ) / 2.0
         else:
             raise ValueError(f"Unknown metric '{metric}'")
+
+    @staticmethod
+    def _compute_surrogate_itpc(
+        unit_vectors: np.ndarray,
+        n_permutations: int,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """
+        Generate null ITPC surrogates from unit vectors via random phase shuffling.
+
+        Parameters
+        ----------
+        unit_vectors : np.ndarray, shape (n_trials, n_channels)
+            Complex unit vectors on the unit circle (exp(i*phase)).
+        n_permutations : int
+            Number of surrogates.
+        rng : np.random.Generator
+            Seeded random generator.
+
+        Returns
+        -------
+        np.ndarray, shape (n_permutations,)
+        """
+        n_trials = unit_vectors.shape[0]
+        # Identical random phase offset per trial across channels preserves spatial covariance
+        rand_phase = rng.uniform(0, 2 * np.pi, size=(n_permutations, n_trials, 1))
+        shifted = unit_vectors * np.exp(1j * rand_phase)
+        return np.mean(np.abs(np.mean(shifted, axis=1)), axis=1)
 
     @staticmethod
     def compute_permutation_pvalue(observed: float, null_distribution: np.ndarray) -> float:
