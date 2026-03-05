@@ -38,6 +38,11 @@ ALIGNED_EVENTS_DIR = PROCESSED_DATA_DIR / "aligned_events"
 # Preprocessing (ENG-03) outputs
 EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
 QC_DIR = PROCESSED_DATA_DIR / "qc"
+# ERP Pipeline output directories (ENG-02b)
+ERPS_DIR = PROCESSED_DATA_DIR / "erps"
+FEATURES_DIR = PROCESSED_DATA_DIR / "features"
+ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
+QC_REPORTS_DIR = PROCESSED_DATA_DIR / "oddball_qc"
 
 # Analysis (ENG-06) outputs
 REPORTS_DIR = PROCESSED_DATA_DIR / "reports"

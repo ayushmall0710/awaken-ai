@@ -175,6 +175,7 @@ def unify_stimulus_data(data_dir: Path, output_file: Path, verbose: bool = False
             print(f"Final Row Count: {len(unified_df)}")
 
         # Save to Parquet
+        output_file.parent.mkdir(parents=True, exist_ok=True)  # ← ADD THIS LINE
         unified_df.to_parquet(output_file, engine="pyarrow")
         if verbose:
             print(f"Successfully saved to {output_file}")

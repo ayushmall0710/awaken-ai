@@ -51,6 +51,9 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# Matplotlib local cache
+.mplconfig/
+
 # Translations
 *.mo
 *.pot
@@ -226,3 +229,4 @@ reports/*.md
 
 # Exploratory Data Analysis artifacts
 eda/*.parquet
+eda/verify_eng03_to_eng02b_epoching.ipynb
