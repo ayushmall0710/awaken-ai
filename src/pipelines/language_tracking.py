@@ -158,7 +158,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             self.preprocess()
 
         if self._epochs_filtered is None:
-            self._epochs_filtered = self.epochs.copy()
+            self.preprocess()
 
         # 1. Compute Global ITPC on Clinical 20 channels
         logger.info(f"[{self.patient_id}] Computing Global DFT ITPC (Clinical channels)...")
@@ -491,7 +491,9 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         return itpc_spectrum, freqs
 
-    def extract_itpc_metrics_dft(self, itpc_spectrum: np.ndarray, freqs: np.ndarray, channel_idx: int = None) -> dict:
+    def extract_itpc_metrics_dft(
+        self, itpc_spectrum: np.ndarray, freqs: np.ndarray, channel_idx: Optional[int] = None
+    ) -> dict:
         """
         Extract band-averaged ITPC for specific linguistic levels from the DFT spectrum.
         Matches the stimulus rates:
