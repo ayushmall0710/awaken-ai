@@ -13,10 +13,11 @@ import numpy as np
 if TYPE_CHECKING:
     import mne
 
-# Stimulus linguistic rate constants (Hz) — must match LanguageTrackingAnalysis.TARGET_*_FREQ
-_TARGET_WORD_FREQ = 3.125
-_TARGET_PHRASE_FREQ = 1.56
-_TARGET_SENTENCE_FREQ = 0.78
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
+
+_TARGET_WORD_FREQ = LanguageTrackingAnalysis.TARGET_WORD_FREQ
+_TARGET_PHRASE_FREQ = LanguageTrackingAnalysis.TARGET_PHRASE_FREQ
+_TARGET_SENTENCE_FREQ = LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ
 
 _ITPC_TARGET_SPECS = [
     (_TARGET_WORD_FREQ, "Word", "#b2182b"),
@@ -87,6 +88,7 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
     fig_tfr.savefig(tfr_path, dpi=300, bbox_inches="tight")
     plt.close(fig_tfr)
+    return tfr_path
 
 
 def plot_itpc_channel_bar(
@@ -99,7 +101,7 @@ def plot_itpc_channel_bar(
     sentence_band: tuple,
     phrase_band: tuple,
     word_band: tuple,
-) -> None:
+) -> Path:
     """
     Bar chart of per-channel ITPC at sentence and word bands with chance-level reference.
 
@@ -161,8 +163,10 @@ def plot_itpc_channel_bar(
         ax.text(i + width, w + 0.003, f"{w:.3f}", ha="center", va="bottom", fontsize=8)
 
     plt.tight_layout()
-    fig.savefig(out_dir / f"{patient_id}_language_ITPC_channels.png", dpi=300, bbox_inches="tight")
+    out_path = out_dir / f"{patient_id}_language_ITPC_channels.png"
+    fig.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    return out_path
 
 
 def plot_itpc_spectrum(

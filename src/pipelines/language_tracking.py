@@ -63,13 +63,23 @@ class LanguageTrackingAnalysis(BasePipeline):
     TARGET_WORD_FREQ = 3.125
 
     # Frequency bands for band-averaged ITPC extraction.
-    # Band-averaging across the entrainment band (rather than a single bin) is
-    # more robust to small ICA-induced power shifts between adjacent bins and
-    # reflects the finite bandwidth of neural entrainment responses.
-    # Note: 1 / 14.08s window length = 0.071 Hz bins exactly
-    SENTENCE_BAND: tuple = (0.71, 0.85)
-    PHRASE_BAND: tuple = (1.49, 1.63)
-    WORD_BAND: tuple = (3.05, 3.20)
+    # We use a proportional bandwidth (±10%) to naturally accommodate the logarithmic
+    # widening of biological frequency responses at higher bands.
+    BANDWIDTH_PERCENT = 0.10
+
+    SENTENCE_BAND: tuple = (
+        TARGET_SENTENCE_FREQ * (1 - BANDWIDTH_PERCENT),
+        TARGET_SENTENCE_FREQ * (1 + BANDWIDTH_PERCENT),
+    )
+    PHRASE_BAND: tuple = (
+        TARGET_PHRASE_FREQ * (1 - BANDWIDTH_PERCENT),
+        TARGET_PHRASE_FREQ * (1 + BANDWIDTH_PERCENT),
+    )
+    WORD_BAND: tuple = (
+        TARGET_WORD_FREQ * (1 - BANDWIDTH_PERCENT),
+        TARGET_WORD_FREQ * (1 + BANDWIDTH_PERCENT),
+    )
+
     SENTENCE_BAND_WIDTH_HZ: float = SENTENCE_BAND[1] - SENTENCE_BAND[0]
     PHRASE_BAND_WIDTH_HZ: float = PHRASE_BAND[1] - PHRASE_BAND[0]
     WORD_BAND_WIDTH_HZ: float = WORD_BAND[1] - WORD_BAND[0]
@@ -80,6 +90,11 @@ class LanguageTrackingAnalysis(BasePipeline):
     CROP_TMAX = 16.36
 
     ITPC_FREQS = np.logspace(np.log10(0.5), np.log10(5.0), num=60)
+    # n_cycles = 2f for the TFR visualisation pass: time resolution ≈ 2/f seconds.
+    # At 0.78 Hz: window ≈ 2.56 s — enough temporal detail to see onset/offset structure.
+    # At 3.125 Hz: window ≈ 0.64 s — resolves individual word-rate fluctuations.
+    # The phase-extraction pass (_compute_morlet_target_phases) uses n_cycles = 5f independently
+    # for better frequency selectivity, since it immediately time-averages and discards the time axis.
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])
 
     # Target frequency resolution for the zero-padded DFT.
@@ -90,8 +105,9 @@ class LanguageTrackingAnalysis(BasePipeline):
     # and WORD_BAND, not by isolating a single bin.
     DFT_FREQ_RESOLUTION = 0.01
 
-    # Morlet target frequency axis-2 index mapping (axis-2 order: [0]=word, [1]=phrase, [2]=sentence)
-    _MORLET_FREQ_IDX: dict = {"word": 0, "phrase": 1, "sentence": 2}
+    # Morlet target frequency axis-2 index mapping (ascending frequency, matches ITPC_FREQS convention):
+    # [0]=sentence (0.78 Hz), [1]=phrase (1.56 Hz), [2]=word (3.125 Hz)
+    _MORLET_FREQ_IDX: dict = {"sentence": 0, "phrase": 1, "word": 2}
 
     def __init__(
         self,
@@ -427,8 +443,8 @@ class LanguageTrackingAnalysis(BasePipeline):
         epochs = epochs.copy().filter(
             l_freq=self.HIGHPASS_FREQ,
             h_freq=self.LOWPASS_FREQ,
-            fir_design="firwin",
-            phase="zero-double",  # No phase distortions
+            method="iir",
+            iir_params=None,  # Defaults to Butterworth 4th order zero-phase
             verbose=False,
         )
 
@@ -694,14 +710,18 @@ class LanguageTrackingAnalysis(BasePipeline):
         Returns
         -------
         np.ndarray, shape (n_trials, n_channels, 3)
-            Phase angles (radians) at [word, phrase, sentence] frequencies.
-            Axis-2 order: [0]=word, [1]=phrase, [2]=sentence.
+            Phase angles (radians) at target frequencies in ascending order.
+            Axis-2 order: [0]=sentence (0.78 Hz), [1]=phrase (1.56 Hz), [2]=word (3.125 Hz).
         """
         from mne.time_frequency import tfr_morlet
 
-        target_freqs = np.array([self.TARGET_WORD_FREQ, self.TARGET_PHRASE_FREQ, self.TARGET_SENTENCE_FREQ])
-        # Same formula as ITPC_CYCLES = [max(0.5, f * 2.0) for f in ITPC_FREQS], applied at exact target freqs
-        n_cycles = np.array([max(0.5, f * 2.0) for f in target_freqs])
+        target_freqs = np.array([self.TARGET_SENTENCE_FREQ, self.TARGET_PHRASE_FREQ, self.TARGET_WORD_FREQ])
+        # n_cycles = 5f (higher than ITPC_CYCLES = 2f used for TFR visualisation).
+        # Frequency resolution Δf ≈ f/5 vs f/2 for the TFR pass.
+        # Justified because this pass immediately time-averages the complex output — the time
+        # axis is discarded — so temporal resolution is irrelevant and frequency selectivity
+        # should be maximised to reduce cross-frequency contamination in the phase estimate.
+        n_cycles = np.array([max(0.5, f * 5.0) for f in target_freqs])
 
         epoch_tfr = tfr_morlet(
             epochs,

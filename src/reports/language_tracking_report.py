@@ -10,16 +10,16 @@ import numpy as np
 import src.reports.style_utils as style_utils
 from src.data_loading import config
 from src.pipelines.language_tracking import LanguageTrackingAnalysis
-from src.viz.language_plots import plot_itpc_results, plot_itpc_spectrum, plot_itpc_topomap
+from src.viz.language_plots import plot_itpc_channel_bar, plot_itpc_results, plot_itpc_spectrum, plot_itpc_topomap
 
 logger = logging.getLogger(__name__)
 
 _ENTRAINMENT_COLS = [
     ("Patient", "patient_id"),
     ("Trials", "n_trials"),
-    ("ITPC Word (3.125 Hz)", "itpc_word"),
-    ("ITPC Phrase (1.56 Hz)", "itpc_phrase"),
-    ("ITPC Sentence (0.78 Hz)", "itpc_sentence"),
+    (f"ITPC Word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz)", "itpc_word"),
+    (f"ITPC Phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz)", "itpc_phrase"),
+    (f"ITPC Sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz)", "itpc_sentence"),
     ("Comprehension Combined", "itpc_comprehension_combined"),
     ("Cognitive/Acoustic Ratio", "ratio_cognitive_acoustic"),
     ("p Word", "dft_p_word"),
@@ -40,6 +40,16 @@ _MORLET_METRICS = {
     "freq_phrase_hz": LanguageTrackingAnalysis.TARGET_PHRASE_FREQ,
     "freq_word_hz": LanguageTrackingAnalysis.TARGET_WORD_FREQ,
 }
+
+_MORLET_COLS = [
+    ("ITPC Word (Morlet)", "morlet_itpc_word"),
+    ("ITPC Phrase (Morlet)", "morlet_itpc_phrase"),
+    ("ITPC Sentence (Morlet)", "morlet_itpc_sentence"),
+    ("p Word", "morlet_p_word"),
+    ("p Phrase", "morlet_p_phrase"),
+    ("p Sentence", "morlet_p_sentence"),
+    ("p Comprehension", "morlet_p_comprehension"),
+]
 
 _PLOT_CSS = """
         .plot-grid {
@@ -106,12 +116,22 @@ class LanguageTrackingReport:
 
         if self.lt_obj._morlet_itc is not None:
             try:
-                plot_itpc_results(self.lt_obj._morlet_itc, pid, str(self.output_dir), _MORLET_METRICS)
-                tfr_path = self.output_dir / f"{pid}_language_ITPC_tfr.png"
-                if tfr_path.exists():
-                    paths["morlet_tfr"] = tfr_path
+                paths["morlet_tfr"] = plot_itpc_results(
+                    self.lt_obj._morlet_itc, pid, str(self.output_dir), _MORLET_METRICS
+                )
 
                 morlet_data = self.lt_obj._morlet_itc.data  # (n_channels, n_freqs, n_times)
+                paths["morlet_channel_bar"] = plot_itpc_channel_bar(
+                    morlet_data,
+                    list(self.lt_obj._dft_ch_names),
+                    pid,
+                    str(self.output_dir),
+                    int(row["n_trials"]),
+                    self.lt_obj._morlet_itc.freqs,
+                    LanguageTrackingAnalysis.SENTENCE_BAND,
+                    LanguageTrackingAnalysis.PHRASE_BAND,
+                    LanguageTrackingAnalysis.WORD_BAND,
+                )
                 morlet_spectrum = np.mean(morlet_data, axis=-1)  # (n_channels, n_freqs)
                 morlet_freqs = self.lt_obj._morlet_itc.freqs
 
@@ -225,12 +245,42 @@ class LanguageTrackingReport:
         table = style_utils.build_base_html_table(headers, [cells])
         return f"<h3>Global Entrainment Metrics</h3><div class='table-wrapper'>{table}</div>"
 
+    def _build_morlet_section(self) -> str:
+        row = self.lt_obj.results.iloc[0]
+        headers = [name for name, _ in _MORLET_COLS]
+        cells = [self._format_cell(key, row.get(key)) for _, key in _MORLET_COLS]
+        table = style_utils.build_base_html_table(headers, [cells])
+        note = (
+            "<p style='font-size:0.8rem;color:#64748b;margin-top:0.5rem;'>"
+            "Morlet ITPC is computed from time-averaged complex wavelets at each target frequency "
+            "(phase-coherence across trials). Values are not numerically comparable to DFT ITPC. "
+            "Morlet p-values are a secondary validation; DFT remains the primary significance measure "
+            "per Sokoliuk 2021."
+            "</p>"
+        )
+        return f"<h3>Morlet Wavelet Validation</h3><div class='table-wrapper'>{table}</div>{note}"
+
     def _build_lateralization_section(self) -> str:
         row = self.lt_obj.results.iloc[0]
         rates = [
-            ("Word (3.125 Hz)", "lh_itpc_word", "rh_itpc_word", "lateralization_index_word"),
-            ("Phrase (1.56 Hz)", "lh_itpc_phrase", "rh_itpc_phrase", "lateralization_index_phrase"),
-            ("Sentence (0.78 Hz)", "lh_itpc_sentence", "rh_itpc_sentence", "lateralization_index_sentence"),
+            (
+                f"Word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz)",
+                "lh_itpc_word",
+                "rh_itpc_word",
+                "lateralization_index_word",
+            ),
+            (
+                f"Phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz)",
+                "lh_itpc_phrase",
+                "rh_itpc_phrase",
+                "lateralization_index_phrase",
+            ),
+            (
+                f"Sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz)",
+                "lh_itpc_sentence",
+                "rh_itpc_sentence",
+                "lateralization_index_sentence",
+            ),
             ("Comprehension", None, None, "lateralization_index_comprehension"),
         ]
         headers = [
@@ -264,7 +314,9 @@ class LanguageTrackingReport:
                 "<h3>Cortical Tracking Frequency Spectrum (DFT)</h3>"
                 f"<div class='plot-card'>{img}"
                 "<figcaption>Channel-averaged ITPC across 0.5&ndash;4 Hz. "
-                "Dashed lines mark word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz). "
+                f"Dashed lines mark word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz), "
+                f"phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz), "
+                f"sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz). "
                 "Sharp peaks at target frequencies confirm stimulus-locked entrainment."
                 "</figcaption></div>"
             )
@@ -293,6 +345,19 @@ class LanguageTrackingReport:
                 "</figcaption></div>"
             )
 
+        if "morlet_channel_bar" in plot_paths:
+            img = self._embed_image(plot_paths["morlet_channel_bar"], "Morlet Per-Channel ITPC")
+            sections.append(
+                "<h3>Per-Channel ITPC (Morlet Band-Averaged)</h3>"
+                f"<div class='plot-card'>{img}"
+                f"<figcaption>Band-averaged Morlet ITPC per electrode at sentence "
+                f"({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz), "
+                f"phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz), and "
+                f"word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz) rates. Dashed line = chance level "
+                "1/&radic;N. Identifies which channels drive the global entrainment signal."
+                "</figcaption></div>"
+            )
+
         morlet_topo_html = ""
         for freq, label in _TARGET_FREQS:
             key = f"morlet_topomap_{label.lower()}"
@@ -301,8 +366,9 @@ class LanguageTrackingReport:
                 morlet_topo_html += (
                     f"<div class='plot-card'>{img}"
                     f"<figcaption>Morlet ITPC Topomap @ {freq} Hz ({label} rate). "
-                    "Spatial distribution is comparable to DFT; left temporal/frontal hotspots "
-                    "(T7, F7) indicate expected language lateralization."
+                    f"Wavelet bandwidth &asymp;&thinsp;&plusmn;{freq / 5:.2f}&thinsp;Hz (n_cycles = 5f); "
+                    "spatial channel comparison is valid but the bin is not narrowband. "
+                    "Left temporal/frontal hotspots (T7, F7) indicate expected language lateralization."
                     "</figcaption></div>"
                 )
         if morlet_topo_html:
@@ -328,7 +394,8 @@ class LanguageTrackingReport:
             {
                 "term": "itpc_comprehension_combined",
                 "desc": (
-                    "Average of phrase (1.56 Hz) and sentence (0.78 Hz) ITPC. "
+                    f"Average of phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz) and "
+                    f"sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz) ITPC. "
                     "These rates have no acoustic correlate in the stimulus envelope &mdash; "
                     "entrainment here reflects top-down cognitive speech comprehension (Sokoliuk 2021)."
                 ),
@@ -381,6 +448,7 @@ class LanguageTrackingReport:
         content = (
             self._build_overview_cards()
             + self._build_entrainment_table()
+            + self._build_morlet_section()
             + self._build_lateralization_section()
             + self._build_plots_section(plot_paths)
             + self._build_legend_box()
@@ -405,6 +473,7 @@ class LanguageTrackingReport:
         )
         html += self._build_overview_cards()
         html += self._build_entrainment_table()
+        html += self._build_morlet_section()
         html += self._build_lateralization_section()
         html += self._build_plots_section(plot_paths)
         html += self._build_legend_box()

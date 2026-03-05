@@ -546,3 +546,59 @@ def test_lateralization_index_range(mock_loader, itpc_epochs):
     ]:
         val = df.iloc[0][col]
         assert -1.0 <= val <= 1.0, f"{col} = {val} out of range"
+
+
+# --- Morlet calibration regression ---
+
+
+def test_morlet_pvalue_significant_for_phase_locked_data():
+    """
+    Morlet p-value < 0.05 when all trials share the same phase (perfect locking).
+
+    This is a calibration regression: after aligning observed ITPC and the null
+    on the same quantity (time-averaged complex -> angle -> |mean_trials(exp(i*phase))|),
+    the permutation test must reliably detect perfect phase-locking.
+    """
+    rng = np.random.default_rng(0)
+    n_trials, n_channels, n_freqs = 20, 6, 3
+    # All trials share a single fixed phase per channel/freq — perfect phase-locking.
+    fixed_phase = rng.uniform(0, 2 * np.pi, size=(1, n_channels, n_freqs))
+    phases = np.broadcast_to(fixed_phase, (n_trials, n_channels, n_freqs)).copy()
+
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor._morlet_phases = phases
+
+    observed = processor._extract_morlet_observed_itpc()
+    for key in ("itpc_word", "itpc_phrase", "itpc_sentence"):
+        assert observed[key] > 0.95, f"{key} = {observed[key]:.4f} expected near 1.0 for locked phases"
+
+    for metric, seed in (("sentence", 100), ("phrase", 101), ("word", 102)):
+        null = processor._compute_trial_shuffled_null_itpc(
+            None, n_permutations=200, metric=metric, seed=seed, method="morlet"
+        )
+        p = processor._compute_permutation_pvalue(observed[f"itpc_{metric}"], null)
+        assert p < 0.05, f"morlet_p_{metric} = {p:.3f} not significant for perfect phase-locking"
+
+
+def test_morlet_pvalue_not_extreme_for_random_phases():
+    """
+    Morlet p-value not consistently < 0.01 when phases are uniformly random.
+
+    Checks that the permutation test does not spuriously flag noise as significant.
+    With 200 surrogates and uniform random phases, p should not be below the
+    Bonferroni-like threshold of 0.01.
+    """
+    rng = np.random.default_rng(42)
+    n_trials, n_channels, n_freqs = 20, 6, 3
+    phases = rng.uniform(0, 2 * np.pi, size=(n_trials, n_channels, n_freqs))
+
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor._morlet_phases = phases
+
+    observed = processor._extract_morlet_observed_itpc()
+    for metric, seed in (("sentence", 200), ("phrase", 201), ("word", 202)):
+        null = processor._compute_trial_shuffled_null_itpc(
+            None, n_permutations=200, metric=metric, seed=seed, method="morlet"
+        )
+        p = processor._compute_permutation_pvalue(observed[f"itpc_{metric}"], null)
+        assert p > 0.01, f"morlet_p_{metric} = {p:.3f} suspiciously small for random phases"
