@@ -7,7 +7,7 @@ import mne
 import numpy as np
 import pytest
 
-from src.viz.language_plots import plot_dft_spectrum, plot_dft_topomap
+from src.viz.language_plots import plot_itpc_spectrum, plot_itpc_topomap
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def fake_dft_data():
 
 
 def test_plot_dft_spectrum_saves_file(fake_dft_data):
-    """plot_dft_spectrum saves a PNG to output_dir."""
+    """plot_itpc_spectrum saves a PNG to output_dir."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     metrics = {
         "dft_p_word": 0.001,
@@ -36,16 +36,16 @@ def test_plot_dft_spectrum_saves_file(fake_dft_data):
         "itpc_sentence": 0.06,
     }
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = plot_dft_spectrum(itpc_spectrum, freqs, "CON008", tmpdir, metrics)
+        path = plot_itpc_spectrum(itpc_spectrum, freqs, "CON008", tmpdir, metrics)
         assert Path(path).exists()
         assert Path(path).suffix == ".png"
 
 
 def test_plot_dft_topomap_saves_file(fake_dft_data):
-    """plot_dft_topomap saves a PNG for a target frequency."""
+    """plot_itpc_topomap saves a PNG for a target frequency."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = plot_dft_topomap(
+        path = plot_itpc_topomap(
             itpc_spectrum,
             freqs,
             info,
@@ -62,7 +62,7 @@ def test_plot_dft_topomap_respects_vlim(fake_dft_data):
     """vlim parameter is respected when passed."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = plot_dft_topomap(
+        path = plot_itpc_topomap(
             itpc_spectrum,
             freqs,
             info,
