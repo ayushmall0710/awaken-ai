@@ -196,25 +196,25 @@ class TestPermutationTest:
 
 
 class TestChannelSelection:
-    def test_picks_matching_channels(self):
+    def test_picks_matching_channels(self, mock_loader):
         """Should select channels present in both CLINICAL_20 and data."""
-        pipeline = CommandFollowingClaassen()
+        pipeline = CommandFollowingClaassen(loader=mock_loader)
         epochs = _make_epoch(channels=["C3", "C4", "Fz", "DC1", "AUX2"])
         pipeline._select_channels(epochs)
         assert set(epochs.ch_names) == {"C3", "C4", "Fz"}  # DC1, AUX2 dropped
 
-    def test_handles_prefixed_channels(self):
+    def test_handles_prefixed_channels(self, mock_loader):
         """Should match 'EEG C3' to CLINICAL_20 'C3' via normalize_channel_names."""
-        pipeline = CommandFollowingClaassen()
+        pipeline = CommandFollowingClaassen(loader=mock_loader)
         info = mne.create_info(ch_names=["EEG C3", "EEG C4", "EEG Fz", "DC1"], sfreq=SFREQ, ch_types="eeg")
         data = np.random.randn(1, 4, N_SAMPLES)
         epochs = mne.EpochsArray(data, info, tmin=0, verbose=False)
         pipeline._select_channels(epochs)
         assert len(epochs.ch_names) == 3
 
-    def test_raises_on_no_match(self):
+    def test_raises_on_no_match(self, mock_loader):
         """Should raise ValueError if zero CLINICAL_20 channels found."""
-        pipeline = CommandFollowingClaassen()
+        pipeline = CommandFollowingClaassen(loader=mock_loader)
         epochs = _make_epoch(channels=["DC1", "DC2", "AUX1"])
         with pytest.raises(ValueError, match="No CLINICAL_20"):
             pipeline._select_channels(epochs)
@@ -226,9 +226,9 @@ class TestChannelSelection:
 
 
 class TestClaassenPipeline:
-    def test_cmd_positive_with_separable_data(self):
+    def test_cmd_positive_with_separable_data(self, mock_loader):
         """Pipeline should classify as CMD+ when keep/stop are clearly different."""
-        pipeline = CommandFollowingClaassen(n_permutations=50)
+        pipeline = CommandFollowingClaassen(n_permutations=50, loader=mock_loader)
         pipeline.pairs = _make_separable_pairs(n=10, keep_amp=0.5, stop_amp=5.0, side="left")
         pipeline.pairs += _make_separable_pairs(n=10, keep_amp=0.5, stop_amp=5.0, side="right")
 
@@ -237,9 +237,9 @@ class TestClaassenPipeline:
         assert not result_df.empty
         assert pipeline.svm_results["cmd_status"] == "CMD+"
 
-    def test_cmd_negative_with_random_data(self):
+    def test_cmd_negative_with_random_data(self, mock_loader):
         """Pipeline should classify as CMD- when data is indistinguishable."""
-        pipeline = CommandFollowingClaassen(n_permutations=50)
+        pipeline = CommandFollowingClaassen(n_permutations=50, loader=mock_loader)
         pipeline.pairs = _make_random_pairs(n=8, side="left")
         pipeline.pairs += _make_random_pairs(n=8, side="right")
 
@@ -247,9 +247,9 @@ class TestClaassenPipeline:
 
         assert pipeline.svm_results["cmd_status"] == "CMD-"
 
-    def test_too_few_pairs_gives_empty(self):
+    def test_too_few_pairs_gives_empty(self, mock_loader):
         """Should return CMD- with reason if fewer than MIN_PAIRS_FOR_SVM pairs."""
-        pipeline = CommandFollowingClaassen(n_permutations=10)
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
         pipeline.pairs = _make_separable_pairs(n=2)
 
         result_df = pipeline.analyze(alpha=0.05)
@@ -257,9 +257,9 @@ class TestClaassenPipeline:
         assert result_df.empty
         assert "Not enough pairs" in pipeline.svm_results["cmd_status"]
 
-    def test_details_dataframe_columns(self):
+    def test_details_dataframe_columns(self, mock_loader):
         """Result details DataFrame should have the expected columns."""
-        pipeline = CommandFollowingClaassen(n_permutations=10)
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
         pipeline.pairs = _make_separable_pairs(n=6, side="left")
 
         result_df = pipeline.analyze(alpha=0.05)
@@ -277,20 +277,19 @@ class TestClaassenPipeline:
         }
         assert expected_cols == set(result_df.columns)
 
-    def test_sides_from_command_types(self):
+    def test_sides_from_command_types(self, mock_loader):
         """Should iterate over sides derived from command_types, not pair data."""
-        pipeline = CommandFollowingClaassen(n_permutations=10)
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
         pipeline.command_types = ["left_command", "right_command"]
         pipeline.pairs = _make_separable_pairs(n=6, side="left")
-        # No right-side pairs → right should just be skipped, not error
 
         result_df = pipeline.analyze(alpha=0.05)
         assert len(result_df) == 1
         assert result_df.iloc[0]["side"] == "left"
 
-    def test_generate_summary_structure(self):
+    def test_generate_summary_structure(self, mock_loader):
         """Summary should contain cmd_status, method, pair counts, side_results."""
-        pipeline = CommandFollowingClaassen(n_permutations=10)
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
         pipeline.pairs = _make_separable_pairs(n=6, side="left")
         pipeline.pairs += _make_separable_pairs(n=6, side="right")
         pipeline.analyze(alpha=0.05)
@@ -304,9 +303,9 @@ class TestClaassenPipeline:
         assert isinstance(summary["side_results"], list)
         assert len(summary["side_results"]) == 2
 
-    def test_generate_summary_without_analyze_returns_error(self):
+    def test_generate_summary_without_analyze_returns_error(self, mock_loader):
         """Calling generate_summary before analyze should return an error status."""
-        pipeline = CommandFollowingClaassen()
+        pipeline = CommandFollowingClaassen(loader=mock_loader)
         summary = pipeline.generate_summary()
         assert "ERROR" in summary["cmd_status"]
 
@@ -314,7 +313,7 @@ class TestClaassenPipeline:
         """Should be a subclass of CommandFollowingAnalysis."""
         assert issubclass(CommandFollowingClaassen, CommandFollowingAnalysis)
 
-    def test_uses_clinical_20_channels(self):
+    def test_uses_clinical_20_channels(self, mock_loader):
         """Default roi_channels should be CLINICAL_20."""
-        pipeline = CommandFollowingClaassen()
+        pipeline = CommandFollowingClaassen(loader=mock_loader)
         assert pipeline.roi_channels == config.CLINICAL_20
