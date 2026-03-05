@@ -113,6 +113,44 @@ class LanguageTrackingReport:
             except Exception as e:
                 logger.warning(f"Morlet TFR plot failed: {e}")
 
+        # Morlet spectrum and topomaps (time-averaged)
+        if self.lt_obj._morlet_itc is not None:
+            try:
+                morlet_data = self.lt_obj._morlet_itc.data  # (n_channels, n_freqs, n_times)
+                morlet_spectrum = np.mean(morlet_data, axis=-1)  # (n_channels, n_freqs)
+                morlet_freqs = self.lt_obj._morlet_itc.freqs
+
+                morlet_metrics = {
+                    "itpc_word": float(row.get("morlet_itpc_word", 0)),
+                    "itpc_phrase": float(row.get("morlet_itpc_phrase", 0)),
+                    "itpc_sentence": float(row.get("morlet_itpc_sentence", 0)),
+                    "dft_p_word": float(row.get("morlet_p_word", 1)),
+                    "dft_p_phrase": float(row.get("morlet_p_phrase", 1)),
+                    "dft_p_sentence": float(row.get("morlet_p_sentence", 1)),
+                }
+                paths["morlet_spectrum"] = plot_itpc_spectrum(
+                    morlet_spectrum, morlet_freqs, pid, self.output_dir, morlet_metrics, method_label="Morlet"
+                )
+
+                morlet_word_idx = int(np.argmin(np.abs(morlet_freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
+                morlet_vmax = float(np.percentile(morlet_spectrum[:, morlet_word_idx], 95)) * 1.2 or 0.1
+                morlet_vlim = (0.0, morlet_vmax)
+
+                for freq, label in _TARGET_FREQS:
+                    paths[f"morlet_topomap_{label.lower()}"] = plot_itpc_topomap(
+                        morlet_spectrum,
+                        morlet_freqs,
+                        info,
+                        freq,
+                        label,
+                        pid,
+                        self.output_dir,
+                        vlim=morlet_vlim,
+                        method_label="Morlet",
+                    )
+            except Exception as e:
+                logger.warning(f"Morlet spectrum/topomap plots failed: {e}")
+
         self._plot_paths = paths
         return paths
 
@@ -271,6 +309,29 @@ class LanguageTrackingReport:
                 "Shows temporal stability of phase-locking to the speech stimulus."
                 "</figcaption></div>"
             )
+
+        if "morlet_spectrum" in plot_paths:
+            img = self._embed_image(plot_paths["morlet_spectrum"], "Morlet ITPC Frequency Spectrum")
+            sections.append(
+                "<h3>Cortical Tracking Frequency Spectrum (Morlet)</h3>"
+                f"<div class='plot-card'>{img}"
+                "<figcaption>Time-averaged Morlet ITPC across 0.5&ndash;4 Hz. "
+                "Dashed lines mark word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz). "
+                "Broader peaks than DFT reflect the Morlet wavelet's time-frequency trade-off."
+                "</figcaption></div>"
+            )
+
+        morlet_topo_html = ""
+        for freq, label in _TARGET_FREQS:
+            key = f"morlet_topomap_{label.lower()}"
+            if key in plot_paths:
+                img = self._embed_image(plot_paths[key], f"Morlet {label} Topomap")
+                morlet_topo_html += (
+                    f"<div class='plot-card'>{img}"
+                    f"<figcaption>Morlet ITPC Topomap @ {freq} Hz ({label} rate).</figcaption></div>"
+                )
+        if morlet_topo_html:
+            sections.append(f"<h3>ITPC Topographic Maps (Morlet)</h3><div class='plot-grid'>{morlet_topo_html}</div>")
 
         return "\n".join(sections)
 

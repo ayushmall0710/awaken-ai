@@ -45,6 +45,10 @@ def mock_pipeline():
                 "dft_p_phrase": 0.032,
                 "dft_p_sentence": 0.028,
                 "dft_p_comprehension": 0.015,
+                "morlet_p_word": 0.01,
+                "morlet_p_phrase": 0.04,
+                "morlet_p_sentence": 0.02,
+                "morlet_p_comprehension": 0.03,
             }
         ]
     )
@@ -105,3 +109,23 @@ def test_report_missing_patient_id_raises(mock_pipeline):
     with tempfile.TemporaryDirectory() as tmpdir:
         with pytest.raises(ValueError, match="patient_id"):
             LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
+
+
+def test_report_html_contains_morlet_section(mock_pipeline):
+    """Report HTML contains a Morlet ITPC section when _morlet_itc is set."""
+    morlet_itc = MagicMock()
+    n_ch, n_freqs, n_times = 7, 60, 50
+    morlet_itc.data = np.random.rand(n_ch, n_freqs, n_times) * 0.1
+    morlet_itc.freqs = np.logspace(np.log10(0.5), np.log10(5.0), num=n_freqs)
+    mock_pipeline._morlet_itc = morlet_itc
+    # mock_pipeline.results already has morlet_p_* from fixture
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with (
+            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
+        ):
+            rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
+            path = rpt.generate()
+            html = Path(path).read_text()
+    assert "morlet" in html.lower()

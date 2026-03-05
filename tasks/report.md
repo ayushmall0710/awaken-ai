@@ -190,6 +190,8 @@ rpt.build_session_html()  # returns collapsible <details> fragment
 | DFT frequency spectrum plot | Channel-averaged ITPC vs 0.5–4 Hz with annotated target lines |
 | DFT topomap plots | Spatial ITPC maps at word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz) |
 | Morlet TFR plot | Time-frequency ITPC (if `_morlet_itc` is available on the pipeline) |
+| Morlet frequency spectrum | Time-averaged Morlet ITPC vs 0.5–4 Hz with annotated target lines and Morlet p-values |
+| Morlet topomap plots | Spatial Morlet ITPC maps at word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz) |
 | Metrics legend | Definitions and color-coded interpretation ranges for all metrics |
 
 ### Constructor
