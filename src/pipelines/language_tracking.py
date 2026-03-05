@@ -90,6 +90,9 @@ class LanguageTrackingAnalysis(BasePipeline):
     # and WORD_BAND, not by isolating a single bin.
     DFT_FREQ_RESOLUTION = 0.01
 
+    # Morlet target frequency axis-2 index mapping (axis-2 order: [0]=word, [1]=phrase, [2]=sentence)
+    _MORLET_FREQ_IDX: dict = {"word": 0, "phrase": 1, "sentence": 2}
+
     def __init__(
         self,
         loader: Optional[UnifiedDataLoader] = None,
@@ -693,7 +696,8 @@ class LanguageTrackingAnalysis(BasePipeline):
         from mne.time_frequency import tfr_morlet
 
         target_freqs = np.array([self.TARGET_WORD_FREQ, self.TARGET_PHRASE_FREQ, self.TARGET_SENTENCE_FREQ])
-        n_cycles = np.array([max(0.5, f * 2.0) for f in target_freqs])
+        # Same n_cycles formula as compute_itpc — keeps wavelet widths consistent
+        n_cycles = np.array([self.ITPC_CYCLES[int(np.argmin(np.abs(self.ITPC_FREQS - f)))] for f in target_freqs])
 
         epoch_tfr = tfr_morlet(
             epochs,
@@ -707,12 +711,15 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         # epoch_tfr.data: (n_trials, n_channels, 3, n_times)
         complex_data = epoch_tfr.data
+        # Time-average complex values before taking angle: equivalent to extracting the dominant phase
+        # of the epoch, analogous to a single-bin DFT. This summarizes the per-trial phase for the
+        # permutation test without requiring a reference time point.
         mean_complex = np.mean(complex_data, axis=-1)  # (n_trials, n_channels, 3)
         return np.angle(mean_complex)
 
     def compute_trial_shuffled_null_itpc(
         self,
-        epochs: mne.Epochs,
+        epochs: Optional[mne.Epochs],
         n_permutations: int = 1000,
         metric: str = "word",
         seed: int = 42,
@@ -728,14 +735,18 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         Parameters
         ----------
-        epochs : mne.Epochs
-            Preprocessed epochs.
+        epochs : mne.Epochs or None
+            Preprocessed epochs. Pass ``None`` when ``method="morlet"``.
         n_permutations : int
             Number of surrogates.
         metric : str
             "sentence", "phrase", "word", or "comprehension"
         seed : int
             Random seed for reproducibility.
+        method : str, optional
+            Analysis back-end: "dft" (default) or "morlet".
+            When "morlet", ``epochs`` is ignored and ``_morlet_phases`` must
+            already be populated (call ``analyze()`` first).
 
         Returns
         -------
@@ -833,18 +844,18 @@ class LanguageTrackingAnalysis(BasePipeline):
         phases = self._morlet_phases  # (n_trials, n_channels, 3)
         n_trials = phases.shape[0]
 
-        _FREQ_IDX = {"word": 0, "phrase": 1, "sentence": 2}
-
         def surrogate_itpc(freq_idx: int) -> np.ndarray:
             unit_vectors = np.exp(1j * phases[:, :, freq_idx])  # (n_trials, n_channels)
             rand_phase = rng.uniform(0, 2 * np.pi, size=(n_permutations, n_trials, 1))
             shifted = unit_vectors * np.exp(1j * rand_phase)  # (n_permutations, n_trials, n_channels)
             return np.mean(np.abs(np.mean(shifted, axis=1)), axis=1)  # (n_permutations,)
 
-        if metric in _FREQ_IDX:
-            return surrogate_itpc(_FREQ_IDX[metric])
+        if metric in self._MORLET_FREQ_IDX:
+            return surrogate_itpc(self._MORLET_FREQ_IDX[metric])
         elif metric == "comprehension":
-            return (surrogate_itpc(_FREQ_IDX["sentence"]) + surrogate_itpc(_FREQ_IDX["phrase"])) / 2.0
+            return (
+                surrogate_itpc(self._MORLET_FREQ_IDX["sentence"]) + surrogate_itpc(self._MORLET_FREQ_IDX["phrase"])
+            ) / 2.0
         else:
             raise ValueError(f"Unknown metric '{metric}'")
 
