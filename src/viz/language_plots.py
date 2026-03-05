@@ -181,9 +181,9 @@ def plot_itpc_spectrum(
         Directory to save the PNG.
     metrics : dict
         Must contain: itpc_word, itpc_phrase, itpc_sentence.
-        P-values are read from keys dft_p_word, dft_p_phrase, dft_p_sentence
-        (these keys reflect the naming convention in the metrics dict, not the
-        analysis method).
+        P-values are read from keys p_word, p_phrase, p_sentence (generic form).
+        For backward compatibility, dft_p_word, dft_p_phrase, dft_p_sentence are
+        accepted as fallbacks when the generic keys are absent.
     method_label : str, optional
         Label for the analysis method (e.g., "DFT", "Morlet"). Used in the
         plot title and output filename. Defaults to "DFT".
@@ -201,9 +201,21 @@ def plot_itpc_spectrum(
     mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
 
     target_specs = [
-        (3.125, "Word", metrics.get("itpc_word", 0), metrics.get("dft_p_word", 1), "#b2182b"),
-        (1.56, "Phrase", metrics.get("itpc_phrase", 0), metrics.get("dft_p_phrase", 1), "#2166ac"),
-        (0.78, "Sentence", metrics.get("itpc_sentence", 0), metrics.get("dft_p_sentence", 1), "#4dac26"),
+        (3.125, "Word", metrics.get("itpc_word", 0), metrics.get("p_word", metrics.get("dft_p_word", 1)), "#b2182b"),
+        (
+            1.56,
+            "Phrase",
+            metrics.get("itpc_phrase", 0),
+            metrics.get("p_phrase", metrics.get("dft_p_phrase", 1)),
+            "#2166ac",
+        ),
+        (
+            0.78,
+            "Sentence",
+            metrics.get("itpc_sentence", 0),
+            metrics.get("p_sentence", metrics.get("dft_p_sentence", 1)),
+            "#4dac26",
+        ),
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))

@@ -122,10 +122,12 @@ def test_report_html_contains_morlet_section(mock_pipeline):
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
+            patch("src.reports.language_tracking_report.plot_itpc_results"),
             patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
             patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
             path = rpt.generate()
             html = Path(path).read_text()
-    assert "morlet" in html.lower()
+    assert "Cortical Tracking Frequency Spectrum (Morlet)" in html
+    assert "ITPC Topographic Maps (Morlet)" in html

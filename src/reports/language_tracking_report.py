@@ -110,12 +110,7 @@ class LanguageTrackingReport:
                 tfr_path = self.output_dir / f"{pid}_language_ITPC_tfr.png"
                 if tfr_path.exists():
                     paths["morlet_tfr"] = tfr_path
-            except Exception as e:
-                logger.warning(f"Morlet TFR plot failed: {e}")
 
-        # Morlet spectrum and topomaps (time-averaged)
-        if self.lt_obj._morlet_itc is not None:
-            try:
                 morlet_data = self.lt_obj._morlet_itc.data  # (n_channels, n_freqs, n_times)
                 morlet_spectrum = np.mean(morlet_data, axis=-1)  # (n_channels, n_freqs)
                 morlet_freqs = self.lt_obj._morlet_itc.freqs
@@ -124,16 +119,16 @@ class LanguageTrackingReport:
                     "itpc_word": float(row.get("morlet_itpc_word", 0)),
                     "itpc_phrase": float(row.get("morlet_itpc_phrase", 0)),
                     "itpc_sentence": float(row.get("morlet_itpc_sentence", 0)),
-                    "dft_p_word": float(row.get("morlet_p_word", 1)),
-                    "dft_p_phrase": float(row.get("morlet_p_phrase", 1)),
-                    "dft_p_sentence": float(row.get("morlet_p_sentence", 1)),
+                    "p_word": float(row.get("morlet_p_word", 1)),
+                    "p_phrase": float(row.get("morlet_p_phrase", 1)),
+                    "p_sentence": float(row.get("morlet_p_sentence", 1)),
                 }
                 paths["morlet_spectrum"] = plot_itpc_spectrum(
                     morlet_spectrum, morlet_freqs, pid, self.output_dir, morlet_metrics, method_label="Morlet"
                 )
 
                 morlet_word_idx = int(np.argmin(np.abs(morlet_freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
-                morlet_vmax = float(np.percentile(morlet_spectrum[:, morlet_word_idx], 95)) * 1.2 or 0.1
+                morlet_vmax = max(float(np.percentile(morlet_spectrum[:, morlet_word_idx], 95)) * 1.2, 0.1)
                 morlet_vlim = (0.0, morlet_vmax)
 
                 for freq, label in _TARGET_FREQS:
@@ -149,7 +144,7 @@ class LanguageTrackingReport:
                         method_label="Morlet",
                     )
             except Exception as e:
-                logger.warning(f"Morlet spectrum/topomap plots failed: {e}")
+                logger.warning(f"Morlet plots failed: {e}")
 
         self._plot_paths = paths
         return paths
