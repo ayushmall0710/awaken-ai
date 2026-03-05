@@ -24,7 +24,7 @@ def fake_dft_data():
     return itpc_spectrum, freqs, info, ch_names
 
 
-def test_plot_dft_spectrum_saves_file(fake_dft_data):
+def test_plot_itpc_spectrum_saves_file(fake_dft_data):
     """plot_itpc_spectrum saves a PNG to output_dir."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     metrics = {
@@ -41,7 +41,7 @@ def test_plot_dft_spectrum_saves_file(fake_dft_data):
         assert Path(path).suffix == ".png"
 
 
-def test_plot_dft_topomap_saves_file(fake_dft_data):
+def test_plot_itpc_topomap_saves_file(fake_dft_data):
     """plot_itpc_topomap saves a PNG for a target frequency."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -58,7 +58,7 @@ def test_plot_dft_topomap_saves_file(fake_dft_data):
         assert "sentence" in Path(path).name.lower()
 
 
-def test_plot_dft_topomap_respects_vlim(fake_dft_data):
+def test_plot_itpc_topomap_respects_vlim(fake_dft_data):
     """vlim parameter is respected when passed."""
     itpc_spectrum, freqs, info, _ = fake_dft_data
     with tempfile.TemporaryDirectory() as tmpdir:
