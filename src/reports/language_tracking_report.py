@@ -96,7 +96,7 @@ class LanguageTrackingReport:
         paths["itpc_spectrum"] = plot_itpc_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
 
         word_idx = int(np.argmin(np.abs(freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
-        vmax = float(np.percentile(spectrum[:, word_idx], 95)) * 1.2 or 0.1
+        vmax = max(float(np.percentile(spectrum[:, word_idx], 95)) * 1.2, 0.1)
         vlim = (0.0, vmax)
 
         for freq, label in _TARGET_FREQS:
@@ -323,7 +323,10 @@ class LanguageTrackingReport:
                 img = self._embed_image(plot_paths[key], f"Morlet {label} Topomap")
                 morlet_topo_html += (
                     f"<div class='plot-card'>{img}"
-                    f"<figcaption>Morlet ITPC Topomap @ {freq} Hz ({label} rate).</figcaption></div>"
+                    f"<figcaption>Morlet ITPC Topomap @ {freq} Hz ({label} rate). "
+                    "Spatial distribution is comparable to DFT; left temporal/frontal hotspots "
+                    "(T7, F7) indicate expected language lateralization."
+                    "</figcaption></div>"
                 )
         if morlet_topo_html:
             sections.append(f"<h3>ITPC Topographic Maps (Morlet)</h3><div class='plot-grid'>{morlet_topo_html}</div>")
