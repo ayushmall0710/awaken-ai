@@ -154,12 +154,13 @@ def plot_itpc_channel_bar(
     plt.close(fig)
 
 
-def plot_dft_spectrum(
+def plot_itpc_spectrum(
     itpc_spectrum: np.ndarray,
     freqs: np.ndarray,
     patient_id: str,
     output_dir: str,
     metrics: dict,
+    method_label: str = "DFT",
 ) -> Path:
     """
     Line plot of channel-averaged DFT ITPC vs frequency (0.5-4.0 Hz).
@@ -219,18 +220,18 @@ def plot_dft_spectrum(
 
     ax.set_xlabel("Frequency (Hz)", fontsize=11)
     ax.set_ylabel("ITPC", fontsize=11)
-    ax.set_title(f"{patient_id}: DFT ITPC Frequency Spectrum", fontsize=13, fontweight="bold")
+    ax.set_title(f"{patient_id}: {method_label} ITPC Frequency Spectrum", fontsize=13, fontweight="bold")
     ax.set_xlim(0.5, 4.0)
     ax.legend(fontsize=9)
     plt.tight_layout()
 
-    out_path = out_dir / f"{patient_id}_lang_dft_spectrum.png"
+    out_path = out_dir / f"{patient_id}_lang_{method_label.lower()}_spectrum.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_path
 
 
-def plot_dft_topomap(
+def plot_itpc_topomap(
     itpc_spectrum: np.ndarray,
     freqs: np.ndarray,
     info: "mne.Info",
@@ -239,6 +240,7 @@ def plot_dft_topomap(
     patient_id: str,
     output_dir: str,
     vlim: tuple = None,
+    method_label: str = "DFT",
 ) -> Path:
     """
     Topomap of DFT ITPC values across electrodes at a single target frequency.
@@ -302,7 +304,7 @@ def plot_dft_topomap(
     plt.tight_layout()
 
     safe_label = label.lower()
-    out_path = out_dir / f"{patient_id}_lang_topomap_{safe_label}.png"
+    out_path = out_dir / f"{patient_id}_lang_topomap_{method_label.lower()}_{safe_label}.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_path

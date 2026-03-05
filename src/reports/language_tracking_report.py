@@ -10,7 +10,7 @@ import numpy as np
 import src.reports.style_utils as style_utils
 from src.data_loading import config
 from src.pipelines.language_tracking import LanguageTrackingAnalysis
-from src.viz.language_plots import plot_dft_spectrum, plot_dft_topomap, plot_itpc_results
+from src.viz.language_plots import plot_itpc_results, plot_itpc_spectrum, plot_itpc_topomap
 
 logger = logging.getLogger(__name__)
 
@@ -93,14 +93,14 @@ class LanguageTrackingReport:
         metrics = row.to_dict()
         paths = {}
 
-        paths["dft_spectrum"] = plot_dft_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
+        paths["dft_spectrum"] = plot_itpc_spectrum(spectrum, freqs, pid, self.output_dir, metrics)
 
         word_idx = int(np.argmin(np.abs(freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
         vmax = float(np.percentile(spectrum[:, word_idx], 95)) * 1.2 or 0.1
         vlim = (0.0, vmax)
 
         for freq, label in _TARGET_FREQS:
-            paths[f"topomap_{label.lower()}"] = plot_dft_topomap(
+            paths[f"topomap_{label.lower()}"] = plot_itpc_topomap(
                 spectrum, freqs, info, freq, label, pid, self.output_dir, vlim=vlim
             )
 

@@ -62,8 +62,8 @@ def test_generate_creates_html_file(mock_pipeline):
     """generate() writes an HTML file to output_dir."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_dft_spectrum", return_value=Path(tmpdir) / "s.png"),
-            patch("src.reports.language_tracking_report.plot_dft_topomap", return_value=Path(tmpdir) / "t.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
             path = rpt.generate()
@@ -75,8 +75,8 @@ def test_generate_html_contains_key_sections(mock_pipeline):
     """generate() HTML contains entrainment table and lateralization section."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_dft_spectrum", return_value=Path(tmpdir) / "s.png"),
-            patch("src.reports.language_tracking_report.plot_dft_topomap", return_value=Path(tmpdir) / "t.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
             path = rpt.generate()
@@ -90,8 +90,8 @@ def test_build_session_html_returns_details_element(mock_pipeline):
     """build_session_html() returns a collapsible <details> fragment."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_dft_spectrum", return_value=Path(tmpdir) / "s.png"),
-            patch("src.reports.language_tracking_report.plot_dft_topomap", return_value=Path(tmpdir) / "t.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
             fragment = rpt.build_session_html()
