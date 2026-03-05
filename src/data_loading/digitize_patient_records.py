@@ -110,15 +110,16 @@ def create_patient_records_structure(notes_df: pd.DataFrame, history_df: pd.Data
 
 
 def main():
-    script_dir = Path(__file__).parent
-    project_root = script_dir.parent.parent
-    data_dir = project_root / "data" / "EEG"
+    from src.data_loading import config
+
+    data_dir = config.EEG_DATA_DIR
+    json_output = config.PATIENT_RECORDS_PATH
 
     notes_df = load_patient_notes(data_dir)
     history_df = load_patient_history(data_dir)
     patient_records = create_patient_records_structure(notes_df, history_df)
 
-    json_output = data_dir / "patient_records.json"
+    json_output.parent.mkdir(parents=True, exist_ok=True)
     with open(json_output, "w") as f:
         json.dump(patient_records, f, indent=2)
     logger.info(f"Saved JSON to: {json_output}")
