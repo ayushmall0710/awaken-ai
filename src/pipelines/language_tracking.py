@@ -114,6 +114,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         self._dft_ch_names: Optional[list] = None
         self._dft_info = None
         self._morlet_itc = None
+        self._morlet_phases: Optional[np.ndarray] = None  # (n_trials, n_channels, 3) phases at [word, phrase, sentence]
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
@@ -174,6 +175,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
         itpc_data_morlet, itc_obj = self.compute_itpc(clinical_epochs)
         self._morlet_itc = itc_obj
+        self._morlet_phases = self._compute_morlet_target_phases(clinical_epochs)
         morlet_metrics = self.extract_itpc_metrics(itpc_data_morlet)
 
         # 3. Compute Left Hemisphere ITPC
@@ -221,6 +223,27 @@ class LanguageTrackingAnalysis(BasePipeline):
         p_word = self.compute_permutation_pvalue(global_metrics["itpc_word"], null_word)
         p_comprehension = self.compute_permutation_pvalue(itpc_comprehension_combined, null_comp)
 
+        # Morlet permutation tests (method="morlet" reads from self._morlet_phases)
+        logger.info(f"[{self.patient_id}] Running Morlet permutation tests ({n_permutations} surrogates)...")
+        morlet_null_sentence = self.compute_trial_shuffled_null_itpc(
+            None, n_permutations, metric="sentence", seed=46, method="morlet"
+        )
+        morlet_null_phrase = self.compute_trial_shuffled_null_itpc(
+            None, n_permutations, metric="phrase", seed=47, method="morlet"
+        )
+        morlet_null_word = self.compute_trial_shuffled_null_itpc(
+            None, n_permutations, metric="word", seed=48, method="morlet"
+        )
+        morlet_null_comp = self.compute_trial_shuffled_null_itpc(
+            None, n_permutations, metric="comprehension", seed=49, method="morlet"
+        )
+        morlet_p_sentence = self.compute_permutation_pvalue(morlet_metrics["itpc_sentence"], morlet_null_sentence)
+        morlet_p_phrase = self.compute_permutation_pvalue(morlet_metrics["itpc_phrase"], morlet_null_phrase)
+        morlet_p_word = self.compute_permutation_pvalue(morlet_metrics["itpc_word"], morlet_null_word)
+        morlet_p_comprehension = self.compute_permutation_pvalue(
+            (morlet_metrics["itpc_sentence"] + morlet_metrics["itpc_phrase"]) / 2.0, morlet_null_comp
+        )
+
         result_dict = {
             "patient_id": self.patient_id,
             "n_trials": len(self._epochs_filtered),
@@ -246,6 +269,10 @@ class LanguageTrackingAnalysis(BasePipeline):
             "dft_p_phrase": p_phrase,
             "dft_p_sentence": p_sentence,
             "dft_p_comprehension": p_comprehension,
+            "morlet_p_word": morlet_p_word,
+            "morlet_p_phrase": morlet_p_phrase,
+            "morlet_p_sentence": morlet_p_sentence,
+            "morlet_p_comprehension": morlet_p_comprehension,
         }
 
         self.results = pd.DataFrame([result_dict])
@@ -644,12 +671,52 @@ class LanguageTrackingAnalysis(BasePipeline):
         itpc_spectrum, freqs = self.compute_itpc_dft(epochs_hemi)
         return self.extract_itpc_metrics_dft(itpc_spectrum, freqs)
 
+    def _compute_morlet_target_phases(self, epochs: mne.Epochs) -> np.ndarray:
+        """
+        Compute per-trial Morlet phase angles at the three target frequency bins.
+
+        Runs a second tfr_morlet call with average=False, output='complex',
+        restricted to only three frequencies (word, phrase, sentence) to avoid
+        storing the full 60-frequency complex array.
+
+        Parameters
+        ----------
+        epochs : mne.Epochs
+            Preprocessed epochs.
+
+        Returns
+        -------
+        np.ndarray, shape (n_trials, n_channels, 3)
+            Phase angles (radians) at [word, phrase, sentence] frequencies.
+            Axis-2 order: [0]=word, [1]=phrase, [2]=sentence.
+        """
+        from mne.time_frequency import tfr_morlet
+
+        target_freqs = np.array([self.TARGET_WORD_FREQ, self.TARGET_PHRASE_FREQ, self.TARGET_SENTENCE_FREQ])
+        n_cycles = np.array([max(0.5, f * 2.0) for f in target_freqs])
+
+        epoch_tfr = tfr_morlet(
+            epochs,
+            freqs=target_freqs,
+            n_cycles=n_cycles,
+            use_fft=True,
+            return_itc=False,
+            output="complex",
+            average=False,
+            n_jobs=-1,
+        )
+        # epoch_tfr.data: (n_trials, n_channels, 3, n_times)
+        complex_data = epoch_tfr.data
+        mean_complex = np.mean(complex_data, axis=-1)  # (n_trials, n_channels, 3)
+        return np.angle(mean_complex)
+
     def compute_trial_shuffled_null_itpc(
         self,
         epochs: mne.Epochs,
         n_permutations: int = 1000,
         metric: str = "word",
         seed: int = 42,
+        method: str = "dft",
     ) -> np.ndarray:
         """
         Generate null ITPC distribution via trial-level random phase scrambling.
@@ -676,6 +743,11 @@ class LanguageTrackingAnalysis(BasePipeline):
             Null ITPC values.
         """
         rng = np.random.default_rng(seed)
+
+        if method == "morlet":
+            return self._compute_morlet_null_itpc(n_permutations, metric, rng)
+        elif method != "dft":
+            raise ValueError(f"Unknown method '{method}'. Use 'dft' or 'morlet'.")
 
         # Extract the true phase angles exactly as done in compute_itpc_dft
         data = epochs.get_data()
@@ -726,6 +798,53 @@ class LanguageTrackingAnalysis(BasePipeline):
         elif metric == "comprehension":
             # Comprehension is the unweighted average of sentence and phrase ITPC
             return (get_surrogate_itpc(sent_idx) + get_surrogate_itpc(phrase_idx)) / 2.0
+        else:
+            raise ValueError(f"Unknown metric '{metric}'")
+
+    def _compute_morlet_null_itpc(
+        self,
+        n_permutations: int,
+        metric: str,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """
+        Generate null Morlet ITPC distribution via trial-level random phase scrambling.
+
+        Uses stored ``_morlet_phases`` (set by ``_compute_morlet_target_phases``).
+        Axis-2 order: [0]=word, [1]=phrase, [2]=sentence.
+
+        Parameters
+        ----------
+        n_permutations : int
+            Number of surrogates.
+        metric : str
+            "word", "phrase", "sentence", or "comprehension".
+        rng : np.random.Generator
+            Seeded random generator.
+
+        Returns
+        -------
+        np.ndarray, shape (n_permutations,)
+            Null ITPC values.
+        """
+        if self._morlet_phases is None:
+            raise ValueError("_morlet_phases not set. Call analyze() before running Morlet permutation tests.")
+
+        phases = self._morlet_phases  # (n_trials, n_channels, 3)
+        n_trials = phases.shape[0]
+
+        _FREQ_IDX = {"word": 0, "phrase": 1, "sentence": 2}
+
+        def surrogate_itpc(freq_idx: int) -> np.ndarray:
+            unit_vectors = np.exp(1j * phases[:, :, freq_idx])  # (n_trials, n_channels)
+            rand_phase = rng.uniform(0, 2 * np.pi, size=(n_permutations, n_trials, 1))
+            shifted = unit_vectors * np.exp(1j * rand_phase)  # (n_permutations, n_trials, n_channels)
+            return np.mean(np.abs(np.mean(shifted, axis=1)), axis=1)  # (n_permutations,)
+
+        if metric in _FREQ_IDX:
+            return surrogate_itpc(_FREQ_IDX[metric])
+        elif metric == "comprehension":
+            return (surrogate_itpc(_FREQ_IDX["sentence"]) + surrogate_itpc(_FREQ_IDX["phrase"])) / 2.0
         else:
             raise ValueError(f"Unknown metric '{metric}'")
 
