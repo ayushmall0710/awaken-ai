@@ -303,7 +303,7 @@ def plot_itpc_topomap(
     per_channel_itpc = itpc_spectrum[:, bin_idx]
 
     if vlim is None:
-        vmax = float(np.percentile(per_channel_itpc, 95)) * 1.2 or 0.1
+        vmax = max(float(np.percentile(per_channel_itpc, 95)) * 1.2, 0.1)
         vlim = (0.0, vmax)
 
     fig, ax = plt.subplots(figsize=(5, 5))

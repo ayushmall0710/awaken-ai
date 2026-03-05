@@ -122,6 +122,7 @@ class LanguageTrackingReport:
                     "p_word": float(row.get("morlet_p_word", 1)),
                     "p_phrase": float(row.get("morlet_p_phrase", 1)),
                     "p_sentence": float(row.get("morlet_p_sentence", 1)),
+                    "p_comprehension": float(row.get("morlet_p_comprehension", 1)),
                 }
                 paths["morlet_spectrum"] = plot_itpc_spectrum(
                     morlet_spectrum, morlet_freqs, pid, self.output_dir, morlet_metrics, method_label="Morlet"
@@ -174,7 +175,7 @@ class LanguageTrackingReport:
             "ratio_cognitive_acoustic",
         ):
             return f"{float(val):.4f}"
-        if key.startswith("dft_p_"):
+        if key.startswith(("dft_p_", "morlet_p_")):
             return "<0.001" if float(val) < 0.001 else f"{float(val):.3f}"
         if key.startswith("lateralization_index_"):
             v = float(val)
