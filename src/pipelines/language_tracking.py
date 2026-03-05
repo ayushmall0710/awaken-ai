@@ -93,7 +93,6 @@ class LanguageTrackingAnalysis(BasePipeline):
     def __init__(
         self,
         loader: Optional[UnifiedDataLoader] = None,
-        focus: Union[str, Iterable[str]] = "LH",
         filter_signal: bool = True,
         session_id: Optional[str] = None,
     ):
@@ -102,16 +101,19 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         Args:
             loader: Optional UnifiedDataLoader instance.
-            focus: Hemisphere focus ('LH', 'RH', or 'Clinical') or a custom iterable of channels.
             filter_signal: Whether to apply bandpass filtering.
             session_id: Optional specific session ID to load. If None, loads all sessions.
         """
         super().__init__(loader=loader)
-        self.focus = focus
         self.filter_signal = filter_signal
         self.session_id = session_id
         self.epochs: Optional[mne.Epochs] = None
         self._epochs_filtered: Optional[mne.Epochs] = None
+        self._dft_spectrum_full: Optional[np.ndarray] = None
+        self._dft_freqs: Optional[np.ndarray] = None
+        self._dft_ch_names: Optional[list] = None
+        self._dft_info = None
+        self._morlet_itc = None
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
@@ -134,47 +136,44 @@ class LanguageTrackingAnalysis(BasePipeline):
         self.epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
 
     def preprocess(self) -> None:
-        """Apply optimization steps: bandpass filtering then channel selection."""
+        """Apply bandpass filtering and store filtered epochs."""
         if self.epochs is None:
             raise ValueError("Epochs not loaded. Call load() first.")
-
         if self.filter_signal:
             self.epochs = self.preprocess_signal(self.epochs)
-
-        # Store pre-channel-selected epochs for lateralization analysis
         self._epochs_filtered = self.epochs.copy()
-        self.epochs = self.select_optimal_channels(self.epochs, focus=self.focus)
-
         try:
             montage = mne.channels.make_standard_montage("standard_1020")
-            self.epochs.set_montage(montage, on_missing="warn")
+            self._epochs_filtered.set_montage(montage, on_missing="warn")
         except Exception as e:
             logger.warning(f"Montage error for {self.patient_id}: {e}")
 
     def analyze(self, **kwargs) -> pd.DataFrame:
         """
-        Compute ITPC and return results matching exactly the requested feature table.
+        Compute ITPC and return results with global, LH, RH metrics and lateralization indices.
         """
         if self.epochs is None:
             logger.info(f"[{self.patient_id}] Epochs not loaded. Calling load() and preprocess()...")
             self.load()
             self.preprocess()
 
-        # NOTE: self._epochs_filtered contains all valid channels before LH/RH isolation
         if self._epochs_filtered is None:
             self._epochs_filtered = self.epochs.copy()
 
-        # Determine target hemisphere based on focus
-        focus_name = self.focus if isinstance(self.focus, str) else "Custom"
-
-        # 1. Compute Global ITPC (using all filtered channels for focus)
-        logger.info(f"[{self.patient_id}] Computing Global DFT ITPC...")
-        itpc_spectrum_global, dft_freqs = self.compute_itpc_dft(self.epochs)
+        # 1. Compute Global ITPC on Clinical 20 channels
+        logger.info(f"[{self.patient_id}] Computing Global DFT ITPC (Clinical channels)...")
+        clinical_epochs = self.select_optimal_channels(self._epochs_filtered, focus="Clinical")
+        itpc_spectrum_global, dft_freqs = self.compute_itpc_dft(clinical_epochs)
+        self._dft_spectrum_full = itpc_spectrum_global
+        self._dft_freqs = dft_freqs
+        self._dft_ch_names = clinical_epochs.ch_names
+        self._dft_info = clinical_epochs.info
         global_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_global, dft_freqs)
 
-        # 2. Compute Morlet ITPC
+        # 2. Compute Morlet ITPC on clinical epochs
         logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
-        itpc_data_morlet, _ = self.compute_itpc(self.epochs)
+        itpc_data_morlet, itc_obj = self.compute_itpc(clinical_epochs)
+        self._morlet_itc = itc_obj
         morlet_metrics = self.extract_itpc_metrics(itpc_data_morlet)
 
         # 3. Compute Left Hemisphere ITPC
@@ -189,12 +188,23 @@ class LanguageTrackingAnalysis(BasePipeline):
         itpc_spectrum_rh, _ = self.compute_itpc_dft(rh_epochs)
         rh_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_rh, dft_freqs)
 
-        # 5. Chance-frequency bootstrap test for statistical significance
-        n_permutations = kwargs.get("n_permutations", 1000)
-        logger.info(
-            f"[{self.patient_id}] \
-                Running mathematical trial-level phase-scrambling permutation test ({n_permutations} surrogates)..."
+        # 5. Compute lateralization indices
+        li_word = self.compute_lateralization_index(lh_metrics["itpc_word"], rh_metrics["itpc_word"])
+        li_phrase = self.compute_lateralization_index(lh_metrics["itpc_phrase"], rh_metrics["itpc_phrase"])
+        li_sentence = self.compute_lateralization_index(lh_metrics["itpc_sentence"], rh_metrics["itpc_sentence"])
+        li_comp = self.compute_lateralization_index(
+            (lh_metrics["itpc_sentence"] + lh_metrics["itpc_phrase"]) / 2,
+            (rh_metrics["itpc_sentence"] + rh_metrics["itpc_phrase"]) / 2,
         )
+
+        # 6. ratio_cognitive_acoustic
+        itpc_word = global_metrics["itpc_word"]
+        itpc_comprehension_combined = global_metrics["itpc_comprehension_combined"]
+        ratio_cognitive_acoustic = itpc_comprehension_combined / itpc_word if itpc_word != 0 else 0.0
+
+        # 7. Permutation tests on _epochs_filtered
+        n_permutations = kwargs.get("n_permutations", 1000)
+        logger.info(f"[{self.patient_id}] Running permutation test ({n_permutations} surrogates)...")
         null_sentence = self.compute_trial_shuffled_null_itpc(
             self._epochs_filtered, n_permutations, metric="sentence", seed=42
         )
@@ -209,32 +219,33 @@ class LanguageTrackingAnalysis(BasePipeline):
         p_sentence = self.compute_permutation_pvalue(global_metrics["itpc_sentence"], null_sentence)
         p_phrase = self.compute_permutation_pvalue(global_metrics["itpc_phrase"], null_phrase)
         p_word = self.compute_permutation_pvalue(global_metrics["itpc_word"], null_word)
-        p_comprehension = self.compute_permutation_pvalue(global_metrics["itpc_comprehension_combined"], null_comp)
+        p_comprehension = self.compute_permutation_pvalue(itpc_comprehension_combined, null_comp)
 
-        # Combine exact requested results: patient_id, n_trials, itpc_sentence,
-        # itpc_phrase, itpc_word, itpc_comprehension_combined, focused_hem_itpc
         result_dict = {
             "patient_id": self.patient_id,
-            "n_trials": len(self.epochs),
-            "focus": focus_name,
-            "itpc_sentence": global_metrics["itpc_sentence"],
-            "itpc_phrase": global_metrics["itpc_phrase"],
+            "n_trials": len(self._epochs_filtered),
             "itpc_word": global_metrics["itpc_word"],
-            "itpc_comprehension_combined": global_metrics["itpc_comprehension_combined"],
-            "left_hem_itpc_sentence": lh_metrics["itpc_sentence"],
-            "left_hem_itpc_phrase": lh_metrics["itpc_phrase"],
-            "left_hem_itpc_word": lh_metrics["itpc_word"],
-            "right_hem_itpc_sentence": rh_metrics["itpc_sentence"],
-            "right_hem_itpc_phrase": rh_metrics["itpc_phrase"],
-            "right_hem_itpc_word": rh_metrics["itpc_word"],
-            "morlet_itpc_sentence": morlet_metrics.get("itpc_sentence"),
-            "morlet_itpc_phrase": morlet_metrics.get("itpc_phrase"),
+            "itpc_phrase": global_metrics["itpc_phrase"],
+            "itpc_sentence": global_metrics["itpc_sentence"],
+            "itpc_comprehension_combined": itpc_comprehension_combined,
+            "ratio_cognitive_acoustic": ratio_cognitive_acoustic,
+            "lh_itpc_word": lh_metrics["itpc_word"],
+            "lh_itpc_phrase": lh_metrics["itpc_phrase"],
+            "lh_itpc_sentence": lh_metrics["itpc_sentence"],
+            "rh_itpc_word": rh_metrics["itpc_word"],
+            "rh_itpc_phrase": rh_metrics["itpc_phrase"],
+            "rh_itpc_sentence": rh_metrics["itpc_sentence"],
+            "lateralization_index_word": li_word,
+            "lateralization_index_phrase": li_phrase,
+            "lateralization_index_sentence": li_sentence,
+            "lateralization_index_comprehension": li_comp,
             "morlet_itpc_word": morlet_metrics.get("itpc_word"),
-            "dft_p_sentence": p_sentence,
-            "dft_p_phrase": p_phrase,
+            "morlet_itpc_phrase": morlet_metrics.get("itpc_phrase"),
+            "morlet_itpc_sentence": morlet_metrics.get("itpc_sentence"),
             "dft_p_word": p_word,
+            "dft_p_phrase": p_phrase,
+            "dft_p_sentence": p_sentence,
             "dft_p_comprehension": p_comprehension,
-            "dft_n_permutations": n_permutations,
         }
 
         self.results = pd.DataFrame([result_dict])
@@ -243,7 +254,8 @@ class LanguageTrackingAnalysis(BasePipeline):
             f"Pipeline complete for {self.patient_id}. "
             f"Global Sentence ITPC: {result_dict['itpc_sentence']:.3f}, "
             f"LH Sentence ITPC: {lh_metrics['itpc_sentence']:.3f}, "
-            f"RH Sentence ITPC: {rh_metrics['itpc_sentence']:.3f}"
+            f"RH Sentence ITPC: {rh_metrics['itpc_sentence']:.3f}, "
+            f"LI comprehension: {li_comp:.3f}"
         )
         return self.results
 
@@ -297,14 +309,11 @@ class LanguageTrackingAnalysis(BasePipeline):
         morlet_sent = row.get("morlet_itpc_sentence")
         morlet_word = row.get("morlet_itpc_word")
         morlet_ratio = morlet_sent / morlet_word if morlet_word else None
-        dft_sent = row.get("itpc_sentence")
-        dft_word = row.get("itpc_word")
-        dft_ratio = dft_sent / dft_word if dft_word else None
         return {
             "patient_id": row.get("patient_id", ""),
-            "focus": row.get("focus", ""),
+            "lateralization_index_comprehension": row.get("lateralization_index_comprehension"),
             "morlet_ratio": morlet_ratio,
-            "dft_ratio": dft_ratio,
+            "dft_ratio": row.get("ratio_cognitive_acoustic"),
         }
 
     def select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:

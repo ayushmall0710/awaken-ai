@@ -365,7 +365,7 @@ def test_preprocess_stores_filtered_epochs(mock_loader):
 
 def test_compute_hemisphere_itpc_returns_valid_metrics(mock_loader):
     """compute_hemisphere_itpc returns valid dict for both hemispheres."""
-    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
     processor.patient_id = "TEST"
     processor.load()
     processor.preprocess()
@@ -414,7 +414,7 @@ def test_bw_normalized_ratio_present(itpc_epochs):
 def test_run_per_session_returns_rows(mock_loader):
     """run_per_session returns DataFrame with one row per session."""
     mock_loader.get_patient.return_value.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
-    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
     df = processor.run_per_session("TEST")
     assert len(df) == 2
     assert "session_date" in df.columns
@@ -428,6 +428,87 @@ def test_run_per_session_skips_missing(mock_loader):
         mock_loader.load_clean_epochs.return_value,
         FileNotFoundError("missing"),
     ]
-    processor = LanguageTrackingAnalysis(loader=mock_loader, focus="LH")
+    processor = LanguageTrackingAnalysis(loader=mock_loader)
     df = processor.run_per_session("TEST")
     assert len(df) == 1
+
+
+def test_initialization_no_focus(mock_loader):
+    """Pipeline initializes without focus parameter."""
+    pipeline = LanguageTrackingAnalysis(loader=mock_loader)
+    assert not hasattr(pipeline, "focus")
+
+
+def test_analyze_returns_required_columns(mock_loader, itpc_epochs):
+    """analyze() returns DataFrame with all required columns, no 'focus' column."""
+    mock_loader.load_clean_epochs.return_value = itpc_epochs
+    pipeline = LanguageTrackingAnalysis(loader=mock_loader)
+    pipeline.patient_id = "CON008"
+    pipeline.load()
+    pipeline.preprocess()
+    df = pipeline.analyze(n_permutations=10)
+
+    required = [
+        "patient_id",
+        "n_trials",
+        "itpc_word",
+        "itpc_phrase",
+        "itpc_sentence",
+        "itpc_comprehension_combined",
+        "ratio_cognitive_acoustic",
+        "lh_itpc_word",
+        "lh_itpc_phrase",
+        "lh_itpc_sentence",
+        "rh_itpc_word",
+        "rh_itpc_phrase",
+        "rh_itpc_sentence",
+        "lateralization_index_word",
+        "lateralization_index_phrase",
+        "lateralization_index_sentence",
+        "lateralization_index_comprehension",
+        "morlet_itpc_word",
+        "morlet_itpc_phrase",
+        "morlet_itpc_sentence",
+        "dft_p_word",
+        "dft_p_phrase",
+        "dft_p_sentence",
+        "dft_p_comprehension",
+    ]
+    for col in required:
+        assert col in df.columns, f"Missing column: {col}"
+    assert "focus" not in df.columns
+    assert "dft_n_permutations" not in df.columns
+
+
+def test_analyze_stores_intermediate_arrays(mock_loader, itpc_epochs):
+    """analyze() stores _dft_spectrum_full, _dft_freqs, _morlet_itc as attributes."""
+    mock_loader.load_clean_epochs.return_value = itpc_epochs
+    pipeline = LanguageTrackingAnalysis(loader=mock_loader)
+    pipeline.patient_id = "CON008"
+    pipeline.load()
+    pipeline.preprocess()
+    pipeline.analyze(n_permutations=10)
+
+    assert pipeline._dft_spectrum_full is not None
+    assert pipeline._dft_freqs is not None
+    assert pipeline._morlet_itc is not None
+    assert pipeline._dft_spectrum_full.ndim == 2
+
+
+def test_lateralization_index_range(mock_loader, itpc_epochs):
+    """Lateralization indices are in [-1, 1]."""
+    mock_loader.load_clean_epochs.return_value = itpc_epochs
+    pipeline = LanguageTrackingAnalysis(loader=mock_loader)
+    pipeline.patient_id = "CON008"
+    pipeline.load()
+    pipeline.preprocess()
+    df = pipeline.analyze(n_permutations=10)
+
+    for col in [
+        "lateralization_index_word",
+        "lateralization_index_phrase",
+        "lateralization_index_sentence",
+        "lateralization_index_comprehension",
+    ]:
+        val = df.iloc[0][col]
+        assert -1.0 <= val <= 1.0, f"{col} = {val} out of range"
