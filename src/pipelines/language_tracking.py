@@ -77,7 +77,7 @@ class LanguageTrackingAnalysis(BasePipeline):
     # Epoch cropping: discard 2.28s from start to remove filter/ICA edge artifacts,
     # yielding a clean 13.08s analysis window.
     CROP_TMIN = 2.28
-    CROP_TMAX = 15.36
+    CROP_TMAX = 16.36
 
     ITPC_FREQS = np.logspace(np.log10(0.5), np.log10(5.0), num=60)
     ITPC_CYCLES = np.array([max(0.5, f * 2.0) for f in ITPC_FREQS])

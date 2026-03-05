@@ -43,12 +43,21 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 WINDOW_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
-    "language": 16.0,
+    "language": 17.0,
     "oddball": 35.0,
     "beep": 35.0,
     "control": 35.0,
     "left_command": 200.0,
     "right_command": 200.0,
+}
+
+WINDOW_START_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
+    "language": -1.0,
+    "oddball": 0.0,
+    "beep": 0.0,
+    "control": 0.0,
+    "left_command": 0.0,
+    "right_command": 0.0,
 }
 
 DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (0.5, 100.0)
@@ -824,16 +833,11 @@ class ArtifactRejector:
         # which will be safely discarded during precise cropping in the pipeline.
         # For other trials, we generally start at 0.0.
         tt_lower = str(trial_type).lower().strip()
-        if tt_lower == "language":
-            tmin = -1.0
-            tmax = 16.0
-            window_sec = 17.0
-        else:
-            tmin = 0.0
-            window_sec = _trial_type_window_sec(trial_type, fallback_duration=float(trials_df["duration"].median()))
-            if window_sec is None:
-                return None
-            tmax = float(window_sec)
+        tmin = WINDOW_START_SEC_BY_TRIAL_TYPE.get(tt_lower, 0.0)
+        window_sec = _trial_type_window_sec(trial_type, fallback_duration=float(trials_df["duration"].median()))
+        if window_sec is None:
+            return None
+        tmax = float(window_sec)
 
         sfreq = float(raw.info["sfreq"])
         max_time = float(raw.times[-1])
