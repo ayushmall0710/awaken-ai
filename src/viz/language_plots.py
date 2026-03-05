@@ -2,10 +2,16 @@
 Visualization module for language tracking results.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+if TYPE_CHECKING:
+    import mne
 
 
 def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
@@ -146,3 +152,157 @@ def plot_itpc_channel_bar(
     plt.tight_layout()
     fig.savefig(out_dir / f"{patient_id}_language_ITPC_channels.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
+
+
+def plot_dft_spectrum(
+    itpc_spectrum: np.ndarray,
+    freqs: np.ndarray,
+    patient_id: str,
+    output_dir: str,
+    metrics: dict,
+) -> Path:
+    """
+    Line plot of channel-averaged DFT ITPC vs frequency (0.5-4.0 Hz).
+
+    Vertical dashed lines mark word (3.125 Hz), phrase (1.56 Hz), and sentence
+    (0.78 Hz) rates. Each line is annotated with the ITPC value and p-value.
+
+    Parameters
+    ----------
+    itpc_spectrum : np.ndarray
+        Shape (n_channels, n_freqs). DFT ITPC per channel and frequency.
+    freqs : np.ndarray
+        Frequency axis in Hz, matching axis 1 of itpc_spectrum.
+    patient_id : str
+        Patient identifier for title and filename.
+    output_dir : str or Path
+        Directory to save the PNG.
+    metrics : dict
+        Must contain: itpc_word, itpc_phrase, itpc_sentence,
+        dft_p_word, dft_p_phrase, dft_p_sentence.
+
+    Returns
+    -------
+    Path
+        Absolute path to the saved PNG.
+    """
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    mask = (freqs >= 0.5) & (freqs <= 4.0)
+    plot_freqs = freqs[mask]
+    mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
+
+    target_specs = [
+        (3.125, "Word", metrics.get("itpc_word", 0), metrics.get("dft_p_word", 1), "#b2182b"),
+        (1.56, "Phrase", metrics.get("itpc_phrase", 0), metrics.get("dft_p_phrase", 1), "#2166ac"),
+        (0.78, "Sentence", metrics.get("itpc_sentence", 0), metrics.get("dft_p_sentence", 1), "#4dac26"),
+    ]
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label="Mean ITPC")
+
+    y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
+    for freq, label, itpc_val, p_val, color in target_specs:
+        if freq < float(plot_freqs[0]) or freq > float(plot_freqs[-1]):
+            continue
+        p_str = "<0.001" if p_val < 0.001 else f"p={p_val:.3f}"
+        ax.axvline(freq, color=color, linestyle="--", linewidth=1.5)
+        ax.text(
+            freq + 0.04,
+            y_top * 0.95,
+            f"{label}\n{itpc_val:.4f}\n{p_str}",
+            color=color,
+            fontsize=8,
+            verticalalignment="top",
+        )
+
+    ax.set_xlabel("Frequency (Hz)", fontsize=11)
+    ax.set_ylabel("ITPC", fontsize=11)
+    ax.set_title(f"{patient_id}: DFT ITPC Frequency Spectrum", fontsize=13, fontweight="bold")
+    ax.set_xlim(0.5, 4.0)
+    ax.legend(fontsize=9)
+    plt.tight_layout()
+
+    out_path = out_dir / f"{patient_id}_lang_dft_spectrum.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
+
+
+def plot_dft_topomap(
+    itpc_spectrum: np.ndarray,
+    freqs: np.ndarray,
+    info: "mne.Info",
+    target_freq: float,
+    label: str,
+    patient_id: str,
+    output_dir: str,
+    vlim: tuple = None,
+) -> Path:
+    """
+    Topomap of DFT ITPC values across electrodes at a single target frequency.
+
+    Extracts the closest DFT bin to target_freq and renders a scalp topography
+    using mne.viz.plot_topomap. Montage must already be set on the info object.
+
+    Parameters
+    ----------
+    itpc_spectrum : np.ndarray
+        Shape (n_channels, n_freqs).
+    freqs : np.ndarray
+        Frequency axis matching itpc_spectrum axis 1.
+    info : mne.Info
+        Channel info with positions (montage must be set).
+    target_freq : float
+        Target frequency in Hz (0.78, 1.56, or 3.125).
+    label : str
+        Human-readable label e.g. "Sentence", "Phrase", "Word".
+    patient_id : str
+        Patient identifier.
+    output_dir : str or Path
+        Directory to save the PNG.
+    vlim : tuple, optional
+        (vmin, vmax). If None, auto-scales from data 95th percentile.
+
+    Returns
+    -------
+    Path
+        Absolute path to the saved PNG.
+    """
+    import mne as _mne
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    bin_idx = int(np.argmin(np.abs(freqs - target_freq)))
+    per_channel_itpc = itpc_spectrum[:, bin_idx]
+
+    if vlim is None:
+        vmax = float(np.percentile(per_channel_itpc, 95)) * 1.2 or 0.1
+        vlim = (0.0, vmax)
+
+    fig, ax = plt.subplots(figsize=(5, 5))
+    im, _ = _mne.viz.plot_topomap(
+        per_channel_itpc,
+        info,
+        axes=ax,
+        show=False,
+        cmap="RdYlBu_r",
+        vlim=vlim,
+        contours=4,
+    )
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="ITPC")
+    actual_freq = float(freqs[bin_idx])
+    ax.set_title(
+        f"{label} ({actual_freq:.3f} Hz)\n{patient_id}",
+        fontsize=11,
+        fontweight="bold",
+    )
+    plt.tight_layout()
+
+    safe_label = label.lower()
+    out_path = out_dir / f"{patient_id}_lang_topomap_{safe_label}.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return out_path
