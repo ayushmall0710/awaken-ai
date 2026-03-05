@@ -37,8 +37,8 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     itc.plot_topomap(
         tmin=0,
         tmax=None,
-        fmin=target_freq - 0.01,
-        fmax=target_freq + 0.01,
+        fmin=target_freq * 0.9,
+        fmax=target_freq * 1.1,
         baseline=None,
         mode=None,
         axes=ax_topo,
