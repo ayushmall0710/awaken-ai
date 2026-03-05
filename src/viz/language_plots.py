@@ -33,7 +33,7 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
         itc: MNE AverageTFR object.
         patient_id: Patient ID string.
         output_dir: Path to save outputs.
-        metrics: Metrics dictionary from extract_itpc_metrics.
+        metrics: Metrics dictionary from _extract_itpc_metrics.
     """
 
     output_dir = Path(output_dir)

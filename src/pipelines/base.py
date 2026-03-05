@@ -58,7 +58,7 @@ class BasePipeline(ABC):
 
         Delegation pattern for ``analyze()``:
         Each subclass keeps its domain-specific analysis method
-        (e.g. ``calculate_erd``, ``compute_itpc``) and implements
+        (e.g. ``calculate_erd``, ``_compute_itpc``) and implements
         ``analyze()`` as a one-line delegation::
 
             def analyze(self, **kwargs):

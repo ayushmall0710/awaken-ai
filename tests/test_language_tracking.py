@@ -120,7 +120,7 @@ def test_select_optimal_channels_lh(mock_language_epochs):
     processor = LanguageTrackingAnalysis(MagicMock())
 
     # Run selection
-    processed_epochs = processor.select_optimal_channels(mock_language_epochs, focus="LH")
+    processed_epochs = processor._select_optimal_channels(mock_language_epochs, focus="LH")
 
     # Verify LH channels are present (F7, T7, Fp1)
     current_chs = processed_epochs.ch_names
@@ -142,15 +142,15 @@ def test_select_optimal_channels_missing():
     bad_epochs = mne.EpochsArray(data, info)
 
     # Should log warning but return original epochs if NO matches found
-    processed_epochs = processor.select_optimal_channels(bad_epochs, focus="LH")
+    processed_epochs = processor._select_optimal_channels(bad_epochs, focus="LH")
     assert processed_epochs.ch_names == ["CH1", "CH2"]
 
 
 def test_preprocess_signal(mock_language_epochs):
-    """Test filtering and downsampling in preprocess_signal."""
+    """Test filtering and downsampling in _preprocess_signal."""
     processor = LanguageTrackingAnalysis(MagicMock())
 
-    filtered = processor.preprocess_signal(mock_language_epochs)
+    filtered = processor._preprocess_signal(mock_language_epochs)
 
     assert filtered.info["highpass"] == pytest.approx(processor.HIGHPASS_FREQ, abs=0.01)
     assert filtered.info["lowpass"] == pytest.approx(processor.LOWPASS_FREQ, abs=0.1)
@@ -159,10 +159,10 @@ def test_preprocess_signal(mock_language_epochs):
 
 
 def test_preprocess_signal_no_downsample(itpc_epochs):
-    """preprocess_signal should skip resampling when already at target or below."""
+    """_preprocess_signal should skip resampling when already at target or below."""
     processor = LanguageTrackingAnalysis(MagicMock())
     # itpc_epochs is already at 256 Hz (TARGET_SFREQ), so no resampling should occur.
-    filtered = processor.preprocess_signal(itpc_epochs)
+    filtered = processor._preprocess_signal(itpc_epochs)
     assert filtered.info["sfreq"] == 256.0
 
 
@@ -170,9 +170,9 @@ def test_preprocess_signal_no_downsample(itpc_epochs):
 
 
 def test_compute_itpc_returns_data_and_itc(itpc_epochs):
-    """compute_itpc returns ndarray and AverageTFR with expected shape."""
+    """_compute_itpc returns ndarray and AverageTFR with expected shape."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    itpc_data, itc_obj = processor.compute_itpc(itpc_epochs)
+    itpc_data, itc_obj = processor._compute_itpc(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
     n_freqs = len(processor.ITPC_FREQS)
@@ -187,12 +187,12 @@ def test_compute_itpc_returns_data_and_itc(itpc_epochs):
 
 
 def test_compute_itpc_custom_freqs(itpc_epochs):
-    """Custom freq/cycle arrays passed to compute_itpc override class defaults."""
+    """Custom freq/cycle arrays passed to _compute_itpc override class defaults."""
     processor = LanguageTrackingAnalysis(MagicMock())
     custom_freqs = np.array([0.1, 0.5, 1.0])
     custom_cycles = np.array([1.0, 1.0, 1.0])
 
-    itpc_data, _ = processor.compute_itpc(itpc_epochs, freqs=custom_freqs, n_cycles=custom_cycles)
+    itpc_data, _ = processor._compute_itpc(itpc_epochs, freqs=custom_freqs, n_cycles=custom_cycles)
 
     assert itpc_data.shape[1] == len(custom_freqs)
 
@@ -201,9 +201,9 @@ def test_compute_itpc_custom_freqs(itpc_epochs):
 
 
 def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
-    """compute_itpc_dft returns spectrum (n_channels, n_freqs) with zero-padded freq axis."""
+    """_compute_itpc_dft returns spectrum (n_channels, n_freqs) with zero-padded freq axis."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
+    itpc_spectrum, freqs = processor._compute_itpc_dft(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
     assert itpc_spectrum.shape[0] == n_channels
@@ -223,10 +223,10 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
 
 
 def test_extract_itpc_metrics_structure(itpc_epochs):
-    """extract_itpc_metrics returns all expected keys without single-bin index."""
+    """_extract_itpc_metrics returns all expected keys without single-bin index."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    itpc_data, _ = processor.compute_itpc(itpc_epochs)
-    metrics = processor.extract_itpc_metrics(itpc_data)
+    itpc_data, _ = processor._compute_itpc(itpc_epochs)
+    metrics = processor._extract_itpc_metrics(itpc_data)
 
     expected_keys = {
         "itpc_sentence",
@@ -248,13 +248,13 @@ def test_extract_itpc_metrics_zero_word():
     freqs = np.logspace(np.log10(0.05), np.log10(5.0), num=60)
     n_channels = 7
     itpc_data = np.zeros((n_channels, len(freqs), 10))
-    metrics = processor.extract_itpc_metrics(itpc_data, freqs=freqs)
+    metrics = processor._extract_itpc_metrics(itpc_data, freqs=freqs)
     assert metrics["ratio_sent_word"] == 0.0
     assert metrics["ratio_sent_phrase"] == 0.0
 
 
 def test_band_averaging_uses_multiple_bins(itpc_epochs):
-    """extract_itpc_metrics averages across all bins in SENTENCE_BAND, not just one."""
+    """_extract_itpc_metrics averages across all bins in SENTENCE_BAND, not just one."""
     processor = LanguageTrackingAnalysis(MagicMock())
     freqs = processor.ITPC_FREQS
     sent_mask = (freqs >= processor.SENTENCE_BAND[0]) & (freqs <= processor.SENTENCE_BAND[1])
@@ -267,8 +267,8 @@ def test_band_averaging_uses_multiple_bins(itpc_epochs):
     assert word_mask.sum() >= 1, "Word band must span at least 1 Morlet bin"
 
     # Result must be in valid ITPC range.
-    itpc_data, _ = processor.compute_itpc(itpc_epochs)
-    metrics = processor.extract_itpc_metrics(itpc_data)
+    itpc_data, _ = processor._compute_itpc(itpc_epochs)
+    metrics = processor._extract_itpc_metrics(itpc_data)
     assert 0.0 <= metrics["itpc_sentence"] <= 1.0
     assert 0.0 <= metrics["itpc_phrase"] <= 1.0
     assert 0.0 <= metrics["itpc_word"] <= 1.0
@@ -278,13 +278,48 @@ def test_band_averaging_uses_multiple_bins(itpc_epochs):
     assert processor.WORD_BAND[0] <= metrics["freq_word_hz"] <= processor.WORD_BAND[1]
 
 
+def test_extract_morlet_observed_itpc_matches_null_math(itpc_epochs):
+    """
+    _extract_morlet_observed_itpc uses identical math to _compute_surrogate_itpc.
+
+    Specifically: observed = |mean_trials(exp(i * angle(mean_t(complex))))|,
+    which is the same quantity the null scrambles. A zero-offset surrogate
+    must reproduce the observed value exactly (within floating-point precision).
+    """
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor._morlet_phases = processor._compute_morlet_target_phases(itpc_epochs)
+    observed = processor._extract_morlet_observed_itpc()
+
+    # All three metrics are valid ITPC values in [0, 1]
+    for key in ("itpc_word", "itpc_phrase", "itpc_sentence"):
+        assert key in observed, f"Missing key: {key}"
+        assert 0.0 <= observed[key] <= 1.0, f"{key} = {observed[key]} out of range"
+
+    # Verify that manually applying zero random phase offset reproduces the same value.
+    phases = processor._morlet_phases  # (n_trials, n_channels, 3)
+    for label, freq_idx in processor._MORLET_FREQ_IDX.items():
+        unit_vectors = np.exp(1j * phases[:, :, freq_idx])
+        manual_itpc = float(np.mean(np.abs(np.mean(unit_vectors, axis=0))))
+        assert abs(observed[f"itpc_{label}"] - manual_itpc) < 1e-10, (
+            f"itpc_{label}: _extract_morlet_observed_itpc={observed[f'itpc_{label}']:.6f} vs manual={manual_itpc:.6f}"
+        )
+
+
+def test_extract_morlet_observed_itpc_raises_without_phases():
+    """_extract_morlet_observed_itpc raises ValueError when _morlet_phases is None."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    assert processor._morlet_phases is None
+    with pytest.raises(ValueError, match="_morlet_phases not set"):
+        processor._extract_morlet_observed_itpc()
+
+
 # --- Channel selection ---
 
 
 def test_select_optimal_channels_clinical(mock_language_epochs):
     """Clinical channel focus returns a valid subset."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    processed = processor.select_optimal_channels(mock_language_epochs, focus="Clinical")
+    processed = processor._select_optimal_channels(mock_language_epochs, focus="Clinical")
     assert len(processed.ch_names) >= 1
     # Clinical selection must not add channels that were not in the original
     assert set(processed.ch_names).issubset(set(mock_language_epochs.ch_names))
@@ -309,7 +344,7 @@ def test_load_no_data():
 def test_permutation_null_shape(itpc_epochs):
     """Null distribution has correct shape and values in [0, 1]."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    null = processor.compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=50, metric="sentence")
+    null = processor._compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=50, metric="sentence")
     assert null.shape == (50,)
     assert np.all(null >= 0) and np.all(null <= 1)
 
@@ -319,7 +354,7 @@ def test_permutation_null_near_chance(itpc_epochs):
     processor = LanguageTrackingAnalysis(MagicMock())
     n_trials = len(itpc_epochs)
     chance = 1.0 / np.sqrt(n_trials)
-    null = processor.compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=200, metric="sentence", seed=0)
+    null = processor._compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=200, metric="sentence", seed=0)
     # The actual null might be slightly off pure chance depending on true phase clustering,
     # but with random permutation it suppresses false positives effectively.
     # Theoretical chance for purely random phase is ~1/sqrt(N)
@@ -330,15 +365,15 @@ def test_permutation_pvalue_computation():
     """p-value equals proportion of null >= observed."""
     observed = 0.14
     null = np.array([0.10, 0.12, 0.13, 0.15, 0.20])
-    p = LanguageTrackingAnalysis.compute_permutation_pvalue(observed, null)
+    p = LanguageTrackingAnalysis._compute_permutation_pvalue(observed, null)
     assert p == pytest.approx(2 / 5)
 
 
 def test_permutation_reproducible(itpc_epochs):
     """Same seed produces identical null distributions."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    null_a = processor.compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=30, seed=99)
-    null_b = processor.compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=30, seed=99)
+    null_a = processor._compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=30, seed=99)
+    null_b = processor._compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=30, seed=99)
     np.testing.assert_array_equal(null_a, null_b)
 
 
@@ -347,9 +382,9 @@ def test_permutation_reproducible(itpc_epochs):
 
 def test_lateralization_index_values():
     """LI = (LH - RH) / (LH + RH) for typical values."""
-    assert LanguageTrackingAnalysis.compute_lateralization_index(0.15, 0.10) == pytest.approx(0.2)
-    assert LanguageTrackingAnalysis.compute_lateralization_index(0.10, 0.10) == pytest.approx(0.0)
-    assert LanguageTrackingAnalysis.compute_lateralization_index(0.0, 0.0) == 0.0
+    assert LanguageTrackingAnalysis._compute_lateralization_index(0.15, 0.10) == pytest.approx(0.2)
+    assert LanguageTrackingAnalysis._compute_lateralization_index(0.10, 0.10) == pytest.approx(0.0)
+    assert LanguageTrackingAnalysis._compute_lateralization_index(0.0, 0.0) == 0.0
 
 
 def test_preprocess_stores_filtered_epochs(mock_loader):
@@ -363,13 +398,13 @@ def test_preprocess_stores_filtered_epochs(mock_loader):
 
 
 def test_compute_hemisphere_itpc_returns_valid_metrics(mock_loader):
-    """compute_hemisphere_itpc returns valid dict for both hemispheres."""
+    """_compute_hemisphere_itpc returns valid dict for both hemispheres."""
     processor = LanguageTrackingAnalysis(loader=mock_loader)
     processor.patient_id = "TEST"
     processor.load()
     processor.preprocess()
-    lh = processor.compute_hemisphere_itpc("LH")
-    rh = processor.compute_hemisphere_itpc("RH")
+    lh = processor._compute_hemisphere_itpc("LH")
+    rh = processor._compute_hemisphere_itpc("RH")
     for d in (lh, rh):
         assert "itpc_sentence" in d
         assert 0.0 <= d["itpc_sentence"] <= 1.0
@@ -390,7 +425,7 @@ def test_dft_uses_peak_within_band():
     # Inject peak at word target
     peak_idx = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
     itpc_spectrum[:, peak_idx] = 0.40
-    metrics = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    metrics = processor._extract_itpc_metrics_dft(itpc_spectrum, freqs)
     # Peak extraction should capture the 0.40 peak, not average it away
     assert metrics["itpc_word"] > 0.30
 
@@ -398,12 +433,12 @@ def test_dft_uses_peak_within_band():
 def test_bw_normalized_ratio_present(itpc_epochs):
     """Both metric extractors include ratio_bw_normalized key."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    itpc_data, _ = processor.compute_itpc(itpc_epochs)
-    m_morlet = processor.extract_itpc_metrics(itpc_data)
+    itpc_data, _ = processor._compute_itpc(itpc_epochs)
+    m_morlet = processor._extract_itpc_metrics(itpc_data)
     assert "ratio_bw_normalized" in m_morlet
 
-    itpc_spectrum, freqs = processor.compute_itpc_dft(itpc_epochs)
-    m_dft = processor.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+    itpc_spectrum, freqs = processor._compute_itpc_dft(itpc_epochs)
+    m_dft = processor._extract_itpc_metrics_dft(itpc_spectrum, freqs)
     assert "ratio_bw_normalized" in m_dft
 
 
@@ -411,24 +446,24 @@ def test_bw_normalized_ratio_present(itpc_epochs):
 
 
 def test_run_per_session_returns_rows(mock_loader):
-    """run_per_session returns DataFrame with one row per session."""
+    """_run_per_session returns DataFrame with one row per session."""
     mock_loader.get_patient.return_value.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
     processor = LanguageTrackingAnalysis(loader=mock_loader)
-    df = processor.run_per_session("TEST")
+    df = processor._run_per_session("TEST")
     assert len(df) == 2
     assert "session_date" in df.columns
     assert "itpc_sentence" in df.columns
 
 
 def test_run_per_session_skips_missing(mock_loader):
-    """run_per_session skips sessions where epochs are missing."""
+    """_run_per_session skips sessions where epochs are missing."""
     mock_loader.get_patient.return_value.list_sessions.return_value = ["2024-01-01", "2024-01-02"]
     mock_loader.load_clean_epochs.side_effect = [
         mock_loader.load_clean_epochs.return_value,
         FileNotFoundError("missing"),
     ]
     processor = LanguageTrackingAnalysis(loader=mock_loader)
-    df = processor.run_per_session("TEST")
+    df = processor._run_per_session("TEST")
     assert len(df) == 1
 
 

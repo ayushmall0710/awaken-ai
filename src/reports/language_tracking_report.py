@@ -115,19 +115,6 @@ class LanguageTrackingReport:
                 morlet_spectrum = np.mean(morlet_data, axis=-1)  # (n_channels, n_freqs)
                 morlet_freqs = self.lt_obj._morlet_itc.freqs
 
-                morlet_metrics = {
-                    "itpc_word": float(row.get("morlet_itpc_word", 0)),
-                    "itpc_phrase": float(row.get("morlet_itpc_phrase", 0)),
-                    "itpc_sentence": float(row.get("morlet_itpc_sentence", 0)),
-                    "p_word": float(row.get("morlet_p_word", 1)),
-                    "p_phrase": float(row.get("morlet_p_phrase", 1)),
-                    "p_sentence": float(row.get("morlet_p_sentence", 1)),
-                    "p_comprehension": float(row.get("morlet_p_comprehension", 1)),
-                }
-                paths["morlet_spectrum"] = plot_itpc_spectrum(
-                    morlet_spectrum, morlet_freqs, pid, self.output_dir, morlet_metrics, method_label="Morlet"
-                )
-
                 morlet_word_idx = int(np.argmin(np.abs(morlet_freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
                 morlet_vmax = max(float(np.percentile(morlet_spectrum[:, morlet_word_idx], 95)) * 1.2, 0.1)
                 morlet_vlim = (0.0, morlet_vmax)
@@ -303,17 +290,6 @@ class LanguageTrackingReport:
                 f"<div class='plot-card'>{img}"
                 "<figcaption>ITPC time-frequency map averaged across channels. "
                 "Shows temporal stability of phase-locking to the speech stimulus."
-                "</figcaption></div>"
-            )
-
-        if "morlet_spectrum" in plot_paths:
-            img = self._embed_image(plot_paths["morlet_spectrum"], "Morlet ITPC Frequency Spectrum")
-            sections.append(
-                "<h3>Cortical Tracking Frequency Spectrum (Morlet)</h3>"
-                f"<div class='plot-card'>{img}"
-                "<figcaption>Time-averaged Morlet ITPC across 0.5&ndash;4 Hz. "
-                "Dashed lines mark word (3.125 Hz), phrase (1.56 Hz), sentence (0.78 Hz). "
-                "Broader peaks than DFT reflect the Morlet wavelet's time-frequency trade-off."
                 "</figcaption></div>"
             )
 

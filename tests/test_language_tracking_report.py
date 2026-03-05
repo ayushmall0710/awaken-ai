@@ -129,5 +129,4 @@ def test_report_html_contains_morlet_section(mock_pipeline):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
             path = rpt.generate()
             html = Path(path).read_text()
-    assert "Cortical Tracking Frequency Spectrum (Morlet)" in html
     assert "ITPC Topographic Maps (Morlet)" in html

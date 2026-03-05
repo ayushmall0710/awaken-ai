@@ -144,7 +144,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         if self.epochs is None:
             raise ValueError("Epochs not loaded. Call load() first.")
         if self.filter_signal:
-            self.epochs = self.preprocess_signal(self.epochs)
+            self.epochs = self._preprocess_signal(self.epochs)
         self._epochs_filtered = self.epochs.copy()
         try:
             montage = mne.channels.make_standard_montage("standard_1020")
@@ -166,38 +166,38 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         # 1. Compute Global ITPC on Clinical 20 channels
         logger.info(f"[{self.patient_id}] Computing Global DFT ITPC (Clinical channels)...")
-        clinical_epochs = self.select_optimal_channels(self._epochs_filtered, focus="Clinical")
-        itpc_spectrum_global, dft_freqs = self.compute_itpc_dft(clinical_epochs)
+        clinical_epochs = self._select_optimal_channels(self._epochs_filtered, focus="Clinical")
+        itpc_spectrum_global, dft_freqs = self._compute_itpc_dft(clinical_epochs)
         self._dft_spectrum_full = itpc_spectrum_global
         self._dft_freqs = dft_freqs
         self._dft_ch_names = clinical_epochs.ch_names
         self._dft_info = clinical_epochs.info
-        global_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_global, dft_freqs)
+        global_metrics = self._extract_itpc_metrics_dft(itpc_spectrum_global, dft_freqs)
 
         # 2. Compute Morlet ITPC on clinical epochs
         logger.info(f"[{self.patient_id}] Computing Morlet ITPC...")
-        itpc_data_morlet, itc_obj = self.compute_itpc(clinical_epochs)
+        itpc_data_morlet, itc_obj = self._compute_itpc(clinical_epochs)
         self._morlet_itc = itc_obj
         self._morlet_phases = self._compute_morlet_target_phases(clinical_epochs)
-        morlet_metrics = self.extract_itpc_metrics(itpc_data_morlet)
+        morlet_metrics = self._extract_morlet_observed_itpc()
 
         # 3. Compute Left Hemisphere ITPC
         logger.info(f"[{self.patient_id}] Computing LH ITPC...")
-        lh_epochs = self.select_optimal_channels(self._epochs_filtered, focus="LH")
-        itpc_spectrum_lh, _ = self.compute_itpc_dft(lh_epochs)
-        lh_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_lh, dft_freqs)
+        lh_epochs = self._select_optimal_channels(self._epochs_filtered, focus="LH")
+        itpc_spectrum_lh, _ = self._compute_itpc_dft(lh_epochs)
+        lh_metrics = self._extract_itpc_metrics_dft(itpc_spectrum_lh, dft_freqs)
 
         # 4. Compute Right Hemisphere ITPC
         logger.info(f"[{self.patient_id}] Computing RH ITPC...")
-        rh_epochs = self.select_optimal_channels(self._epochs_filtered, focus="RH")
-        itpc_spectrum_rh, _ = self.compute_itpc_dft(rh_epochs)
-        rh_metrics = self.extract_itpc_metrics_dft(itpc_spectrum_rh, dft_freqs)
+        rh_epochs = self._select_optimal_channels(self._epochs_filtered, focus="RH")
+        itpc_spectrum_rh, _ = self._compute_itpc_dft(rh_epochs)
+        rh_metrics = self._extract_itpc_metrics_dft(itpc_spectrum_rh, dft_freqs)
 
         # 5. Compute lateralization indices
-        li_word = self.compute_lateralization_index(lh_metrics["itpc_word"], rh_metrics["itpc_word"])
-        li_phrase = self.compute_lateralization_index(lh_metrics["itpc_phrase"], rh_metrics["itpc_phrase"])
-        li_sentence = self.compute_lateralization_index(lh_metrics["itpc_sentence"], rh_metrics["itpc_sentence"])
-        li_comp = self.compute_lateralization_index(
+        li_word = self._compute_lateralization_index(lh_metrics["itpc_word"], rh_metrics["itpc_word"])
+        li_phrase = self._compute_lateralization_index(lh_metrics["itpc_phrase"], rh_metrics["itpc_phrase"])
+        li_sentence = self._compute_lateralization_index(lh_metrics["itpc_sentence"], rh_metrics["itpc_sentence"])
+        li_comp = self._compute_lateralization_index(
             (lh_metrics["itpc_sentence"] + lh_metrics["itpc_phrase"]) / 2,
             (rh_metrics["itpc_sentence"] + rh_metrics["itpc_phrase"]) / 2,
         )
@@ -210,40 +210,42 @@ class LanguageTrackingAnalysis(BasePipeline):
         # 7. Permutation tests on _epochs_filtered
         n_permutations = kwargs.get("n_permutations", 1000)
         logger.info(f"[{self.patient_id}] Running permutation test ({n_permutations} surrogates)...")
-        null_sentence = self.compute_trial_shuffled_null_itpc(
+        null_sentence = self._compute_trial_shuffled_null_itpc(
             self._epochs_filtered, n_permutations, metric="sentence", seed=42
         )
-        null_phrase = self.compute_trial_shuffled_null_itpc(
+        null_phrase = self._compute_trial_shuffled_null_itpc(
             self._epochs_filtered, n_permutations, metric="phrase", seed=43
         )
-        null_word = self.compute_trial_shuffled_null_itpc(self._epochs_filtered, n_permutations, metric="word", seed=44)
-        null_comp = self.compute_trial_shuffled_null_itpc(
+        null_word = self._compute_trial_shuffled_null_itpc(
+            self._epochs_filtered, n_permutations, metric="word", seed=44
+        )
+        null_comp = self._compute_trial_shuffled_null_itpc(
             self._epochs_filtered, n_permutations, metric="comprehension", seed=45
         )
 
-        p_sentence = self.compute_permutation_pvalue(global_metrics["itpc_sentence"], null_sentence)
-        p_phrase = self.compute_permutation_pvalue(global_metrics["itpc_phrase"], null_phrase)
-        p_word = self.compute_permutation_pvalue(global_metrics["itpc_word"], null_word)
-        p_comprehension = self.compute_permutation_pvalue(itpc_comprehension_combined, null_comp)
+        p_sentence = self._compute_permutation_pvalue(global_metrics["itpc_sentence"], null_sentence)
+        p_phrase = self._compute_permutation_pvalue(global_metrics["itpc_phrase"], null_phrase)
+        p_word = self._compute_permutation_pvalue(global_metrics["itpc_word"], null_word)
+        p_comprehension = self._compute_permutation_pvalue(itpc_comprehension_combined, null_comp)
 
         # Morlet permutation tests (method="morlet" reads from self._morlet_phases)
         logger.info(f"[{self.patient_id}] Running Morlet permutation tests ({n_permutations} surrogates)...")
-        morlet_null_sentence = self.compute_trial_shuffled_null_itpc(
+        morlet_null_sentence = self._compute_trial_shuffled_null_itpc(
             None, n_permutations, metric="sentence", seed=46, method="morlet"
         )
-        morlet_null_phrase = self.compute_trial_shuffled_null_itpc(
+        morlet_null_phrase = self._compute_trial_shuffled_null_itpc(
             None, n_permutations, metric="phrase", seed=47, method="morlet"
         )
-        morlet_null_word = self.compute_trial_shuffled_null_itpc(
+        morlet_null_word = self._compute_trial_shuffled_null_itpc(
             None, n_permutations, metric="word", seed=48, method="morlet"
         )
-        morlet_null_comp = self.compute_trial_shuffled_null_itpc(
+        morlet_null_comp = self._compute_trial_shuffled_null_itpc(
             None, n_permutations, metric="comprehension", seed=49, method="morlet"
         )
-        morlet_p_sentence = self.compute_permutation_pvalue(morlet_metrics["itpc_sentence"], morlet_null_sentence)
-        morlet_p_phrase = self.compute_permutation_pvalue(morlet_metrics["itpc_phrase"], morlet_null_phrase)
-        morlet_p_word = self.compute_permutation_pvalue(morlet_metrics["itpc_word"], morlet_null_word)
-        morlet_p_comprehension = self.compute_permutation_pvalue(
+        morlet_p_sentence = self._compute_permutation_pvalue(morlet_metrics["itpc_sentence"], morlet_null_sentence)
+        morlet_p_phrase = self._compute_permutation_pvalue(morlet_metrics["itpc_phrase"], morlet_null_phrase)
+        morlet_p_word = self._compute_permutation_pvalue(morlet_metrics["itpc_word"], morlet_null_word)
+        morlet_p_comprehension = self._compute_permutation_pvalue(
             (morlet_metrics["itpc_sentence"] + morlet_metrics["itpc_phrase"]) / 2.0, morlet_null_comp
         )
 
@@ -289,7 +291,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         return self.results
 
-    def run_per_session(self, patient_id: str) -> pd.DataFrame:
+    def _run_per_session(self, patient_id: str) -> pd.DataFrame:
         """
         Run ITPC analysis independently per recording session.
 
@@ -348,7 +350,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "dft_ratio": row.get("ratio_cognitive_acoustic"),
         }
 
-    def select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:
+    def _select_optimal_channels(self, epochs: mne.Epochs, focus: Union[str, Iterable[str]] = "LH") -> mne.Epochs:
         """
         Select subset of channels based on focus strategy.
 
@@ -406,7 +408,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         logger.info(f"Selected {len(picks)} channels for {focus_name} focus.")
         return epochs.copy().pick(picks)
 
-    def preprocess_signal(self, epochs: mne.Epochs) -> mne.Epochs:
+    def _preprocess_signal(self, epochs: mne.Epochs) -> mne.Epochs:
         """Apply bandpass filtering, downsampling, and epoch cropping.
         Follows Sokoliuk et al. (2021) to eliminate edge artifacts by precise cropping.
         """
@@ -439,7 +441,7 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         return epochs
 
-    def compute_itpc(
+    def _compute_itpc(
         self,
         epochs: mne.Epochs,
         freqs: Optional[np.ndarray] = None,
@@ -477,7 +479,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         return itc.data, itc
 
-    def compute_itpc_dft(self, epochs: mne.Epochs):
+    def _compute_itpc_dft(self, epochs: mne.Epochs):
         """
         Compute ITPC using the Discrete Fourier Transform (Sokoliuk 2021 method).
 
@@ -523,7 +525,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         )
         return itpc_spectrum, freqs
 
-    def extract_itpc_metrics_dft(
+    def _extract_itpc_metrics_dft(
         self, itpc_spectrum: np.ndarray, freqs: np.ndarray, channel_idx: Optional[int] = None
     ) -> dict:
         """
@@ -575,7 +577,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "freq_word_hz": peak_word_hz,
         }
 
-    def extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
+    def _extract_itpc_metrics(self, itpc_data: np.ndarray, freqs: Optional[np.ndarray] = None) -> dict:
         """
         Extract band-averaged ITPC metrics for sentence-rate and word-rate bands.
 
@@ -634,7 +636,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         }
 
     @staticmethod
-    def compute_lateralization_index(lh_itpc: float, rh_itpc: float) -> float:
+    def _compute_lateralization_index(lh_itpc: float, rh_itpc: float) -> float:
         """
         Compute Lateralization Index.
 
@@ -656,7 +658,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         denom = lh_itpc + rh_itpc
         return (lh_itpc - rh_itpc) / denom if denom > 0 else 0.0
 
-    def compute_hemisphere_itpc(self, focus: str) -> dict:
+    def _compute_hemisphere_itpc(self, focus: str) -> dict:
         """
         Compute DFT ITPC metrics for a given hemisphere using stored filtered epochs.
 
@@ -668,13 +670,13 @@ class LanguageTrackingAnalysis(BasePipeline):
         Returns
         -------
         dict
-            Same keys as extract_itpc_metrics_dft.
+            Same keys as _extract_itpc_metrics_dft.
         """
         if self._epochs_filtered is None:
-            raise ValueError("Call preprocess() before compute_hemisphere_itpc().")
-        epochs_hemi = self.select_optimal_channels(self._epochs_filtered, focus=focus)
-        itpc_spectrum, freqs = self.compute_itpc_dft(epochs_hemi)
-        return self.extract_itpc_metrics_dft(itpc_spectrum, freqs)
+            raise ValueError("Call preprocess() before _compute_hemisphere_itpc().")
+        epochs_hemi = self._select_optimal_channels(self._epochs_filtered, focus=focus)
+        itpc_spectrum, freqs = self._compute_itpc_dft(epochs_hemi)
+        return self._extract_itpc_metrics_dft(itpc_spectrum, freqs)
 
     def _compute_morlet_target_phases(self, epochs: mne.Epochs) -> np.ndarray:
         """
@@ -719,7 +721,41 @@ class LanguageTrackingAnalysis(BasePipeline):
         mean_complex = np.mean(complex_data, axis=-1)  # (n_trials, n_channels, 3)
         return np.angle(mean_complex)
 
-    def compute_trial_shuffled_null_itpc(
+    def _extract_morlet_observed_itpc(self) -> dict:
+        """
+        Compute observed Morlet ITPC from stored ``_morlet_phases``.
+
+        Uses identical math to ``_compute_morlet_null_itpc`` / ``_compute_surrogate_itpc``
+        (time-average complex first, take angle, then |mean_trials(exp(i·phase))|),
+        so the observed statistic and its permutation null are computed on the same
+        quantity and p-values are properly calibrated.
+
+        This replaces the previous approach of band-averaging ``_morlet_itc.data``
+        (an AverageTFR), which computed mean_t(ITPC(t,f)) — a different quantity
+        from the null that caused slightly conservative, uncalibrated p-values.
+
+        Returns
+        -------
+        dict
+            Keys: ``itpc_word``, ``itpc_phrase``, ``itpc_sentence``.
+        """
+        if self._morlet_phases is None:
+            raise ValueError("_morlet_phases not set. Call analyze() first.")
+
+        phases = self._morlet_phases  # (n_trials, n_channels, 3)
+
+        def _itpc_at(freq_idx: int) -> float:
+            unit_vectors = np.exp(1j * phases[:, :, freq_idx])  # (n_trials, n_channels)
+            # mean across trials per channel, magnitude, then mean across channels
+            return float(np.mean(np.abs(np.mean(unit_vectors, axis=0))))
+
+        return {
+            "itpc_word": _itpc_at(self._MORLET_FREQ_IDX["word"]),
+            "itpc_phrase": _itpc_at(self._MORLET_FREQ_IDX["phrase"]),
+            "itpc_sentence": _itpc_at(self._MORLET_FREQ_IDX["sentence"]),
+        }
+
+    def _compute_trial_shuffled_null_itpc(
         self,
         epochs: Optional[mne.Epochs],
         n_permutations: int = 1000,
@@ -762,7 +798,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         elif method != "dft":
             raise ValueError(f"Unknown method '{method}'. Use 'dft' or 'morlet'.")
 
-        # Extract the true phase angles exactly as done in compute_itpc_dft
+        # Extract the true phase angles exactly as done in _compute_itpc_dft
         data = epochs.get_data()
         n_trials, n_channels, n_times = data.shape
         sfreq = epochs.info["sfreq"]
@@ -770,7 +806,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         n_fft = max(n_pad, n_times)
 
         # We only need the specific frequency indices.
-        # rfftfreq matches what is used in compute_itpc_dft
+        # rfftfreq matches what is used in _compute_itpc_dft
         freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
 
         def get_bin_idx(target_f):
@@ -873,7 +909,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         return np.mean(np.abs(np.mean(shifted, axis=1)), axis=1)
 
     @staticmethod
-    def compute_permutation_pvalue(observed: float, null_distribution: np.ndarray) -> float:
+    def _compute_permutation_pvalue(observed: float, null_distribution: np.ndarray) -> float:
         """
         Compute one-sided p-value: proportion of null >= observed.
 
