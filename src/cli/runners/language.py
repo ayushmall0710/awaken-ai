@@ -65,7 +65,8 @@ def run(
                         path = rpt.generate()
                         typer.echo(f"  Report: {path}")
                     else:
-                        extra_css = rpt._build_css_extensions()
+                        if not extra_css:
+                            extra_css = rpt._build_css_extensions()
                         report_fragments.append(rpt.build_session_html())
 
             except Exception as e:
