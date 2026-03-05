@@ -16,13 +16,13 @@ def run(
     session: Optional[str],
     electrodes: Optional[list[str]],
 ) -> None:
-    """Run P300OddballPipeline for the given patients."""
+    """Run P300OddballPipeline for the given patients (all sessions or single --session date)."""
     pipeline = P300OddballPipeline(loader=loader)
 
     for pid in patient_ids:
-        typer.echo(f"[oddball] {pid} ...")
+        typer.echo(f"[oddball] {pid}" + (f" (session {session})" if session else " (all sessions)") + " ...")
         try:
-            df = pipeline.run(pid, custom_electrodes=electrodes)
+            df = pipeline.run(pid, session=session, custom_electrodes=electrodes)
             summary = pipeline.generate_summary()
 
             if df is None or df.empty:

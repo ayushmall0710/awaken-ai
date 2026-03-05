@@ -131,9 +131,38 @@ class P300OddballPipeline(BasePipeline):
         for dir_path in [p.erps, p.features, p.plots_erp, p.qc]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def _sanitize_session_id(session_id: str) -> str:
+        """Replace characters invalid in filenames with underscore."""
+        for char in ("/", "\\", ":"):
+            session_id = session_id.replace(char, "_")
+        return session_id
+
     # ------------------------------------------------------------------
     # BasePipeline interface
     # ------------------------------------------------------------------
+
+    def run(
+        self,
+        patient_id: str,
+        session: Optional[str] = None,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """Run load → preprocess → analyze. Optionally restrict to one session (session_id)."""
+        self.patient_id = patient_id
+        self.aligned_events = self.loader.load_aligned_events(patient_id)
+        if session:
+            if "session_id" not in self.aligned_events.columns:
+                raise ValueError("Aligned events have no 'session_id' column; cannot filter by session.")
+            session_str = str(session).strip()
+            mask = self.aligned_events["session_id"].astype(str) == session_str
+            self.aligned_events = self.aligned_events[mask].copy()
+            if self.aligned_events.empty:
+                raise ValueError(f"No aligned events for patient {patient_id} session_id {session_str}")
+        self.load()
+        self.preprocess()
+        self.results = self.analyze(**kwargs)
+        return self.results
 
     def load(self) -> None:
         """Load ENG-03 oddball epochs and aligned oddball trials for this patient."""
@@ -147,10 +176,10 @@ class P300OddballPipeline(BasePipeline):
 
         self._oddball_trials = oddball_trials
 
-        # Pre-load ENG-03 epochs per session/date
-        for date in oddball_trials["date"].unique():
-            trials_for_date = oddball_trials[oddball_trials["date"] == date]
-            session_id = trials_for_date["session_id"].iloc[0]
+        # Pre-load ENG-03 epochs per session (keyed by session_id)
+        for session_id in oddball_trials["session_id"].dropna().unique():
+            trials_for_session = oddball_trials[oddball_trials["session_id"] == session_id]
+            date = trials_for_session["date"].iloc[0]
             try:
                 epochs35 = self.loader.load_clean_epochs(
                     patient_id=self.patient_id,
@@ -159,15 +188,15 @@ class P300OddballPipeline(BasePipeline):
                 )
             except FileNotFoundError:
                 logger.error(
-                    f"ENG-03 oddball epochs not found for {self.patient_id} - {date}. "
+                    f"ENG-03 oddball epochs not found for {self.patient_id} - {session_id}. "
                     "Run ENG-03 (ArtifactRejector.run_session) first.",
                 )
                 continue
             except Exception as e:  # pragma: no cover - defensive
-                logger.error(f"Failed to load ENG-03 epochs for {self.patient_id} - {date}: {e}", exc_info=True)
+                logger.error(f"Failed to load ENG-03 epochs for {self.patient_id} - {session_id}: {e}", exc_info=True)
                 continue
 
-            self._session_data[date] = SessionData(
+            self._session_data[session_id] = SessionData(
                 session_id=session_id,
                 date=str(date),
                 epochs35=epochs35,
@@ -181,9 +210,9 @@ class P300OddballPipeline(BasePipeline):
         if self._oddball_trials is None:
             raise RuntimeError("load() must be called before preprocess().")
 
-        for date, sess in list(self._session_data.items()):
+        for session_id, sess in list(self._session_data.items()):
             try:
-                aligned = self._oddball_trials[self._oddball_trials["date"] == date]
+                aligned = self._oddball_trials[self._oddball_trials["session_id"] == session_id]
                 epochs35 = sess.epochs35
 
                 rare_events = self._extract_rare_events(aligned)
@@ -191,7 +220,7 @@ class P300OddballPipeline(BasePipeline):
 
                 if len(rare_events) < ERP_CONFIG["min_epochs"]:
                     logger.warning(
-                        f"Insufficient rare events for {self.patient_id} on {date}: "
+                        f"Insufficient rare events for {self.patient_id} {session_id}: "
                         f"{len(rare_events)} < {ERP_CONFIG['min_epochs']}",
                     )
                     sess.status = "insufficient_rare_events"
@@ -209,7 +238,7 @@ class P300OddballPipeline(BasePipeline):
 
                 if len(epochs) < ERP_CONFIG["min_epochs"]:
                     logger.warning(
-                        f"Insufficient rare epochs after mapping for {self.patient_id} on {date}: {len(epochs)}",
+                        f"Insufficient rare epochs after mapping for {self.patient_id} {session_id}: {len(epochs)}",
                     )
                     sess.status = "insufficient_epochs"
                     continue
@@ -249,7 +278,7 @@ class P300OddballPipeline(BasePipeline):
                 sess.n_standard_events_candidate = n_standard_events_candidate
                 sess.mapping_diag = mapping_diag
             except Exception as e:  # pragma: no cover - defensive
-                logger.error(f"Preprocessing failed for {self.patient_id} - {date}: {e}", exc_info=True)
+                logger.error(f"Preprocessing failed for {self.patient_id} - {session_id}: {e}", exc_info=True)
                 sess.status = "preprocessing_error"
 
     def analyze(
@@ -260,10 +289,10 @@ class P300OddballPipeline(BasePipeline):
         """Quantify P300 features for each successful session."""
         rows: List[Dict[str, Any]] = []
 
-        for date in sorted(self._session_data.keys()):
-            sess = self._session_data[date]
+        for session_id in sorted(self._session_data.keys()):
+            sess = self._session_data[session_id]
             if sess.status != "success" or sess.epochs is None or sess.rare_erp is None:
-                logger.warning(f"Skipping session {self.patient_id} {date}: status={sess.status}")
+                logger.warning(f"Skipping session {self.patient_id} {session_id}: status={sess.status}")
                 continue
 
             try:
@@ -274,7 +303,8 @@ class P300OddballPipeline(BasePipeline):
                 features = self._quantify_p300(
                     erp=sess.rare_erp,
                     patient_id=self.patient_id or "",
-                    date=date,
+                    session_id=session_id,
+                    date=sess.date,
                     n_epochs=len(sess.epochs),
                     custom_electrodes=custom_electrodes,
                     diff_erp=sess.diff_erp,
@@ -287,7 +317,7 @@ class P300OddballPipeline(BasePipeline):
                 # Persist ERPs, features, and plots
                 self._save_outputs(
                     patient_id=self.patient_id or "",
-                    date=date,
+                    session_id=session_id,
                     epochs=sess.epochs,
                     erp=sess.rare_erp,
                     features=features,
@@ -303,17 +333,19 @@ class P300OddballPipeline(BasePipeline):
                     diff_erp=sess.diff_erp,
                     features=features,
                     patient_id=self.patient_id or "",
-                    date=date,
+                    session_id=session_id,
+                    session_date=sess.date,
                     custom_electrodes=custom_electrodes,
                 )
 
                 self._plot_erp_image(
                     epochs=sess.epochs,
                     patient_id=self.patient_id or "",
-                    date=date,
+                    session_id=session_id,
+                    session_date=sess.date,
                 )
             except Exception as e:  # pragma: no cover - defensive
-                logger.error(f"Analysis failed for {self.patient_id} - {date}: {e}", exc_info=True)
+                logger.error(f"Analysis failed for {self.patient_id} - {session_id}: {e}", exc_info=True)
                 continue
 
         df = pd.DataFrame(rows) if rows else pd.DataFrame()
@@ -633,6 +665,7 @@ class P300OddballPipeline(BasePipeline):
         self,
         erp: mne.Evoked,
         patient_id: str,
+        session_id: str,
         date: str,
         n_epochs: int,
         custom_electrodes: Optional[List[str]] = None,
@@ -643,6 +676,7 @@ class P300OddballPipeline(BasePipeline):
         """Quantify P300 features from ERP."""
         features: Dict[str, Any] = {
             "patient_id": patient_id,
+            "session_id": session_id,
             "date": date,
             "n_epochs": n_epochs,
             "processing_timestamp": datetime.now().isoformat(),
@@ -903,7 +937,7 @@ class P300OddballPipeline(BasePipeline):
     def _save_outputs(
         self,
         patient_id: str,
-        date: str,
+        session_id: str,
         epochs: mne.Epochs,
         erp: mne.Evoked,
         features: Dict[str, Any],
@@ -911,28 +945,29 @@ class P300OddballPipeline(BasePipeline):
         diff_erp: Optional[mne.Evoked] = None,
     ) -> None:
         """Save ERP and features to disk."""
-        erp_file = self._output_paths.erps / f"{patient_id}_{date}_oddball-ave.fif"
+        sid = self._sanitize_session_id(session_id)
+        erp_file = self._output_paths.erps / f"{patient_id}_{sid}_oddball-ave.fif"
         erp.save(erp_file, overwrite=True)
         logger.info("Saved ERP: %s", erp_file)
 
         if standard_erp is not None:
-            std_file = self._output_paths.erps / f"{patient_id}_{date}_oddball_standard-ave.fif"
+            std_file = self._output_paths.erps / f"{patient_id}_{sid}_oddball_standard-ave.fif"
             standard_erp.save(std_file, overwrite=True)
             logger.info("Saved standard ERP: %s", std_file)
 
         if diff_erp is not None:
-            diff_file = self._output_paths.erps / f"{patient_id}_{date}_oddball_diff-ave.fif"
+            diff_file = self._output_paths.erps / f"{patient_id}_{sid}_oddball_diff-ave.fif"
             diff_erp.save(diff_file, overwrite=True)
             logger.info("Saved difference ERP: %s", diff_file)
 
         # Build and save three structured feature tables
-        clinical_df = self._build_clinical_table(patient_id, date, features)
-        detail_df = self._build_electrode_detail_table(patient_id, date, features)
-        qc_df = self._build_mapping_qc_table(patient_id, date, features)
+        clinical_df = self._build_clinical_table(patient_id, session_id, features)
+        detail_df = self._build_electrode_detail_table(patient_id, session_id, features)
+        qc_df = self._build_mapping_qc_table(patient_id, session_id, features)
 
         self._update_master_feature_tables(clinical_df, detail_df, qc_df)
 
-    def _build_clinical_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
+    def _build_clinical_table(self, patient_id: str, session_id: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 1: Main analysis table (one row per patient-session)."""
         qc_pass = features.get("p300_n_valid_electrodes", 0) >= 2 and features.get("p300_subtype") != "absent"
 
@@ -940,7 +975,8 @@ class P300OddballPipeline(BasePipeline):
             [
                 {
                     "patient_id": patient_id,
-                    "session_date": date,
+                    "session_id": session_id,
+                    "session_date": features.get("date"),
                     "n_rare_epochs": features.get("n_epochs"),
                     "n_standard_epochs": features.get("n_standard_epochs"),
                     "baseline_std_uV": features.get("baseline_std_uV"),
@@ -961,7 +997,7 @@ class P300OddballPipeline(BasePipeline):
             ]
         )
 
-    def _build_electrode_detail_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
+    def _build_electrode_detail_table(self, patient_id: str, session_id: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 2: Per-electrode breakdown (one row per electrode per session)."""
         rows = []
         for electrode in ["Fz", "Cz", "Pz"]:
@@ -987,7 +1023,8 @@ class P300OddballPipeline(BasePipeline):
             rows.append(
                 {
                     "patient_id": patient_id,
-                    "session_date": date,
+                    "session_id": session_id,
+                    "session_date": features.get("date"),
                     "electrode": electrode,
                     "p300_amplitude_uV": amp,
                     "p300_latency_ms": lat,
@@ -1000,13 +1037,14 @@ class P300OddballPipeline(BasePipeline):
 
         return pd.DataFrame(rows)
 
-    def _build_mapping_qc_table(self, patient_id: str, date: str, features: Dict[str, Any]) -> pd.DataFrame:
+    def _build_mapping_qc_table(self, patient_id: str, session_id: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 3: Mapping & QC diagnostics (one row per patient-session)."""
         return pd.DataFrame(
             [
                 {
                     "patient_id": patient_id,
-                    "session_date": date,
+                    "session_id": session_id,
+                    "session_date": features.get("date"),
                     "n_rare_events_candidate": features.get("n_rare_events"),
                     "n_rare_mapped": features.get("n_mapped"),
                     "n_rare_unmapped": features.get("n_unmapped"),
@@ -1026,7 +1064,13 @@ class P300OddballPipeline(BasePipeline):
         detail_df: pd.DataFrame,
         qc_df: pd.DataFrame,
     ) -> None:
-        """Upsert three feature tables into master parquet files."""
+        """Upsert three feature tables into master parquet files.
+
+        Session identity is session_id; session_date is kept for display only.
+        Downstream consumers (e.g. oddball QC report) should group/filter by session_id.
+        Note: src.data_processing.erp_pipeline.OddballERPPipeline still uses session_date;
+        align to session_id in a follow-up if both pipelines write to these tables.
+        """
         # Table 1: Clinical
         clinical_path = self._output_paths.features / "p300_oddball_clinical.parquet"
         if clinical_path.exists():
@@ -1035,7 +1079,7 @@ class P300OddballPipeline(BasePipeline):
         else:
             clinical_combined = clinical_df.copy()
 
-        clinical_combined = clinical_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
+        clinical_combined = clinical_combined.drop_duplicates(subset=["patient_id", "session_id"], keep="last")
         clinical_combined.to_parquet(clinical_path, index=False)
         logger.info("Updated clinical table: %s (%d rows)", clinical_path, len(clinical_combined))
 
@@ -1047,9 +1091,7 @@ class P300OddballPipeline(BasePipeline):
         else:
             detail_combined = detail_df.copy()
 
-        detail_combined = detail_combined.drop_duplicates(
-            subset=["patient_id", "session_date", "electrode"], keep="last"
-        )
+        detail_combined = detail_combined.drop_duplicates(subset=["patient_id", "session_id", "electrode"], keep="last")
         detail_combined.to_parquet(detail_path, index=False)
         logger.info(
             "Updated electrode detail table: %s (%d rows)",
@@ -1065,7 +1107,7 @@ class P300OddballPipeline(BasePipeline):
         else:
             qc_combined = qc_df.copy()
 
-        qc_combined = qc_combined.drop_duplicates(subset=["patient_id", "session_date"], keep="last")
+        qc_combined = qc_combined.drop_duplicates(subset=["patient_id", "session_id"], keep="last")
         qc_combined.to_parquet(qc_path, index=False)
         logger.info("Updated mapping QC table: %s (%d rows)", qc_path, len(qc_combined))
 
@@ -1119,13 +1161,17 @@ class P300OddballPipeline(BasePipeline):
         diff_erp: Optional[mne.Evoked],
         features: Dict[str, Any],
         patient_id: str,
-        date: str,
+        session_id: str,
+        session_date: str,
         custom_electrodes: Optional[List[str]] = None,
     ) -> None:
         """Generate and save ERP summary figure (3-panel when diff_erp is available)."""
         if diff_erp is None or standard_erp is None:
-            self._plot_individual_erp_legacy(rare_erp, patient_id, date, custom_electrodes)
+            self._plot_individual_erp_legacy(rare_erp, patient_id, session_id, session_date, custom_electrodes)
             return
+
+        sid = self._sanitize_session_id(session_id)
+        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
 
         fig = plt.figure(figsize=(12, 10))
         gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 1], hspace=0.35)
@@ -1139,7 +1185,7 @@ class P300OddballPipeline(BasePipeline):
         ax1.axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
         ax1.set_xlabel("Time (ms)")
         ax1.set_ylabel("Amplitude (µV)")
-        ax1.set_title(f"{patient_id} - {date} - All Channels (Butterfly)")
+        ax1.set_title(f"{label} - All Channels (Butterfly)")
         ax1.legend(loc="upper right")
         ax1.grid(True, alpha=0.3)
 
@@ -1202,18 +1248,26 @@ class P300OddballPipeline(BasePipeline):
         ax3.grid(True, alpha=0.3)
 
         plt.tight_layout()
-        save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp.png"
+        save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp.png"
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         logger.info("Saved 3-panel ERP plot: %s", save_path)
 
-        self._plot_topomap(diff_erp, patient_id, date)
+        self._plot_topomap(diff_erp, patient_id, session_id, session_date)
 
-    def _plot_erp_image(self, epochs: mne.Epochs, patient_id: str, date: str) -> None:
+    def _plot_erp_image(self, epochs: mne.Epochs, patient_id: str, session_id: str, session_date: str) -> None:
         """Generate ERP image (single-trial heatmap) for rare 900ms epochs at Pz."""
         if len(epochs) < 3:
-            logger.debug("%s %s: skipping ERP image (only %d epochs < 3)", patient_id, date, len(epochs))
+            logger.debug(
+                "%s %s: skipping ERP image (only %d epochs < 3)",
+                patient_id,
+                session_id,
+                len(epochs),
+            )
             return
+
+        sid = self._sanitize_session_id(session_id)
+        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
 
         try:
             ret = mne.viz.plot_epochs_image(
@@ -1226,7 +1280,7 @@ class P300OddballPipeline(BasePipeline):
             fig.set_size_inches(12, 10)
             fig.subplots_adjust(top=0.85, bottom=0.15, hspace=0.5)
 
-            title_text = f"ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — {patient_id} | {date}"
+            title_text = f"ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — {label}"
             fig.text(
                 0.5,
                 0.98,
@@ -1248,17 +1302,18 @@ class P300OddballPipeline(BasePipeline):
                 bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
             )
 
-            save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp_image.png"
+            save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp_image.png"
             fig.savefig(save_path, dpi=150, pad_inches=0.4)
             plt.close(fig)
             logger.info("Saved ERP image: %s", save_path)
         except Exception as e:  # pragma: no cover - defensive
-            logger.warning("Could not generate ERP image for %s %s: %s", patient_id, date, e)
+            logger.warning("Could not generate ERP image for %s %s: %s", patient_id, session_id, e)
 
-    def _plot_topomap(self, diff_erp: mne.Evoked, patient_id: str, date: str) -> None:
+    def _plot_topomap(self, diff_erp: mne.Evoked, patient_id: str, session_id: str, session_date: str) -> None:
         """Save topomap series for the difference ERP."""
+        sid = self._sanitize_session_id(session_id)
         try:
-            logger.info("Generating topomap series for %s %s", patient_id, date)
+            logger.info("Generating topomap series for %s %s", patient_id, session_id)
             times_to_plot = np.arange(-0.2, 0.75, 0.1)
 
             # MNE version in this environment does not support selective naming,
@@ -1277,37 +1332,41 @@ class P300OddballPipeline(BasePipeline):
             else:
                 fig_obj = fig
 
-            save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_topomap.png"
+            save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_topomap.png"
             fig_obj.savefig(save_path, dpi=300, bbox_inches="tight")
             plt.close(fig_obj)
             logger.info("Saved topomap series: %s", save_path)
         except Exception as e:  # pragma: no cover - defensive
-            logger.error("Failed to generate topomap for %s %s: %s", patient_id, date, e, exc_info=True)
+            logger.error("Failed to generate topomap for %s %s: %s", patient_id, session_id, e, exc_info=True)
 
     def _plot_individual_erp_legacy(
         self,
         erp: mne.Evoked,
         patient_id: str,
-        date: str,
+        session_id: str,
+        session_date: str,
         custom_electrodes: Optional[List[str]] = None,
     ) -> None:
         """Generate and save individual ERP plot (2-panel legacy format)."""
-        save_path = self._output_paths.plots_erp / f"{patient_id}_{date}_oddball_erp.png"
+        sid = self._sanitize_session_id(session_id)
+        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
+
+        save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp.png"
         fig, axes = plt.subplots(2, 1, figsize=(10, 8))
 
         if custom_electrodes:
             electrodes_to_plot = custom_electrodes
-            panel_title = f"{patient_id} - {date} - Custom Electrodes: {', '.join(custom_electrodes)}"
+            panel_title = f"{label} - Custom Electrodes: {', '.join(custom_electrodes)}"
             colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray"]
         else:
             electrodes_to_plot = ["Fz", "Cz", "Pz"]
-            panel_title = f"{patient_id} - {date} - Midline Electrodes (Composite Scoring)"
+            panel_title = f"{label} - Midline Electrodes (Composite Scoring)"
             colors = ["red", "green", "blue"]
 
         self._plot_erp_panels(
             erp,
             axes,
-            title_top=f"{patient_id} - {date} - All Channels",
+            title_top=f"{label} - All Channels",
             electrodes_to_plot=electrodes_to_plot,
             panel_title_bottom=panel_title,
             color_map_or_list=colors,
