@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
@@ -749,41 +748,36 @@ class TestPlotting:
             "p300_latency_ms": 380,
             "p300_best_electrode": "Pz",
         }
-        pipeline._plot_erp_figure(
+        label = "P01 | s1 (2024-01-01)"
+        fig = pipeline.viz.plot_erp_figure(
             rare_erp=mock_evoked,
             rare_sem=mock_evoked,
             standard_erp=None,
             standard_sem=None,
             diff_erp=None,
             features=features,
-            patient_id="P01",
-            session_id="s1",
-            session_date="2024-01-01",
-            custom_electrodes=None,
+            label=label,
         )
-        plt.close("all")
-        plot_file = pipeline._output_paths.plots_erp / "P01_s1_oddball_erp.png"
-        assert plot_file.exists()
-        assert plot_file.stat().st_size > 0
+        plot_path = pipeline._output_paths.plots_erp / "P01_s1_oddball_erp.png"
+        pipeline._save_fig(fig, plot_path)
+        assert plot_path.exists()
+        assert plot_path.stat().st_size > 0
 
     def test_plot_erp_image(self, pipeline, temp_output_dir, mock_evoked):
-        # Need >= 3 epochs or _plot_erp_image returns without saving
+        # Need >= 3 epochs or plot_erp_image returns None
         epochs = mne.EpochsArray(
             np.zeros((3, 3, 461)),
             mne.create_info(["Fz", "Cz", "Pz"], 512, "eeg"),
             tmin=-0.2,
             verbose=False,
         )
-        pipeline._plot_erp_image(
-            epochs=epochs,
-            patient_id="P01",
-            session_id="s1",
-            session_date="2024-01-01",
-        )
-        plt.close("all")
-        plot_file = pipeline._output_paths.plots_erp / "P01_s1_oddball_erp_image.png"
-        assert plot_file.exists()
-        assert plot_file.stat().st_size > 0
+        label = "P01 | s1 (2024-01-01)"
+        fig = pipeline.viz.plot_erp_image(epochs, label)
+        assert fig is not None
+        plot_path = pipeline._output_paths.plots_erp / "P01_s1_oddball_erp_image.png"
+        pipeline._save_fig(fig, plot_path)
+        assert plot_path.exists()
+        assert plot_path.stat().st_size > 0
 
 
 # ── STANDARD_EVENT_LABELS ─────────────────────────────────────────────────────
