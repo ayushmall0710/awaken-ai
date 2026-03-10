@@ -619,7 +619,11 @@ class ArtifactRejector:
         for patient_id in patient_ids:
             patient = self.loader.get_patient(patient_id)
             for session_id in patient.list_session_ids():
-                out[(patient_id, session_id)] = self.run_session(patient_id, session_id, save=save)
+                try:
+                    out[(patient_id, session_id)] = self.run_session(patient_id, session_id, save=save)
+                except Exception as e:
+                    logger.error(f"Artifact rejection failed for {patient_id}/{session_id}: {e}")
+                    out[(patient_id, session_id)] = {}
         return out
 
     def run_session(
@@ -628,7 +632,7 @@ class ArtifactRejector:
         session_id: str,
         save: bool = True,
         return_raw_clean: bool = False,
-    ) -> Union[Dict[str, Path], Tuple[Dict[str, Path], mne.io.BaseRaw]]:
+    ) -> Union[Dict[str, Path], Tuple[Dict[str, Path], Optional[mne.io.BaseRaw]]]:
         """Run artifact rejection for a single patient session.
 
         Steps: load -> ICA -> epoch per trial_type -> auto-reject -> save.
@@ -645,7 +649,13 @@ class ArtifactRejector:
             saved_paths: Mapping of trial_type -> epochs .fif path.
             raw_clean (optional): ICA-cleaned raw when return_raw_clean=True.
         """
-        raw, session_df, date, edf_start_unix, timezone_offset = self._load_session_inputs(patient_id, session_id)
+        inputs = self._load_session_inputs(patient_id, session_id)
+        if inputs is None:
+            if return_raw_clean:
+                return {}, None
+            return {}
+
+        raw, session_df, date, edf_start_unix, timezone_offset = inputs
         raw_clean, ica_summary = self._apply_ica(raw)
 
         saved_paths: Dict[str, Path] = {}
@@ -682,16 +692,17 @@ class ArtifactRejector:
 
     def _load_session_inputs(
         self, patient_id: str, session_id: str
-    ) -> Tuple[mne.io.BaseRaw, pd.DataFrame, str, float, float]:
+    ) -> Optional[Tuple[mne.io.BaseRaw, pd.DataFrame, str, float, float]]:
         """Load EDF, aligned events, and compute time-conversion constants. Returns the date as well for QC rows."""
         aligned_df = self.loader.load_aligned_events(patient_id)
         session_df = aligned_df[aligned_df["session_id"] == session_id].copy()
 
         if session_df.empty:
-            raise FileNotFoundError(
-                f"No aligned events found for {patient_id} session_id={session_id}. "
-                f"Expected {config.ALIGNED_EVENTS_DIR / f'{patient_id}_events.parquet'}"
+            logger.error(
+                f"Artifact rejection failed for {patient_id}/{session_id}: "
+                f"Aligned events parquet not found: {config.ALIGNED_EVENTS_DIR / f'{patient_id}_events.parquet'}"
             )
+            return None
 
         date = session_df["date"].iloc[0]
         raw = self.loader.load_edf(patient_id, date=date, use_clipped=self.use_clipped)
