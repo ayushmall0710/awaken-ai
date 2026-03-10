@@ -25,6 +25,7 @@ import pandas as pd
 
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.base import BasePipeline
+from src.viz.oddball_viz import OddballVisualizer
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ class P300OddballPipeline(BasePipeline):
         self._session_data: Dict[str, SessionData] = {}
         self._oddball_trials: Optional[pd.DataFrame] = None
         self._last_epoch_diagnostics: Optional[Dict[str, Any]] = None
+        self.viz = OddballVisualizer()
 
     # ------------------------------------------------------------------
     # Output directory helpers (adapted from OddballERPPipeline)
@@ -314,7 +316,7 @@ class P300OddballPipeline(BasePipeline):
 
                 rows.append(features)
 
-                # Persist ERPs, features, and plots
+                # Persist ERPs and features
                 self._save_outputs(
                     patient_id=self.patient_id or "",
                     session_id=session_id,
@@ -325,25 +327,34 @@ class P300OddballPipeline(BasePipeline):
                     diff_erp=sess.diff_erp,
                 )
 
-                self._plot_erp_figure(
-                    rare_erp=sess.rare_erp,
-                    rare_sem=sess.rare_sem,
-                    standard_erp=sess.standard_erp,
-                    standard_sem=sess.standard_sem,
-                    diff_erp=sess.diff_erp,
-                    features=features,
-                    patient_id=self.patient_id or "",
-                    session_id=session_id,
-                    session_date=sess.date,
-                    custom_electrodes=custom_electrodes,
-                )
+                # Generate and save plots via OddballVisualizer
+                sid = self._sanitize_session_id(session_id)
+                label = f"{self.patient_id or ''} | {session_id}" + (f" ({sess.date})" if sess.date else "")
 
-                self._plot_erp_image(
-                    epochs=sess.epochs,
-                    patient_id=self.patient_id or "",
-                    session_id=session_id,
-                    session_date=sess.date,
+                fig_erp = self.viz.plot_erp_figure(
+                    sess.rare_erp,
+                    sess.rare_sem,
+                    sess.standard_erp,
+                    sess.standard_sem,
+                    sess.diff_erp,
+                    features,
+                    label,
                 )
+                self._save_fig(fig_erp, self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_erp.png")
+
+                fig_img = self.viz.plot_erp_image(sess.epochs, label)
+                if fig_img is not None:
+                    self._save_fig(
+                        fig_img,
+                        self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_erp_image.png",
+                    )
+
+                if sess.diff_erp is not None:
+                    fig_topo = self.viz.plot_topomap(sess.diff_erp, label)
+                    self._save_fig(
+                        fig_topo,
+                        self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.png",
+                    )
             except Exception as e:  # pragma: no cover - defensive
                 logger.error(f"Analysis failed for {self.patient_id} - {session_id}: {e}", exc_info=True)
                 continue
@@ -967,6 +978,13 @@ class P300OddballPipeline(BasePipeline):
 
         self._update_master_feature_tables(clinical_df, detail_df, qc_df)
 
+    @staticmethod
+    def _save_fig(fig: plt.Figure, path: Path) -> Path:
+        """Save and close a matplotlib figure; return the path."""
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return path
+
     def _build_clinical_table(self, patient_id: str, session_id: str, features: Dict[str, Any]) -> pd.DataFrame:
         """Build Table 1: Main analysis table (one row per patient-session)."""
         qc_pass = features.get("p300_n_valid_electrodes", 0) >= 2 and features.get("p300_subtype") != "absent"
@@ -1064,13 +1082,7 @@ class P300OddballPipeline(BasePipeline):
         detail_df: pd.DataFrame,
         qc_df: pd.DataFrame,
     ) -> None:
-        """Upsert three feature tables into master parquet files.
-
-        Session identity is session_id; session_date is kept for display only.
-        Downstream consumers (e.g. oddball QC report) should group/filter by session_id.
-        Note: src.data_processing.erp_pipeline.OddballERPPipeline still uses session_date;
-        align to session_id in a follow-up if both pipelines write to these tables.
-        """
+        """Upsert three feature tables into master parquet files."""
         # Table 1: Clinical
         clinical_path = self._output_paths.features / "p300_oddball_clinical.parquet"
         if clinical_path.exists():
@@ -1110,269 +1122,3 @@ class P300OddballPipeline(BasePipeline):
         qc_combined = qc_combined.drop_duplicates(subset=["patient_id", "session_id"], keep="last")
         qc_combined.to_parquet(qc_path, index=False)
         logger.info("Updated mapping QC table: %s (%d rows)", qc_path, len(qc_combined))
-
-    def _plot_erp_panels(
-        self,
-        erp: mne.Evoked,
-        axes: Any,
-        title_top: str,
-        electrodes_to_plot: List[str],
-        panel_title_bottom: str,
-        color_map_or_list: Any,
-    ) -> None:
-        """Draw two-panel ERP plot (butterfly + selected electrodes)."""
-        times = erp.times * 1000
-        data = erp.data * 1e6
-        ch_names_upper = [ch.upper() for ch in erp.ch_names]
-
-        for ch_idx in range(data.shape[0]):
-            axes[0].plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
-        axes[0].axvline(x=0, color="k", linestyle="--", linewidth=1, label="Stimulus")
-        axes[0].axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
-        axes[0].set_xlabel("Time (ms)")
-        axes[0].set_ylabel("Amplitude (µV)")
-        axes[0].set_title(title_top)
-        axes[0].legend(loc="upper right")
-        axes[0].grid(True, alpha=0.3)
-
-        is_dict = isinstance(color_map_or_list, dict)
-        for idx, electrode in enumerate(electrodes_to_plot):
-            color = color_map_or_list[electrode] if is_dict else color_map_or_list[idx % len(color_map_or_list)]
-            try:
-                elec_idx = ch_names_upper.index(electrode.upper())
-                axes[1].plot(times, data[elec_idx, :], linewidth=2, color=color, label=electrode)
-            except ValueError:
-                logger.warning("Electrode %s not found in data", electrode)
-        axes[1].axvline(x=0, color="k", linestyle="--", linewidth=1)
-        axes[1].axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
-        axes[1].axhline(y=0, color="gray", linestyle=":", linewidth=1)
-        axes[1].set_xlabel("Time (ms)")
-        axes[1].set_ylabel("Amplitude (µV)")
-        axes[1].set_title(panel_title_bottom)
-        axes[1].legend(loc="upper right")
-        axes[1].grid(True, alpha=0.3)
-
-    def _plot_erp_figure(
-        self,
-        rare_erp: mne.Evoked,
-        rare_sem: mne.Evoked,
-        standard_erp: Optional[mne.Evoked],
-        standard_sem: Optional[mne.Evoked],
-        diff_erp: Optional[mne.Evoked],
-        features: Dict[str, Any],
-        patient_id: str,
-        session_id: str,
-        session_date: str,
-        custom_electrodes: Optional[List[str]] = None,
-    ) -> None:
-        """Generate and save ERP summary figure (3-panel when diff_erp is available)."""
-        if diff_erp is None or standard_erp is None:
-            self._plot_individual_erp_legacy(rare_erp, patient_id, session_id, session_date, custom_electrodes)
-            return
-
-        sid = self._sanitize_session_id(session_id)
-        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
-
-        fig = plt.figure(figsize=(12, 10))
-        gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 1], hspace=0.35)
-
-        ax1 = fig.add_subplot(gs[0])
-        times = rare_erp.times * 1000
-        data = rare_erp.data * 1e6
-        for ch_idx in range(data.shape[0]):
-            ax1.plot(times, data[ch_idx, :], alpha=0.3, linewidth=0.5)
-        ax1.axvline(x=0, color="k", linestyle="--", linewidth=1, label="Stimulus")
-        ax1.axvspan(300, 600, alpha=0.2, color="green", label="P300 Window")
-        ax1.set_xlabel("Time (ms)")
-        ax1.set_ylabel("Amplitude (µV)")
-        ax1.set_title(f"{label} - All Channels (Butterfly)")
-        ax1.legend(loc="upper right")
-        ax1.grid(True, alpha=0.3)
-
-        ax2 = fig.add_subplot(gs[1])
-        electrodes = ["Fz", "Cz", "Pz"]
-        colors = {"Fz": "red", "Cz": "green", "Pz": "blue"}
-
-        ch_names_upper = [ch.upper() for ch in rare_erp.ch_names]
-        for electrode in electrodes:
-            if electrode.upper() not in ch_names_upper:
-                continue
-            ch_idx = ch_names_upper.index(electrode.upper())
-
-            rare_trace = rare_erp.data[ch_idx, :] * 1e6
-            rare_sem_trace = rare_sem.data[ch_idx, :] * 1e6
-            color = colors[electrode]
-
-            ax2.plot(times, rare_trace, linewidth=2, color=color, label=f"{electrode} (rare)")
-            ax2.fill_between(times, rare_trace - rare_sem_trace, rare_trace + rare_sem_trace, alpha=0.2, color=color)
-
-            if standard_erp is not None and standard_sem is not None:
-                std_trace = standard_erp.data[ch_idx, :] * 1e6
-                std_sem_trace = standard_sem.data[ch_idx, :] * 1e6
-                ax2.plot(times, std_trace, linewidth=1.5, color=color, linestyle="--", label=f"{electrode} (std)")
-                ax2.fill_between(
-                    times,
-                    std_trace - std_sem_trace,
-                    std_trace + std_sem_trace,
-                    alpha=0.1,
-                    color=color,
-                )
-
-        ax2.axvline(x=0, color="k", linestyle="--", linewidth=1)
-        ax2.axvspan(300, 600, alpha=0.1, color="gray")
-        ax2.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
-        ax2.set_xlabel("Time (ms)")
-        ax2.set_ylabel("Amplitude (µV)")
-        subtype = features.get("p300_subtype", "unknown")
-        ax2.set_title(f"Rare vs Standard — {subtype}")
-        ax2.legend(loc="upper right", fontsize=8)
-        ax2.grid(True, alpha=0.3)
-
-        ax3 = fig.add_subplot(gs[2])
-        diff_data = diff_erp.data * 1e6
-        for electrode in electrodes:
-            if electrode.upper() not in ch_names_upper:
-                continue
-            ch_idx = ch_names_upper.index(electrode.upper())
-            diff_trace = diff_data[ch_idx, :]
-            color = colors[electrode]
-            ax3.plot(times, diff_trace, linewidth=2, color=color, label=electrode)
-
-        ax3.axvline(x=0, color="k", linestyle="--", linewidth=1)
-        ax3.axvspan(300, 600, alpha=0.1, color="gray", label="P300 Window")
-        ax3.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
-        ax3.set_xlabel("Time (ms)")
-        ax3.set_ylabel("Amplitude (µV)")
-        ax3.set_title("Difference Wave (Rare - Standard)")
-        ax3.legend(loc="upper right")
-        ax3.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp.png"
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("Saved 3-panel ERP plot: %s", save_path)
-
-        self._plot_topomap(diff_erp, patient_id, session_id, session_date)
-
-    def _plot_erp_image(self, epochs: mne.Epochs, patient_id: str, session_id: str, session_date: str) -> None:
-        """Generate ERP image (single-trial heatmap) for rare 900ms epochs at Pz."""
-        if len(epochs) < 3:
-            logger.debug(
-                "%s %s: skipping ERP image (only %d epochs < 3)",
-                patient_id,
-                session_id,
-                len(epochs),
-            )
-            return
-
-        sid = self._sanitize_session_id(session_id)
-        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
-
-        try:
-            ret = mne.viz.plot_epochs_image(
-                epochs,
-                picks=["Pz"],
-                show=False,
-            )
-            fig = ret[0] if isinstance(ret, (list, tuple)) else ret
-
-            fig.set_size_inches(12, 10)
-            fig.subplots_adjust(top=0.85, bottom=0.15, hspace=0.5)
-
-            title_text = f"ERP Image: Single-Trial Responses to Rare (Target) Stimuli at Pz — {label}"
-            fig.text(
-                0.5,
-                0.98,
-                title_text,
-                ha="center",
-                fontsize=11,
-                fontweight="bold",
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
-            )
-
-            caption = "Top: Each row = one trial. Bottom: Average. Time 0 = stimulus. Color = voltage (µV)."
-            fig.text(
-                0.5,
-                0.03,
-                caption,
-                ha="center",
-                fontsize=9,
-                style="italic",
-                bbox=dict(boxstyle="round,pad=0.5", facecolor="white", alpha=0.8),
-            )
-
-            save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp_image.png"
-            fig.savefig(save_path, dpi=150, pad_inches=0.4)
-            plt.close(fig)
-            logger.info("Saved ERP image: %s", save_path)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.warning("Could not generate ERP image for %s %s: %s", patient_id, session_id, e)
-
-    def _plot_topomap(self, diff_erp: mne.Evoked, patient_id: str, session_id: str, session_date: str) -> None:
-        """Save topomap series for the difference ERP."""
-        sid = self._sanitize_session_id(session_id)
-        try:
-            logger.info("Generating topomap series for %s %s", patient_id, session_id)
-            times_to_plot = np.arange(-0.2, 0.75, 0.1)
-
-            # MNE version in this environment does not support selective naming,
-            # so we enable show_names=True (all labels) rather than passing a
-            # custom `names` argument.
-            fig = diff_erp.plot_topomap(
-                times=times_to_plot,
-                show=False,
-                colorbar=True,
-                size=5,
-                show_names=True,
-            )
-
-            if isinstance(fig, (list, tuple)):
-                fig_obj = fig[0]
-            else:
-                fig_obj = fig
-
-            save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_topomap.png"
-            fig_obj.savefig(save_path, dpi=300, bbox_inches="tight")
-            plt.close(fig_obj)
-            logger.info("Saved topomap series: %s", save_path)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.error("Failed to generate topomap for %s %s: %s", patient_id, session_id, e, exc_info=True)
-
-    def _plot_individual_erp_legacy(
-        self,
-        erp: mne.Evoked,
-        patient_id: str,
-        session_id: str,
-        session_date: str,
-        custom_electrodes: Optional[List[str]] = None,
-    ) -> None:
-        """Generate and save individual ERP plot (2-panel legacy format)."""
-        sid = self._sanitize_session_id(session_id)
-        label = f"{patient_id} | {session_id}" + (f" ({session_date})" if session_date else "")
-
-        save_path = self._output_paths.plots_erp / f"{patient_id}_{sid}_oddball_erp.png"
-        fig, axes = plt.subplots(2, 1, figsize=(10, 8))
-
-        if custom_electrodes:
-            electrodes_to_plot = custom_electrodes
-            panel_title = f"{label} - Custom Electrodes: {', '.join(custom_electrodes)}"
-            colors = ["red", "blue", "green", "orange", "purple", "brown", "pink", "gray"]
-        else:
-            electrodes_to_plot = ["Fz", "Cz", "Pz"]
-            panel_title = f"{label} - Midline Electrodes (Composite Scoring)"
-            colors = ["red", "green", "blue"]
-
-        self._plot_erp_panels(
-            erp,
-            axes,
-            title_top=f"{label} - All Channels",
-            electrodes_to_plot=electrodes_to_plot,
-            panel_title_bottom=panel_title,
-            color_map_or_list=colors,
-        )
-
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("Saved ERP plot: %s", save_path)
