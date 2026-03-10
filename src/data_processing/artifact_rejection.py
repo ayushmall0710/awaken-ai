@@ -670,7 +670,7 @@ class ArtifactRejector:
         saved_paths: Dict[str, Path] = {}
         qc_rows: List[Dict[str, Any]] = []
 
-        for trial_type, tt_df in session_df.groupby(session_df["trial_type"].astype(str).str.lower()):
+        for trial_type, tt_df in session_df.groupby(session_df["trial_type"].astype(str).str.lower().str.strip()):
             epochs, qc_row = self._process_trial_type(
                 raw_clean,
                 tt_df,

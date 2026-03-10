@@ -168,7 +168,7 @@ class LanguageTrackingAnalysis(BasePipeline):
         except Exception as e:
             logger.warning(f"Montage error for {self.patient_id}: {e}")
 
-    def analyze(self, **kwargs) -> pd.DataFrame:
+    def analyze(self, n_permutations: int = 1000) -> pd.DataFrame:
         """
         Compute per-focus ITPC and permutation p-values using a two-phase architecture.
 
