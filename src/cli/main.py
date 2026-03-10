@@ -268,7 +268,6 @@ def _dispatch_pipelines(
     alpha: float,
     report: bool,
     n_perms: int,
-    focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
     cf_svm_runner: types.ModuleType,
