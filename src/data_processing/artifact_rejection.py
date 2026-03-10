@@ -43,12 +43,21 @@ logger = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 
 WINDOW_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
-    "language": 16.0,
+    "language": 17.0,
     "oddball": 35.0,
     "beep": 35.0,
     "control": 35.0,
     "left_command": 200.0,
     "right_command": 200.0,
+}
+
+WINDOW_START_SEC_BY_TRIAL_TYPE: Dict[str, float] = {
+    "language": 0.0,
+    "oddball": 0.0,
+    "beep": 0.0,
+    "control": 0.0,
+    "left_command": 0.0,
+    "right_command": 0.0,
 }
 
 DEFAULT_ICA_FILTER_HZ: Tuple[float, float] = (0.5, 100.0)
@@ -829,6 +838,10 @@ class ArtifactRejector:
         if trials_df.empty:
             return None
 
+        # Determine requested window size and the tmin offset.
+        # For 'language' trials, we use tmin = -1.0 to capture baseline.
+        tt_lower = str(trial_type).lower().strip()
+        tmin = WINDOW_START_SEC_BY_TRIAL_TYPE.get(tt_lower, 0.0)
         window_sec = _trial_type_window_sec(trial_type, fallback_duration=float(trials_df["duration"].median()))
         if window_sec is None:
             return None
@@ -840,8 +853,9 @@ class ArtifactRejector:
         # Vectorized time conversion (replaces iterrows).
         start_unix = trials_df["start_time"].values.astype(float)
         valid_mask = ~np.isnan(start_unix)
+        # Note: we need enough padding so that `start_edf + tmin` is >= 0
         start_edf = start_unix[valid_mask] - edf_start_unix + timezone_offset
-        in_range = (start_edf >= 0) & (start_edf + window_sec <= max_time)
+        in_range = (start_edf + tmin >= 0) & (start_edf + window_sec <= max_time)
         start_edf = start_edf[in_range]
 
         if len(start_edf) == 0:
@@ -856,13 +870,13 @@ class ArtifactRejector:
             ]
         )
 
-        event_id = {str(trial_type).lower().strip(): 1}
+        event_id = {tt_lower: 1}
         epochs = mne.Epochs(
             raw,
             events_arr,
             event_id=event_id,
-            tmin=0.0,
-            tmax=float(window_sec),
+            tmin=tmin,
+            tmax=window_sec,
             picks=picks_eeg,
             baseline=None,
             preload=True,
