@@ -121,7 +121,7 @@ class TimestampAligner:
                 # use use_clipped preference from init, using UnifiedDataLoader's cache
                 raw = self.loader.load_edf(self.patient_id, date=date, use_clipped=self.use_clipped)
             except Exception as e:
-                logger.warning(f"Skipping session {date}: Could not load EDF ({e})")
+                logger.error(f"Skipping session {date}: EDF file not found ({e})")
                 continue
 
             # Align this session
@@ -152,17 +152,21 @@ class TimestampAligner:
             trial_type = trial["trial_type"].lower()
             method = TRIAL_TYPE_TO_METHOD.get(trial_type, "peak_detection")
 
-            match method:
-                case "sentence_trials":
-                    df = self._align_sentence_trials(trial)
-                case "commands":
-                    df = self._align_commands(trial)
-                case "peak_detection":
-                    df = self._align_peaks(trial)
-                case _:
-                    raise ValueError(f"Unknown method: {method}")
+            try:
+                match method:
+                    case "sentence_trials":
+                        df = self._align_sentence_trials(trial)
+                    case "commands":
+                        df = self._align_commands(trial)
+                    case "peak_detection":
+                        df = self._align_peaks(trial)
+                    case _:
+                        raise ValueError(f"Unknown method: {method}")
 
-            events.append(df)
+                events.append(df)
+            except Exception as e:
+                logger.error(f"Failed to align trial {trial.get('trial_id', 'unknown')} (type: {trial_type}): {e}")
+                continue
 
         non_empty = [e for e in events if len(e) > 0]
         return pd.concat(non_empty, ignore_index=True) if non_empty else pd.DataFrame()
