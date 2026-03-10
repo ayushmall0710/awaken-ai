@@ -38,22 +38,27 @@ def main():
         df = pd.concat(results, ignore_index=True)
 
         print("\n=== ITPC Analysis Summary (Morlet vs DFT) ===")
-        print(
-            df[
-                [
-                    "patient_id",
-                    "n_trials",
-                    "sfreq",
-                    "focus",
-                    "morlet_itpc_sentence",
-                    "morlet_itpc_word",
-                    "morlet_ratio_sent_word",
-                    "dft_itpc_sentence",
-                    "dft_itpc_word",
-                    "dft_ratio_sent_word",
-                ]
-            ].to_string(index=False)
-        )
+        # Note: pipeline now returns multiple rows per patient (one per focus)
+        # We display the clinical focus by default for summary.
+        display_df = df[df["focus"] == "clinical"]
+        
+        cols = [
+            "patient_id",
+            "n_trials",
+            "focus",
+            "itpc_sentence",
+            "itpc_phrase",
+            "itpc_word",
+            "itpc_comprehension",
+            "morlet_itpc_sentence",
+            "morlet_itpc_phrase",
+            "morlet_itpc_word",
+            "morlet_itpc_comprehension",
+        ]
+        # Only show columns that exist in the result
+        cols = [c for ch in cols if (c := ch) in display_df.columns]
+        
+        print(display_df[cols].to_string(index=False))
 
         out_path = config.LOCAL_DATA_ROOT / "processed" / "features" / "language_itpc_summary.csv"
         out_path.parent.mkdir(parents=True, exist_ok=True)
