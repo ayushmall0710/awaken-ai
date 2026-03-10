@@ -65,12 +65,12 @@ Traditional language tracking studies use **high-density EEG arrays** (128-256 e
 
 ### Hierarchical Structure
 
-**Key Concept:** The stimulus has **multiple temporal frequencies**:
-1. **Word Rate:** ~0.77 Hz (1 word every 1.3 seconds).
-2. **Phrase Rate:** ~0.38 Hz (2-word phrases).
-3. **Sentence Rate:** ~0.065 Hz (12-word sentences over 15.5 seconds).
+**Key Concept:** The stimulus has **multiple temporal frequencies** following the methodology of Sokoliuk et al. (2021):
+1. **Sentence Rate:** 0.78 Hz (12 sentences presented over ~15.36 seconds; 1.28s per sentence).
+2. **Phrase Rate:** 1.56 Hz (One phrase every 0.64 seconds; 2 words per phrase).
+3. **Word Rate:** 3.125 Hz (One word every 0.32 seconds; 4 words per sentence).
 
-**Hypothesis:** If the brain is **comprehending** the speech (not just hearing sounds), neural activity should **entrain** (synchronize) to the **sentence-level structure**, not just the word rate.
+**Hypothesis:** If the brain is **comprehending** the speech (not just hearing sounds), neural activity should **entrain** (synchronize) to the **sentence-level structure** (0.78 Hz) and **phrase-level structure** (1.56 Hz), in addition to the acoustic word rate.
 
 ---
 
@@ -119,7 +119,7 @@ Where:
 - ITPC ranges from 0 (random phase) to 1 (perfect phase coherence).
 
 **Interpretation:**
-- **High ITPC at Sentence Frequency (~0.065 Hz):** The brain is consistently tracking sentence-level structure across trials.
+- **High ITPC at Sentence Frequency (0.78 Hz):** The brain is consistently tracking sentence-level structure across trials.
 - **Low ITPC:** Neural responses are variable or absent.
 
 ### Why ITPC (Not Just Power)?
@@ -169,7 +169,7 @@ CON008,2025-08-14,language,"[10, 29, 19, 25, 15, 24, 12, 22, 16, 1, 8, 5]",17552
 
 **Metadata Needed:**
 - Word-level transcripts (e.g., "The cat sat on the mat").
-- Audio duration per word (~1.3s).
+- Audio duration per phrase file (~1.28s) containing 4 words.
 - Onset times of each word within the trial.
 
 **Action Item:** Create `stimulus_manifest.csv` mapping IDs to text content.
@@ -287,174 +287,56 @@ itpc_sentence_avg = np.mean(itpc_sentence, axis=1)  # Shape: (n_channels,)
 
 ### Phase 3: Statistical Thresholding & Significance
 
-#### Step 3.1: Baseline Comparison
+#### Step 3.1: Trial-Level Random Phase Scrambling (Permutation Testing)
 
-To determine if the ITPC is **significant**, compare it to a baseline (e.g., pre-stimulus period or shuffled trials):
+To determine if the ITPC is **significant**, we use a trial-level random phase scrambling permutation test (n=1000). By adding a random phase offset (uniform [0, 2π)) to each trial identically across all channels, we mathematically simulate circular-shifting the trials. This destroys stimulus-locked timing while preserving both the 1/f noise profile and the spatial covariance across electrodes.
 
-```python
-from scipy.stats import ttest_1samp
+#### Step 3.2: Spatial Cluster Permutation
 
-# Hypothesis: ITPC at sentence frequency > chance (0.1)
-threshold = 0.1
-t_stat, p_value = ttest_1samp(itpc_sentence_avg, threshold)
-
-print(f"T-statistic: {t_stat:.2f}, p-value: {p_value:.4f}")
-
-if p_value < 0.05:
-    print("Significant language tracking detected!")
-else:
-    print("No significant language tracking.")
-```
-
-#### Step 3.2: Cluster-Based Permutation Test (Advanced)
-
-For more robust statistics, use MNE's cluster permutation test to account for multiple comparisons:
-
-```python
-from mne.stats import permutation_cluster_1samp_test
-
-# Reshape for cluster test: (n_trials, n_channels * n_times)
-itpc_reshaped = itpc_sentence.reshape(len(epochs_list), -1)
-
-# Run cluster test
-T_obs, clusters, cluster_p_values, H0 = permutation_cluster_1samp_test(
-    itpc_reshaped, threshold={'start': 0, 'step': 0.2}, n_permutations=1000
-)
-
-print(f"Significant clusters: {np.sum(cluster_p_values < 0.05)}")
-```
+For channel selection, we use spatial cluster permutation on comprehension-frequency phase coherence. Channels belonging to spatial clusters significant at α < 0.05 are identified as the **Optimal** focus for that specific patient session.
 
 ---
 
 ## 🔍 Optimization Strategies
 
-### Challenge: Sparse Electrode Array
+### Focus Channel Selection
 
-**Problem:** Prior studies (e.g., Ding & Simon, 2012) used **128-256 electrodes**. We have only **16-20**.
+We evaluate four primary "Focus" channel sets:
+1. **Clinical:** Standard 10-20 system electrodes (20 channels).
+2. **LH (Left Hemisphere):** Channels over left-hemisphere language areas (F7, T7, P3, etc.).
+3. **RH (Right Hemisphere):** Channels over right-hemisphere areas.
+4. **Optimal:** Data-driven selection via spatial cluster permutation (identifies the most entrained cluster).
 
-**Our Optimization Approaches:**
+### Key Metrics
 
-#### 1. **Electrode Selection (Left-Hemisphere Focus)**
-
-**Strategy:** Focus on electrodes over **left-hemisphere language areas** for right-handed patients.
-
-```python
-# Define left-hemisphere language channels
-left_lang_channels = ['F7', 'T7', 'P7', 'F3', 'C3', 'P3']
-
-# Filter ITPC to these channels only
-left_lang_idx = [raw.ch_names.index(ch) for ch in left_lang_channels if ch in raw.ch_names]
-itpc_left = itpc_sentence_avg[left_lang_idx]
-
-# Average over left-hemisphere channels
-itpc_left_mean = np.mean(itpc_left)
-print(f"Left-hemisphere ITPC: {itpc_left_mean:.3f}")
-```
-
-#### 2. **Frequency Band Optimization**
-
-**Strategy:** Test multiple frequency bands to find the optimal window for sentence tracking.
-
-```python
-# Test different frequency ranges
-freq_bands = {
-    'sentence': (0.05, 0.08),   # Sentence-level
-    'phrase': (0.3, 0.5),        # Phrase-level (2-word chunks)
-    'word': (0.7, 0.9)           # Word-level
-}
-
-for band_name, (fmin, fmax) in freq_bands.items():
-    band_idx = (freqs >= fmin) & (freqs <= fmax)
-    itpc_band = np.mean(itpc[:, band_idx, :], axis=1)  # Average over freq band
-    itpc_band_avg = np.mean(itpc_band)
-    print(f"{band_name.capitalize()} ITPC: {itpc_band_avg:.3f}")
-```
-
-#### 3. **Artifact Rejection & Preprocessing**
-
-**Strategy:** Language trials are sensitive to high-frequency noise. Apply strict preprocessing.
-
-```python
-# Bandpass filter: 0.05 - 2 Hz (low-frequency envelope)
-raw_filtered = raw.copy().filter(l_freq=0.05, h_freq=2, method='iir')
-
-# Apply ICA to remove ocular artifacts
-from mne.preprocessing import ICA
-
-ica = ICA(n_components=15, random_state=42)
-ica.fit(raw_filtered, picks=picks)
-
-# Automatically detect eye blinks (if EOG channel available)
-ica.exclude = [0, 1]  # Typically components 0-1 are artifacts
-raw_clean = ica.apply(raw_filtered.copy())
-```
-
-#### 4. **Trial Averaging vs. Single-Trial Analysis**
-
-**Strategy:** Compare **grand average** (across all 72 trials) vs. **single-trial** ITPC.
-
-```python
-# Grand Average: High statistical power, but may miss variability
-itpc_grand_avg = np.mean(itpc_sentence_avg)
-
-# Single-Trial: Lower SNR, but captures individual variability
-itpc_trials = [np.mean(tfr_list[i].data) for i in range(len(tfr_list))]
-
-print(f"Grand Average ITPC: {itpc_grand_avg:.3f}")
-print(f"Single-Trial ITPC (std): {np.std(itpc_trials):.3f}")
-```
+- **ITPC (Sentence, Phrase, Word):** Absolute coherence at target frequencies.
+- **ITPC Comprehension:** Average of sentence and phrase ITPC.
+- **ratio_sent_phrase:** Ratio of sentence-rate to phrase-rate coherence.
+- **ratio_bw_normalized:** Bandwidth-normalized ratio (Sentence Density / Word Density).
+- **Lateralization Index:** (LH - RH) / (LH + RH) for each frequency band.
 
 ---
 
 ## 📊 Expected Outputs
 
-### 1. ITPC Topographic Map
+### 1. ITPC Topographic Map & TFR
 
-**Visualization:** Heatmap showing ITPC values across all electrodes.
+**Visualization:** Heatmap showing ITPC values across all electrodes and a Time-Frequency Representation.
+- **Dynamic vlim:** TFR and Topomap color scales are dynamically adjusted based on the 95th percentile of the data (vlim_max = 1.2 * 95th_percentile).
+- **Target Overlays:** White dashed/dotted lines overlayed on TFR at 0.78 Hz (Sentence), 1.56 Hz (Phrase), and 3.125 Hz (Word).
 
-```python
-import matplotlib.pyplot as plt
-from mne.viz import plot_topomap
+### 2. Per-Channel ITPC Bar Plot
 
-# Plot ITPC topography
-fig, ax = plt.subplots(1, 1, figsize=(6, 5))
-plot_topomap(itpc_sentence_avg, raw.info, axes=ax, show=False, 
-             cmap='RdBu_r', vlim=(0, 0.5), contours=6)
-ax.set_title('ITPC at Sentence Frequency (0.065 Hz)', fontsize=14)
-plt.colorbar(ax.images[0], ax=ax, label='ITPC')
-plt.tight_layout()
-plt.savefig('outputs/CON008_language_ITPC_topomap.png', dpi=300)
-```
+**Visualization:** Bar chart of per-channel ITPC at sentence, phrase, and word bands with a 1/sqrt(N) chance-level reference line.
 
-**Expected Pattern:**
-- **High ITPC** (red) over **left temporal/frontal** regions (T7, F7) for right-handed patients.
-- **Low ITPC** (blue) over occipital (visual) regions.
+### 3. Feature Table (Long Format)
 
-### 2. Time-Frequency ITPC Plot
-
-**Visualization:** Spectrogram showing how ITPC evolves over time and frequency.
-
-```python
-# Average ITPC over left-hemisphere channels
-itpc_left_tfr = np.mean(itpc[left_lang_idx, :, :], axis=0)
-
-# Plot
-fig, ax = plt.subplots(1, 1, figsize=(10, 6))
-im = ax.imshow(itpc_left_tfr, aspect='auto', origin='lower',
-               extent=[0, trial_duration, freqs[0], freqs[-1]], cmap='hot')
-ax.set_xlabel('Time (s)', fontsize=12)
-ax.set_ylabel('Frequency (Hz)', fontsize=12)
-ax.set_title('ITPC Time-Frequency Representation (Left Hemisphere)', fontsize=14)
-plt.colorbar(im, ax=ax, label='ITPC')
-plt.savefig('outputs/CON008_language_ITPC_tfr.png', dpi=300)
-```
-
-### 3. Feature Table
-
-| patient_id | n_trials | itpc_sentence | itpc_phrase | itpc_word | left_hem_itpc | p_value |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| CON008 | 72 | 0.32 | 0.18 | 0.12 | 0.38 | 0.002 |
-| CON009 | 72 | 0.29 | 0.21 | 0.15 | 0.35 | 0.008 |
+| patient_id | n_trials | focus | itpc_word | itpc_phrase | itpc_sentence | itpc_comprehension | dft_p_sentence |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| CON004 | 68 | clinical | 0.24 | 0.21 | 0.20 | 0.20 | 0.002 |
+| CON004 | 68 | lh | 0.34 | 0.21 | 0.24 | 0.22 | 0.001 |
+| CON008 | 68 | clinical | 0.42 | 0.22 | 0.07 | 0.14 | 0.858 |
+| CON008 | 68 | lh | 0.40 | 0.18 | 0.07 | 0.13 | 0.786 |
 
 ---
 
@@ -471,8 +353,9 @@ plt.savefig('outputs/CON008_language_ITPC_tfr.png', dpi=300)
 ### Expected Results (Control Data)
 
 For **awake, healthy control subjects**:
-- **ITPC at Sentence Frequency:** 0.25 - 0.45 (moderate to strong coherence).
-- **ITPC at Word Frequency:** 0.10 - 0.20 (weak; we want sentence-level tracking).
+- **ITPC at Sentence Frequency (~0.78 Hz):** 0.25 - 0.45 (moderate to strong coherence).
+- **ITPC at Phrase Frequency (~1.56 Hz):** Expect some entrainment due to 0.64s acoustic boundaries.
+- **ITPC at Word Frequency (~3.125 Hz):** Weak to moderate tracking of individual words.
 - **Topography:** Peak ITPC at **T7** (left temporal) and **F7** (left frontal).
 
 ### Red Flags (Indicates Pipeline Error)

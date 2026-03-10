@@ -16,52 +16,52 @@ The goal of **ENG-05** is to create a specialized pipeline for the **Language Tr
 
 ### Validated Workflow
 - **Data Loading**: Uses `UnifiedDataLoader.load_clean_epochs` to fetch pre-cleaned data from ENG-03.
-- **Language Processor**: `src/data_processing/language_optimization.py`
+- **Language Processor**: `src/pipelines/language_tracking.py` (inherits `BasePipeline`)
     - **Input**: Expects `ArtifactRejector` to have been run first (generates `-epo.fif` files).
-    - **Channel Selection**: Implements `select_optimal_channels` utilizing shared `src.utils.signal_processing.normalize_channel_names` logic for robust channel matching across systems. Prioritizes LH focus (F7, T7, P7, F3, C3, P3) and strictly validates focus inputs (`LH`, `RH`, `Clinical`).
-    - **Filtering**: Applies 0.5-30Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
-    - **Output**: Returns `mne.Epochs` restricted to optimal channels.
+    - **Channel Selection**: Implements `_select_optimal_channels` via spatial cluster permutation on comprehension-frequency coherence. Supports focus inputs (`LH`, `RH`, `Clinical`, `Optimal`).
+    - **Filtering**: Applies 0.02-25.0 Hz bandpass filter (`HIGHPASS_FREQ`, `LOWPASS_FREQ` constants).
+    - **Output**: Returns `pd.DataFrame` in long-format with ITPC metrics per focus.
 
 ### Key Decisions
-- **Strict Dependency on ENG-03**: The `LanguageProcessor` no longer processes raw EDFs directly. It strictly depends on the artifact rejection pipeline, ensuring separation of concerns (cleaning vs. analysis).
-- **Shared Utilities**: Channel name normalization logic was centralized in `src/utils/signal_processing.py` to be shared between `ArtifactRejector` and `LanguageProcessor`.
+- **Strict Dependency on ENG-03**: The `LanguageTrackingAnalysis` strictly depends on the artifact rejection pipeline.
+- **Hierarchical Frequency Selection**: Frequencies are precisely aligned to 0.78 Hz (Sentence), 1.56 Hz (Phrase), and 3.125 Hz (Word).
+- **Statistical Rigor**: Trial-level random phase scrambling is used for null distributions, ensuring p-values are calibrated against 1/f noise.
 
 ### Constraints & Limitations
-- **Filter Cutoff Note**: The default high-pass filter for `ArtifactRejector` (ENG-03) has been updated to **0.5 Hz** (previously 1.0 Hz) to support sentence-level frequency analysis (Delta band). While this enables the analysis, care should be taken to monitor ICA stability, as low-frequency drift can sometimes affect component separation. The `LanguageProcessor` continues to apply its own 0.5-30 Hz bandpass as a safety measure.
+- **Optimal Focus**: Requires significant spatial clusters to be identified via permutation testing; otherwise, it returns NaN for metrics.
 
 ### Verification & Analysis
-- **Unit Tests**: `tests/test_language_optimization.py` covers initialization, channel selection, filtering, and end-to-end processing with mocked `load_clean_epochs`.
-- **Pipeline Verification**: `eda/verify_language_optimization.py` validates the end-to-end flow on real patient data (CON008), checking channel counts, filter application, and epoch validity.
-- **Visualization**: `eda/visualize_language_optimization.py` generates diagnostic plots (Sensor Map, ERP, PSD, Spectrogram).
-- **Signal Quality**: `eda/analyze_language_signals.py` computes quantitative metrics (Amplitude ~8uV, 1/f spectral scaling) to confirm physiological plausibility.
+- **Unit Tests**: `tests/test_language_tracking.py` and `tests/test_language_tracking_morlet_pvals.py`.
+- **Visualization**: `src/viz/language_plots.py` provides TFR, Topomaps (with dynamic `vlim`), and per-channel bar plots.
 
-## 4. ITPC Analysis
+## 4. ITPC Analysis (Sokoliuk 2021 Implementation)
 ### Objectives
-- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of sentence structure.
-- **Statistical Validation**: Compare Sentence Band ITPC vs Word Band ITPC to distinguish linguistic processing from acoustic envelope tracking.
+- **Quantify Covert Speech**: Use Inter-Trial Phase Coherence (ITPC) to measure neural tracking of hierarchical language structure.
+- **Statistical Validation**: Use trial-level phase-scrambled permutation testing and spatial cluster permutation to identify significant entrainment.
 
 ### Implementation
-- **Core Logic**: `LanguageTrackingAnalysis.compute_itpc` uses Morlet wavelets; `compute_itpc_dft` provides DFT cross-validation.
-- **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.05-0.08 Hz, 4 Morlet bins) and `WORD_BAND` (0.70-0.90 Hz, 3 Morlet bins). Single-bin extraction was replaced after RCA revealed fragility to ICA-induced bin-level shifts.
-- **DFT Zero-Padding**: FFT zero-padded to 0.001 Hz resolution so the sentence band bins align correctly (raw 16s resolution of 0.0625 Hz caused 4% frequency error and spurious < 1.0 ratios).
-- **Batch Analysis**: `eda/run_itpc_analysis.py` orchestrates processing across subjects.
+- **Core Logic**: `LanguageTrackingAnalysis.analyze` orchestrates a two-phase architecture (per-channel computation followed by focus aggregation).
+- **Metric Extraction**: Band-averaged ITPC across `SENTENCE_BAND` (0.70-0.86 Hz), `PHRASE_BAND` (1.40-1.72 Hz), and `WORD_BAND` (2.81-3.44 Hz) using ±10% bandwidth.
+- **New Metrics**: Includes `ratio_sent_phrase` and `ratio_bw_normalized` (bandwidth-normalized ratio).
+- **DFT Zero-Padding**: FFT zero-padded to 0.01 Hz resolution to ensure bin alignment.
+- **Permutation Test**: n=1000 surrogates per session to calculate p-values for all linguistic levels.
 
 ### Verification Results
-- **Subjects**: `CON008` & `CON009` (68 trials each, LH focus).
-- **Finding**: All subjects/sources show **Sentence ITPC > Word ITPC** (Ratio 1.10-2.09), indicating hierarchical processing.
-- **Morlet ratios**: CON008 1.16-1.23, CON009 1.16-1.23.
-- **DFT ratios**: CON008 1.75-2.09, CON009 1.10-1.66.
-- **Visuals**: Topomaps confirm left-lateralized activation consistent with language networks.
+- **Subjects**: `CON008` & `CON009` (68-69 trials each, LH focus).
+- **Finding**: While previously single-bin misaligned extractions showed false Sentence > Word trends, utilizing the exact acoustic stimulus speeds (Sentence: ~0.78Hz, Phrase: ~1.56Hz, Word: ~3.125Hz) reveals strong entrainment mostly tracking acoustically salient bounds (Word + Phrase frequencies), with Sentence-level synchronization remaining weak or failing the robust mathematical phase-scrambling permutation test (`p > 0.05`).
+- **CON008 DFT**: Sentence (0.08, p=0.72), Phrase (0.14, p=0.17), Word (0.41, p<0.01). Strongest entrainment is at the direct acoustic word rate (3.125 Hz).
+- **CON009 DFT**: Sentence (0.06, p=0.98), Phrase (0.13, p=0.17), Word (0.16, p=0.06). Marginal significance tracking word acoustic structures, poor hierarchical processing.
+- **Visuals**: Topomaps and bar-charts automatically scale, accurately reflecting the localized low-SNR of higher tier hierarchies unless stimulus variations are completely controlled.
 
 ## 5. Definition of Done
 - [x] `src/pipelines/language_tracking.py` refactored from `LanguageProcessor` to `LanguageTrackingAnalysis`, inheriting `BasePipeline`.
-- [x] `load()`, `preprocess()`, `analyze()` pipeline methods implemented and CLI-integrated.
-- [x] Channel selection (`select_optimal_channels`) with LH/RH/Clinical focus and strict parameter validation.
+- [x] CLI-integrated standard executions `awakenai run language`.
+- [x] Channel selection (`select_optimal_channels`) with LH/RH/Clinical focus (using Fp1/Fp2).
 - [x] Unit tests in `tests/test_language_tracking.py` (14 passing).
 - [x] ITPC Analysis implemented: Morlet primary + DFT cross-validation.
-- [x] Band-averaged ITPC extraction (`SENTENCE_BAND`, `WORD_BAND`) replacing single-bin approach.
-- [x] DFT zero-padded to 0.001 Hz resolution to eliminate bin-mismatch artifact.
-- [x] All ratios > 1.0 confirmed on both CON008 and CON009 across BAK and NEW pipeline runs.
+- [x] Band-averaged ITPC extraction mapped perfectly to stimulation structure (0.78Hz, 1.56Hz, 3.125Hz).
+- [x] Formal statistical rigor built into the framework via intra-trial phase-scrambled permutation testing.
+- [x] Extracted measurements successfully logged persistently per patient under outputs.
 
 ## 6. Next Steps
 - **Group Statistics**: As N increases, run cluster-based permutation tests on the group level.
