@@ -175,6 +175,7 @@ def run_cmd(
     ] = None,
     # command-following specific
     alpha: Annotated[float, typer.Option("--alpha", help="Significance threshold for ERD test")] = 0.05,
+    report: Annotated[bool, typer.Option("--report", "-r", help="Generate HTML report with visualizations")] = False,
     # language specific
     focus: Annotated[str, typer.Option("--focus", help="Channel focus for language pipeline: LH or Clinical")] = "LH",
     # oddball specific
@@ -215,6 +216,7 @@ def run_cmd(
         patient_ids,
         session,
         alpha,
+        report,
         focus,
         parsed_electrodes,
         cf_runner,
@@ -261,6 +263,7 @@ def _dispatch_pipelines(
     patient_ids: list[str],
     session: Optional[str],
     alpha: float,
+    report: bool,
     focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
@@ -269,7 +272,7 @@ def _dispatch_pipelines(
 ) -> None:
     """Dispatch to each applicable pipeline runner."""
     if Pipeline.command_following in pipelines:
-        cf_runner.run(loader, patient_ids, session, alpha)
+        cf_runner.run(loader, patient_ids, session, alpha, report)
     if Pipeline.language in pipelines:
         lang_runner.run(loader, patient_ids, session, focus)
     if Pipeline.oddball in pipelines:

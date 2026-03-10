@@ -6,21 +6,19 @@ motor command/imagery tasks to identify Covert Command Following (CMD).
 
 Approach:
 - Each trial contains alternating 'keep' (motor imagery) and 'stop' (rest) commands
-- Events are deduplicated and paired: each keep is paired with its adjacent stop
-- ERD computed per-pair in dB: ERD_dB = 10 * log10(keep_power / stop_power)
-- Negative ERD_dB = power decrease during imagery (desynchronization)
-- Statistical testing: paired one-sided t-test + mixed effects model
+- Events are deduplicated and paired: each keep is paired with its adjacent stop (assumption: keep first)
+- Each segment spans from command onset to the next command onset (~12-13s)
+- ERD computed per-pair in dB: ERD_dB = stop_power - keep_power
+- Positive ERD_dB = power decrease during imagery (desynchronization) — literature convention
+- Statistical testing: paired one-sided t-test (H1: stop > keep) + mixed effects model
 - Classification: contralateral-first with effect size requirement
 """
 
 import logging
 import warnings
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
@@ -33,10 +31,10 @@ from src.data_loading import UnifiedDataLoader
 from src.pipelines.base import BasePipeline
 from src.utils.signal_processing import (
     calculate_band_power,
-    compute_band_envelope,
     compute_welch_psd,
 )
 from src.utils.time_utils import detect_timezone_offset, unix_to_edf
+from src.viz.command_following_viz import CommandFollowingVisualizer
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +50,9 @@ DEFAULT_BANDS: Dict[str, Tuple[float, float]] = {"Alpha": (8, 13), "Beta": (13, 
 ROI_CHANNELS: List[str] = ["C3", "C4", "Cz"]
 CONTRALATERAL_MAP = {"left": "C4", "right": "C3"}
 
-EPOCH_TRIM_START = 0.5  # seconds to skip at epoch start (audio onset + transition)
-EPOCH_TRIM_END = 0.1  # seconds to skip at epoch end (tail transition)
-MIN_EPOCH_DURATION = 1.5  # minimum usable epoch length after trimming
+EPOCH_TRIM_START = 0.5  # seconds to skip at segment start (audio onset + FIR edge)
+EPOCH_TRIM_END = 0.4  # seconds to skip at segment end (FIR edge artifacts)
+MIN_EPOCH_DURATION = 1.5  # minimum usable segment length after trimming (seconds)
 
 # ---------------------------------------------------------------------------
 # Visualization Constants
@@ -206,22 +204,50 @@ class CommandFollowingAnalysis(BasePipeline):
         alpha: float = 0.05,
     ) -> pd.DataFrame:
         """Run the full analysis pipeline for a patient (or single session)."""
-        self.patient_id = patient_id
-        events = self.loader.load_aligned_events(patient_id)
-        if session_id:
-            events = events[events["session_id"] == session_id]
-        self.aligned_events = events
-
         self.pairs = []
         self.erd_results = None
-
-        self.load()
-        self.preprocess()
-        return self.calculate_erd(bands=self.bands, alpha=alpha)
+        self.viz = CommandFollowingVisualizer(self.bands)
+        return super().run(patient_id, session_id=session_id, alpha=alpha)
 
     def analyze(self, alpha: float = 0.05, **kwargs) -> Any:
         """Delegate to domain-specific calculate_erd()."""
         return self.calculate_erd(bands=self.bands, alpha=alpha)
+
+    def get_stacked_epochs(self, side: str) -> Tuple[mne.EpochsArray, mne.EpochsArray]:
+        """Return stacked keep and stop EpochsArray objects for one command side.
+
+        Each CommandPair holds a single-epoch object whose duration varies slightly
+        (inter-command gap differs pair to pair). All pairs are trimmed to the
+        shortest common length before stacking so the resulting arrays are
+        rectangular — no padding that would distort PSD estimates.
+
+        A standard_1020 montage is applied here so that callers (e.g. report
+        visualizations) can immediately pass the result to plot_topomap, which
+        needs 3-D electrode positions for scalp interpolation.
+        """
+        side_pairs = [p for p in self.pairs if p.side == side]
+        if not side_pairs:
+            raise ValueError(f"No pairs found for side '{side}'. Run the pipeline first.")
+
+        info = side_pairs[0].keep.info
+        min_samples = min(
+            min(len(p.keep.times) for p in side_pairs),
+            min(len(p.stop.times) for p in side_pairs),
+        )
+
+        keep_data = np.array([p.keep.get_data(copy=False)[0, :, :min_samples] for p in side_pairs])
+        stop_data = np.array([p.stop.get_data(copy=False)[0, :, :min_samples] for p in side_pairs])
+
+        tmin = side_pairs[0].keep.times[0]
+        montage = mne.channels.make_standard_montage("standard_1020")
+
+        epochs_list = []
+        for epochs in (keep_data, stop_data):
+            epochs = mne.EpochsArray(epochs, info, tmin=tmin, verbose=False)
+            epochs.set_montage(montage, on_missing="ignore", verbose=False)
+            epochs_list.append(epochs)
+
+        return tuple(epochs_list)
 
     # ==================== Data Loading ====================
 
@@ -244,6 +270,8 @@ class CommandFollowingAnalysis(BasePipeline):
             if len(all_epochs) == 0:
                 continue
 
+            # .copy() before .pick() so that any future cache layer won't receive a mutated object.
+            all_epochs = all_epochs.copy()
             all_epochs.pick(self.roi_channels)
 
             session_trials = self.aligned_events[self.aligned_events["session_id"] == session_id]
@@ -304,9 +332,13 @@ class CommandFollowingAnalysis(BasePipeline):
         stop_positions = positions[1::2]
 
         pairs = []
-        for keep_pos, stop_pos in zip(keep_positions, stop_positions):
-            keep_seg = self._crop_segment(epochs, keep_pos, tz_offset)
-            stop_seg = self._crop_segment(epochs, stop_pos, tz_offset)
+        for k, (keep_pos, stop_pos) in enumerate(zip(keep_positions, stop_positions)):
+            # Keep window extends to the start of the adjacent stop command.
+            # Stop window extends to the start of the next keep command (or uses
+            # audio-only window for the last pair, which has no following keep).
+            keep_seg = self._crop_segment(epochs, keep_pos, tz_offset, segment_end_unix=stop_pos["start"])
+            stop_response_end = keep_positions[k + 1]["start"] if k + 1 < len(keep_positions) else None
+            stop_seg = self._crop_segment(epochs, stop_pos, tz_offset, segment_end_unix=stop_response_end)
 
             if keep_seg is None or stop_seg is None:
                 continue
@@ -329,26 +361,44 @@ class CommandFollowingAnalysis(BasePipeline):
         epochs: mne.Epochs,
         position: dict,
         tz_offset: float,
+        segment_end_unix: Optional[float] = None,
     ) -> Optional[mne.Epochs]:
         """Crop a single keep/stop segment from the trial epochs with transition trimming.
 
         Converts Unix timestamps to epoch-relative times, then uses Epochs.crop().
+
+        Args:
+            epochs: Single-epoch MNE object (from _find_matching_epoch).
+            position: Position dict with 'start' and 'end' Unix timestamps.
+            tz_offset: Timezone correction (seconds) from detect_timezone_offset.
+            segment_end_unix: If provided, crop to this Unix timestamp instead of
+                position['end']. Used to extend the window to the next command onset,
+                capturing the full response period (~12s) rather than just the
+                audio command window (~3s).
         """
         edf_start_unix = epochs.info["meas_date"].timestamp()
         event_edf_time = epochs.events[0, 0] / epochs.info["sfreq"]
 
         seg_start_edf = unix_to_edf(position["start"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset)
-        seg_end_edf = unix_to_edf(position["end"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset)
+        end_unix = segment_end_unix if segment_end_unix is not None else position["end"]
+        seg_end_edf = unix_to_edf(end_unix, edf_start_unix=edf_start_unix, timezone_offset=tz_offset)
 
         # Convert EDF-relative seconds to epoch-relative seconds
         tmin = (seg_start_edf - event_edf_time) + EPOCH_TRIM_START
         tmax = (seg_end_edf - event_edf_time) - EPOCH_TRIM_END
 
         if tmax - tmin < MIN_EPOCH_DURATION:
-            logger.debug(f"Segment too short after trimming: {tmax - tmin:.2f}s")
+            logger.debug("Segment too short after trimming: %.2fs (min=%.2fs)", tmax - tmin, MIN_EPOCH_DURATION)
             return None
 
         if tmin < epochs.times[0] or tmax > epochs.times[-1]:
+            logger.debug(
+                "Segment out of epoch bounds: tmin=%.2f tmax=%.2f epoch=[%.2f, %.2f]",
+                tmin,
+                tmax,
+                epochs.times[0],
+                epochs.times[-1],
+            )
             return None
 
         return epochs.copy().crop(tmin=tmin, tmax=tmax)
@@ -409,8 +459,8 @@ class CommandFollowingAnalysis(BasePipeline):
         """
         Calculate per-pair ERD in dB with paired one-sided t-test and mixed effects.
 
-        ERD_dB = 10 * log10(keep_power) - 10 * log10(stop_power)
-        Negative ERD_dB indicates desynchronization during motor imagery.
+        ERD_dB = stop_power_dB - keep_power_dB  (literature convention)
+        Positive ERD_dB indicates desynchronization during motor imagery (keep < stop).
         """
         if len(self.pairs) == 0:
             raise ValueError("No pairs loaded. Call load() first.")
@@ -454,11 +504,12 @@ class CommandFollowingAnalysis(BasePipeline):
                 keep_arr = np.array([kp[band_name][ch_idx] for kp in keep_powers])
                 stop_arr = np.array([sp[band_name][ch_idx] for sp in stop_powers])
 
-                erd_per_pair = keep_arr - stop_arr  # negative = desynchronization
+                # Positive = desynchronization during keep (literature convention)
+                erd_per_pair = stop_arr - keep_arr
                 mean_erd = np.mean(erd_per_pair)
 
-                # One-sided paired t-test: H1: keep < stop (erd_dB < 0)
-                _, p_val = stats.ttest_rel(keep_arr, stop_arr, alternative="less")
+                # One-sided paired t-test: H1: stop > keep (ERD_dB > 0)
+                _, p_val = stats.ttest_rel(stop_arr, keep_arr, alternative="greater")
                 d = compute_cohens_d(erd_per_pair)
 
                 # Mixed effects: accounts for within-trial correlation (epochs from
@@ -471,9 +522,12 @@ class CommandFollowingAnalysis(BasePipeline):
                         "side": side,
                         "channel": ch,
                         "band": band_name,
+                        "keep_mean_dB": float(np.mean(keep_arr)),
+                        "stop_mean_dB": float(np.mean(stop_arr)),
                         "erd_dB": mean_erd,
                         "erd_std": np.std(erd_per_pair, ddof=1) if len(pairs) > 1 else np.nan,
                         "n_pairs": len(pairs),
+                        "accuracy": float(np.mean(erd_per_pair > 0)),
                         "p_value_raw": p_val,
                         "cohens_d": d,
                         "p_mixed": p_mixed,
@@ -492,6 +546,12 @@ class CommandFollowingAnalysis(BasePipeline):
         n_unique_trials = len(set(trial_indices))
         if n_unique_trials < 2 or len(erd_values) < 3:
             return np.nan
+        if n_unique_trials < 3:
+            logger.warning(
+                "Mixed model has only %d unique trial groups — random-effect estimates "
+                "are unreliable with fewer than 3 groups. Interpret p_mixed cautiously.",
+                n_unique_trials,
+            )
 
         df = pd.DataFrame(
             {
@@ -512,17 +572,27 @@ class CommandFollowingAnalysis(BasePipeline):
 
     def generate_summary(
         self,
-        erd_threshold_dB: float = -1.0,
+        erd_threshold_dB: float = 1.0,
         d_threshold: float = 0.5,
     ) -> Dict[str, Any]:
-        """Generate classification summary from ERD results."""
+        """Generate classification summary from ERD results, including binomial chance level."""
         if self.erd_results is None or self.erd_results.empty:
             return {
                 "cmd_status": "ERROR: No results",
                 "n_pairs": 0,
+                "left_pairs": 0,
+                "right_pairs": 0,
                 "n_significant_contra": 0,
+                "classification_chance_level": 0.0,
                 "significant_results": [],
             }
+
+        n_pairs = len(self.pairs)
+        left_pairs = sum(1 for p in self.pairs if p.side == "left")
+        right_pairs = sum(1 for p in self.pairs if p.side == "right")
+
+        # Theoretical binomial chance level: minimum accuracy to beat random at alpha=0.05.
+        chance_level = stats.binom.ppf(0.95, n_pairs, 0.5) / n_pairs if n_pairs > 0 else 0.5
 
         df = self.erd_results
 
@@ -539,392 +609,18 @@ class CommandFollowingAnalysis(BasePipeline):
         sig_contra = df[
             (df["is_contralateral"])
             & (df["significant"])
-            & (df["erd_dB"] < erd_threshold_dB)
-            & (df["cohens_d"].abs() > d_threshold)
+            & (df["erd_dB"] > erd_threshold_dB)
+            & (df["cohens_d"] > d_threshold)
         ]
 
         is_cmd_positive = len(sig_contra) > 0
 
         return {
             "cmd_status": "CMD+" if is_cmd_positive else "CMD-",
-            "n_pairs": len(self.pairs),
+            "n_pairs": n_pairs,
+            "left_pairs": left_pairs,
+            "right_pairs": right_pairs,
             "n_significant_contra": len(sig_contra),
+            "classification_chance_level": chance_level,
             "significant_results": sig_contra.to_dict("records"),
         }
-
-    def _plot_erd_bar(self, df: pd.DataFrame) -> plt.Figure:
-        """Bar plot showing ERD (dB) by channel and frequency band, faceted by side."""
-        sides = df["side"].unique()
-        n_sides = len(sides)
-
-        if n_sides == 0:
-            return plt.figure()
-
-        # Create subplots: 1 row, n_sides columns
-        fig, axes = plt.subplots(1, n_sides, figsize=(6 * n_sides, 6), sharey=True, squeeze=False)
-        axes = axes.flatten()
-
-        for i, side in enumerate(sides):
-            side_df = df[df["side"] == side]
-            ax = axes[i]
-
-            sns.barplot(
-                data=side_df,
-                x="channel",
-                y="erd_dB",
-                hue="band",
-                palette="viridis",
-                ax=ax,
-            )
-
-            # Determine expected contralateral channel
-            contra_ch = CONTRALATERAL_MAP.get(side.lower())
-
-            # Add title indicating expected effect
-            ax.set_title(f"Command: {side.capitalize()}\n(Expect {contra_ch} Desync)")
-            ax.set_xlabel("Channel")
-            if i == 0:
-                ax.set_ylabel("ERD (dB)\n(Negative = Desynchronization)")
-            else:
-                ax.set_ylabel("")
-
-            # Add reference line at 0
-            ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-
-        plt.tight_layout()
-        return fig
-
-    def visualize_trial(
-        self,
-        trial_id: str,
-        save_path: Optional[str] = None,
-        show: bool = True,
-    ) -> Optional[plt.Figure]:
-        """
-        Plot a single command trial: DC channel + alpha/beta power with labeled regions.
-
-        Plots raw audio waveform to verify alignment and band power envelopes to visualize ERD.
-        """
-        if self.patient_id is None:
-            raise ValueError("Patient ID not set. Run .run() or set .patient_id first.")
-
-        if self.aligned_events is None:
-            self.aligned_events = self.loader.load_aligned_events(self.patient_id)
-
-        # Find the specific trial metadata
-        cmd_trials = self.aligned_events[self.aligned_events["trial_type"].str.contains("command")].reset_index(
-            drop=True
-        )
-
-        # Filter by requested trial ID
-        trial_matches = cmd_trials[cmd_trials["trial_id"] == trial_id]
-
-        if len(trial_matches) == 0:
-            logger.error(f"Trial ID {trial_id} not found among command trials.")
-            return None
-
-        trial = trial_matches.iloc[0]
-        date = trial["date"]
-        actual_type = trial["trial_type"]
-
-        # Load raw data for this specific trial's session
-        raw = self.loader.get_patient(self.patient_id).raw
-        if isinstance(raw, dict):
-            raw = raw.get(date)
-
-        if raw is None:
-            logger.error(f"Could not load raw data for {self.patient_id} on {date}")
-            return None
-
-        # Pre-calculate time conversions
-        edf_start_unix = raw.info["meas_date"].timestamp()
-
-        # We need session-specific events to get timezone offset
-        session_events = self.aligned_events[self.aligned_events["date"] == date]
-        tz_offset = detect_timezone_offset(raw, session_events)
-
-        trial_start_edf = unix_to_edf(trial["start_time"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset)
-        trial_end_edf = unix_to_edf(trial["end_time"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset)
-
-        # Crop to trial
-        raw_trial = raw.copy().crop(tmin=trial_start_edf, tmax=trial_end_edf)
-        sfreq = raw_trial.info["sfreq"]
-        times = raw_trial.times
-
-        # Extract events for plotting
-        raw_events = [
-            {
-                "event_start": e["event_start"],
-                "event_end": e["event_end"],
-                "correlation_score": e.get("correlation_score", 0),
-            }
-            for e in trial["sentences"]
-            if e.get("event_start") and e.get("event_end")
-        ]
-
-        positions = deduplicate_and_label(raw_events)
-
-        # Convert event times to trial-relative
-        events = []
-        for pos in positions:
-            start_rel = (
-                unix_to_edf(pos["start"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset) - trial_start_edf
-            )
-            end_rel = (
-                unix_to_edf(pos["end"], edf_start_unix=edf_start_unix, timezone_offset=tz_offset) - trial_start_edf
-            )
-            events.append({"start": max(0, start_rel), "end": min(raw_trial.times[-1], end_rel), "type": pos["type"]})
-
-        instruction_end = events[0]["start"] if events else 0
-
-        # Select channels
-        dc_channels = [ch for ch in raw_trial.ch_names if "DC" in ch.upper()]
-        dc_ch = "DC5" if "DC5" in raw_trial.ch_names else (dc_channels[0] if dc_channels else None)
-
-        side = actual_type.split("_")[0]
-        motor_ch = "C4" if side == "left" else "C3"
-        if motor_ch not in raw_trial.ch_names:
-            motor_ch = "C3" if motor_ch == "C4" else "C4"  # Fallback
-
-        # Get data
-        if dc_ch:
-            dc_data = raw_trial.get_data(picks=[dc_ch])[0]
-        else:
-            logger.warning(f"No DC channel found for trial {trial_id}, plotting flatline.")
-            dc_data = np.zeros_like(times)
-
-        motor_data = raw_trial.get_data(picks=[motor_ch])[0]
-
-        # Compute envelopes
-        alpha_env = compute_band_envelope(motor_data, sfreq, self.bands.get("Alpha", (8, 13)))
-        beta_env = compute_band_envelope(motor_data, sfreq, self.bands.get("Beta", (13, 30)))
-
-        # Plot
-        n_keep = sum(1 for e in events if e["type"] == "keep")
-        n_stop = sum(1 for e in events if e["type"] == "stop")
-
-        fig, axes = plt.subplots(3, 1, figsize=(18, 11), sharex=True)
-        fig.suptitle(
-            f"{self.patient_id} — {actual_type} (Trial {trial_id}) | {motor_ch} (contralateral)\n"
-            f"{n_keep} keep + {n_stop} stop events",
-            fontsize=13,
-            fontweight="bold",
-        )
-
-        # 1. Audio
-        axes[0].plot(times, dc_data, "k", linewidth=0.4, alpha=0.7)
-        axes[0].set_ylabel(f"{dc_ch or 'Audio'}")
-        axes[0].set_title("Audio Signal (DC Channel)")
-
-        # 2. Alpha
-        axes[1].plot(times, alpha_env, color="#2563eb", linewidth=0.8)
-        axes[1].set_ylabel(f"{motor_ch} Alpha ({self.bands['Alpha'][0]}–{self.bands['Alpha'][1]} Hz)")
-        axes[1].set_title("Alpha Band Power")
-
-        # 3. Beta
-        axes[2].plot(times, beta_env, color="#7c3aed", linewidth=0.8)
-        axes[2].set_ylabel(f"{motor_ch} Beta ({self.bands['Beta'][0]}–{self.bands['Beta'][1]} Hz)")
-        axes[2].set_xlabel("Time (seconds)")
-        axes[2].set_title("Beta Band Power")
-
-        # Highlights
-        if instruction_end > 0:
-            for ax in axes:
-                ax.axvspan(0, instruction_end, color=INSTRUCTION_COLOR, alpha=0.25)
-
-        for i, event in enumerate(events):
-            is_keep = event["type"] == "keep"
-            cmd_color = KEEP_COLOR if is_keep else STOP_COLOR
-
-            # Command audio window
-            for ax in axes:
-                ax.axvspan(event["start"], event["end"], color=cmd_color, alpha=0.3)
-
-            # Response period
-            if i < len(events) - 1:
-                resp_start = event["end"]
-                resp_end = events[i + 1]["start"]
-                resp_color = RESPONSE_KEEP_COLOR if is_keep else RESPONSE_STOP_COLOR
-                for ax in axes:
-                    ax.axvspan(resp_start, resp_end, color=resp_color, alpha=0.15)
-
-        patches = [
-            mpatches.Patch(color=INSTRUCTION_COLOR, alpha=0.25, label="Instruction"),
-            mpatches.Patch(color=KEEP_COLOR, alpha=0.3, label="KEEP command"),
-            mpatches.Patch(color=RESPONSE_KEEP_COLOR, alpha=0.3, label="KEEP response"),
-            mpatches.Patch(color=STOP_COLOR, alpha=0.3, label="STOP command"),
-            mpatches.Patch(color=RESPONSE_STOP_COLOR, alpha=0.3, label="STOP response"),
-        ]
-        axes[0].legend(handles=patches, loc="upper right", fontsize=8, ncol=2)
-
-        plt.tight_layout()
-
-        if save_path:
-            Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-            plt.savefig(save_path, dpi=150, bbox_inches="tight")
-            logger.info(f"Saved trial plot to {save_path}")
-
-        if show:
-            plt.show()
-        else:
-            plt.close(fig)
-
-        return fig
-
-    def visualize_summary(self, save_dir: Optional[Union[str, Path]] = None, show: bool = True) -> List[plt.Figure]:
-        """
-        Generate summary plots: Topomaps, Boxplots, and Bar charts of ERD results.
-        """
-        if self.erd_results is None or self.erd_results.empty:
-            logger.warning("No ERD results to visualize. Run calculate_erd() first.")
-            return []
-
-        figs = []
-        save_dir = Path(save_dir) if save_dir else None
-
-        # 1. ERD by Channel (Bar Plot)
-        fig_bar = self._plot_erd_bar(self.erd_results)
-        figs.append(fig_bar)
-        if save_dir:
-            fig_bar.savefig(save_dir / f"{self.patient_id}_erd_bar.png", dpi=300, bbox_inches="tight")
-
-        if not show:
-            plt.close(fig_bar)
-
-        # 2. Topomaps: Series (Before/After) for Keep and Stop
-        if self.pairs and hasattr(self.pairs[0].keep, "info"):
-            for band in self.bands:
-                for side in ["left", "right"]:
-                    # Check if we have data for this side
-                    start_pairs = [p for p in self.pairs if p.side == side]
-                    if not start_pairs:
-                        continue
-
-                    fig_series = self._plot_topomap_series(side, band)
-                    if fig_series:
-                        figs.append(fig_series)
-                        if save_dir:
-                            fig_series.savefig(
-                                save_dir / f"{self.patient_id}_topo_series_{side}_{band}.png",
-                                dpi=300,
-                                bbox_inches="tight",
-                            )
-                        if not show:
-                            plt.close(fig_series)
-
-        return figs
-
-    def _plot_topomap_series(self, side: str, band: str) -> Optional[plt.Figure]:
-        """Plot a series of topomaps: Before vs After for Keep and Stop conditions."""
-
-        # Filter pairs for this side
-        pairs = [p for p in self.pairs if p.side == side]
-        if not pairs:
-            return None
-
-        info = pairs[0].keep.info
-        band_freqs = self.bands[band]
-
-        # Define time windows (relative to epoch start)
-        # Assuming minimal epoch is ~1.5s.
-        # "Part 1" = Initial part of the command execution
-        # "Part 2" = Later part of the command execution
-        # Note: These are relative to the *cropped* command epoch, which captures the
-        # active command following period.
-
-        tmin = pairs[0].keep.times[0]
-        tmax = pairs[0].keep.times[-1]
-        midpoint = (tmin + tmax) / 2
-
-        windows = {"Part 1": (tmin, midpoint), "Part 2": (midpoint, tmax)}
-
-        conditions = ["keep", "stop"]
-        n_rows = len(conditions)
-        n_cols = len(windows)
-
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(4 * n_cols, 3.5 * n_rows))
-        fig.suptitle(f"Spatial Evolution ({side.capitalize()} {band})", fontsize=12, fontweight="bold")
-
-        # Prepare data containers
-        # We need to aggregate data across all pairs for this side
-        # Structure: condition -> window -> [values per channel]
-
-        for r, cond in enumerate(conditions):
-            for c, (win_name, (w_start, w_end)) in enumerate(windows.items()):
-                ax = axes[r, c] if n_rows > 1 else axes[c]
-
-                # aggregate power
-                power_values = []
-                for p in pairs:
-                    epoch = getattr(p, cond)
-                    # Crop logic: complex to crop every single epoch again.
-                    # Instead, get data and time-mask it.
-                    data = epoch.get_data(copy=False)[0]  # (n_channels, n_times)
-                    times = epoch.times
-                    mask = (times >= w_start) & (times <= w_end)
-
-                    if not np.any(mask):
-                        continue
-
-                    # Calculate band power for this segment
-                    # compute_welch_psd requires (n_channels, n_times)
-                    segment = data[:, mask]
-                    sfreq = epoch.info["sfreq"]
-
-                    freqs, psd = compute_welch_psd(segment, sfreq, n_per_seg=int(sfreq / 2))
-                    bp = calculate_band_power(psd, freqs, {band: band_freqs}, relative=False)[band]
-
-                    # Log transform for dB-like visualization (though raw power is fine for topo)
-                    # Let's use raw power but standardized? Or just log.
-                    # 10 * log10(power)
-                    bp_db = 10 * np.log10(bp + 1e-9)
-                    power_values.append(bp_db)
-
-                if not power_values:
-                    ax.text(0.5, 0.5, "No Data", ha="center", va="center")
-                    continue
-
-                # Average across pairs
-                avg_power = np.mean(np.array(power_values), axis=0)
-
-                # Plot using helper
-                self._plot_topomap(
-                    avg_power,
-                    info,
-                    ax=ax,
-                    title=f"{cond.capitalize()}: {win_name}\n({w_start:.1f}-{w_end:.1f}s)",
-                    vmin=None,
-                    vmax=None,
-                )
-
-        plt.tight_layout()
-        return fig
-
-    def _plot_topomap(
-        self,
-        values: np.ndarray,
-        info: mne.Info,
-        ax: plt.Axes,
-        title: str,
-        vmin: Optional[float] = None,
-        vmax: Optional[float] = None,
-    ) -> None:
-        """Helper to plot a single topomap on a given axes."""
-        if info.get_montage() is None:
-            try:
-                info.set_montage("standard_1020", match_case=False)
-            except Exception as e:
-                logger.warning(f"Failed to set montage: {e}")
-
-        mne.viz.plot_topomap(
-            values,
-            info,
-            axes=ax,
-            show=False,
-            cmap="viridis",
-            vlim=(vmin, vmax) if vmin is not None else (None, None),
-            contours=0,
-            image_interp="cubic",
-            sensors=True,
-        )
-        ax.set_title(title, fontsize=10)

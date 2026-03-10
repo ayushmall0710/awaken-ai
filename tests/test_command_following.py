@@ -25,8 +25,6 @@ class TestDeduplicateAndLabel:
             {"event_start": 30.0, "event_end": 40.0},
             {"event_start": 50.0, "event_end": 60.0},
         ]
-
-        # Should alternate Keep -> Stop -> Keep
         labeled = deduplicate_and_label(events, start_with="keep")
 
         assert len(labeled) == 3
@@ -120,138 +118,145 @@ class TestCommandFollowingAnalysis:
         # Verify it TRIED to load epochs for the trial type we put in aligned_events
         mock_loader.load_clean_epochs.assert_called_once()
 
-    def test_calculate_erd_basic(self, analysis_instance):
-        """Test ERD calculation with mock CommandPairs."""
-        # Create mock CommandPairs
+    def test_calculate_erd_positive_for_desynchronization(self, analysis_instance):
+        """ERD = stop_power − keep_power; positive when stop > keep (desynchronization).
+
+        Stop data is constructed with twice the amplitude of keep (4× the power),
+        so erd_dB = 10*log10(stop/keep) > 0.
+        """
         info = mne.create_info(["C3", "C4"], 100, "eeg")
-
-        # Create dummy epochs
-        # Task (Keep) has lower power than Baseline (Stop) for ERD
-        # Keep: Amplitude 1 (Power 1)
-        # Stop: Amplitude 2 (Power 4)
-        # ERD = 10 * log10(1/4) = -6.02 dB
-
-        # Use sine waves to ensure non-zero variance for cohens_d
         times = np.linspace(0, 3, 300)
 
-        # 5 pairs
         pairs = []
         for i in range(5):
-            # Keep data: sin wave amplitude 1 + small noise
-            keep_data = np.sin(2 * np.pi * 10 * times) * 1 + np.random.randn(2, 300) * 0.1
-            keep_data = keep_data[np.newaxis, :, :]  # (1, 2, 300)
-            keep_epoch = mne.EpochsArray(keep_data, info, tmin=0, verbose=False)
-
-            # Stop data: sin wave amplitude 2 + small noise
-            stop_data = np.sin(2 * np.pi * 10 * times) * 2 + np.random.randn(2, 300) * 0.1
-            stop_data = stop_data[np.newaxis, :, :]
-            stop_epoch = mne.EpochsArray(stop_data, info, tmin=0, verbose=False)
-
+            keep_data = (np.sin(2 * np.pi * 10 * times) * 1 + np.random.randn(2, 300) * 0.05)[np.newaxis]
+            stop_data = (np.sin(2 * np.pi * 10 * times) * 2 + np.random.randn(2, 300) * 0.05)[np.newaxis]
             pairs.append(
                 CommandPair(
-                    keep=keep_epoch,
-                    stop=stop_epoch,
+                    keep=mne.EpochsArray(keep_data, info, tmin=0, verbose=False),
+                    stop=mne.EpochsArray(stop_data, info, tmin=0, verbose=False),
                     side="left",
-                    trial_id=f"cft{i}",  # important for mixed model indexing
+                    trial_id=f"cft{i}",
                     keep_start=0,
                     stop_start=10,
                 )
             )
 
         analysis_instance.pairs = pairs
-
-        # Mock _run_mixed_model to return a dummy p-value since small data -> singular matrix
         analysis_instance._run_mixed_model = MagicMock(return_value=0.01)
 
-        # Run calculation
         erd_df = analysis_instance.calculate_erd()
 
         assert not erd_df.empty
         assert "erd_dB" in erd_df.columns
         assert "p_value" in erd_df.columns
-        # cohens_d might not be computed if variances are zero or strict checks
-        # But generally it should be there.
-        # The mocked data is random, so variance exists.
         assert "cohens_d" in erd_df.columns
 
-        # Check values roughly
-        # We expect significant negative ERD (desynchronization)
+        # stop amplitude 2 > keep amplitude 1 → erd_dB = stop_power − keep_power > 0
         left_c3 = erd_df[(erd_df.side == "left") & (erd_df.channel == "C3")]
-        # It's random data, so it might not be perfectly -6dB but should be negative on average
-        assert left_c3["erd_dB"].mean() < 0
+        assert left_c3["erd_dB"].mean() > 0
 
-    def test_generate_summary_structure(self, analysis_instance):
-        """Test that generate_summary produces the correct structure."""
-        # Mock erd_results
+    def test_generate_summary_cmd_positive(self, analysis_instance):
+        """CMD+ when a contralateral channel is significant with positive ERD and large effect."""
         df = pd.DataFrame(
             {
                 "side": ["left", "right"],
                 "channel": ["C3", "C4"],
                 "band": ["Alpha", "Alpha"],
-                "erd_dB": [-5.0, -0.5],
+                "erd_dB": [1.8, -0.5],  # C3 has strong positive ERD
                 "p_value": [0.01, 0.5],
                 "significant": [True, False],
-                "is_contralateral": [False, True],
-                "cohens_d": [-0.8, -0.1],
+                "is_contralateral": [True, False],
+                "cohens_d": [0.8, -0.1],  # positive = stop > keep
                 "p_value_raw": [0.01, 0.5],
             }
         )
         analysis_instance.erd_results = df
         analysis_instance.patient_id = "TEST_PAT"
+        analysis_instance.pairs = [MagicMock(side="left")] * 5 + [MagicMock(side="right")] * 5
 
         summary = analysis_instance.generate_summary()
-        # assert summary["patient_id"] == "TEST_PAT" # Key doesn't exist
-        assert summary["cmd_status"] in ["CMD+", "CMD-", "CMD?"]
-        assert "n_significant_contra" in summary
 
-    def test_plot_helpers(self, analysis_instance):
-        """Test that plotting helpers don't crash."""
-        # Mock pairs with minimal info for topomap
-        info = mne.create_info(["C3", "C4"], 100, "eeg")
-        info.set_montage("standard_1020")
+        assert summary["cmd_status"] == "CMD+"
+        assert summary["n_significant_contra"] == 1
+        assert "classification_chance_level" in summary
 
-        # Create epochs with sufficient duration (> 0.5s) to avoid empty segments
-        keep = mne.EpochsArray(np.zeros((1, 2, 200)), info, tmin=0, verbose=False)
-        stop = mne.EpochsArray(np.zeros((1, 2, 200)), info, tmin=0, verbose=False)
+    def test_generate_summary_cmd_negative(self, analysis_instance):
+        """CMD- when no contralateral channel meets all criteria."""
+        df = pd.DataFrame(
+            {
+                "side": ["left", "right"],
+                "channel": ["C3", "C4"],
+                "band": ["Alpha", "Alpha"],
+                "erd_dB": [0.3, -0.5],  # below erd_threshold_dB=1.0
+                "p_value": [0.2, 0.5],
+                "significant": [False, False],
+                "is_contralateral": [True, True],
+                "cohens_d": [0.2, -0.1],
+                "p_value_raw": [0.2, 0.5],
+            }
+        )
+        analysis_instance.erd_results = df
+        analysis_instance.patient_id = "TEST_PAT"
+        analysis_instance.pairs = [MagicMock()] * 6
 
-        pair = CommandPair(keep, stop, "left", 0, 0, 0)
-        analysis_instance.pairs = [pair]
-        analysis_instance.patient_id = "TEST"
+        summary = analysis_instance.generate_summary()
 
-        # Check _plot_topomap_series
-        # Should return None because all zeros -> no power? Or handle gracefuly.
-        # Mock plt.subplots to avoid display
-        with patch("matplotlib.pyplot.subplots") as mock_subplots:
-            mock_fig = MagicMock()
-            mock_ax = MagicMock()
-            mock_axes = MagicMock()
-            mock_axes.__getitem__.return_value = mock_ax
-            mock_subplots.return_value = (mock_fig, mock_axes)
+        assert summary["cmd_status"] == "CMD-"
+        assert summary["n_significant_contra"] == 0
 
-            # Mock mne.viz.plot_topomap to avoid actual plotting
-            with patch("mne.viz.plot_topomap"):
-                _ = analysis_instance._plot_topomap_series("left", "Alpha")
-                # If fig returned, good. If None returned (no data), also fine but function ran.
 
-    def test_montage_setting(self, analysis_instance):
-        """Verify standard montage is applied if missing."""
-        # Info without montage
-        info = mne.create_info(["C3"], 100, "eeg")
-        assert info.get_montage() is None
+class TestCommandFollowingVisualizer:
+    @pytest.fixture
+    def visualizer(self):
+        from src.viz.command_following_viz import CommandFollowingVisualizer
 
-        # Mock ax
-        mock_ax = MagicMock()
-        values = np.array([0.5])
+        return CommandFollowingVisualizer({"Alpha": (8.0, 13.0), "Beta": (13.0, 30.0)})
 
-        # Mock logger to suppress warnings
-        with patch("src.pipelines.command_following.logger"):
-            # Mock mne.viz.plot_topomap
-            with patch("mne.viz.plot_topomap"):
-                try:
-                    analysis_instance._plot_topomap(values, info, mock_ax, "Test")
-                except Exception:
-                    pass  # Expected to fail plotting with 1 channel if mne enforces it
+    def test_plot_erd_bar_returns_figure(self, visualizer):
+        """Bar chart renders without error for standard two-sided results."""
+        import matplotlib.pyplot as plt
 
-                # Verify set_montage was called or montage is now present
-                # Note: info.set_montage modifies in-place
-                assert info.get_montage() is not None
+        df = pd.DataFrame(
+            {
+                "side": ["left", "right"],
+                "channel": ["C4", "C3"],
+                "erd_dB": [1.5, -0.5],
+                "erd_std": [0.3, 0.2],
+                "band": ["Alpha", "Beta"],
+            }
+        )
+        cmap = {"left": "C4", "right": "C3"}
+        fig = visualizer.plot_erd_bar(df, cmap)
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_psd_overlay_returns_figure(self, visualizer, mock_epochs):
+        """PSD overlay returns a two-panel figure for a valid channel."""
+        import matplotlib.pyplot as plt
+
+        fig = visualizer.plot_psd_overlay(mock_epochs, mock_epochs, channel="C3", title="Test")
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    def test_plot_psd_overlay_missing_channel(self, visualizer, mock_epochs):
+        """Missing channel logs a warning and returns an empty figure — no crash."""
+        import matplotlib.pyplot as plt
+
+        fig = visualizer.plot_psd_overlay(mock_epochs, mock_epochs, channel="NONEXISTENT", title="Test")
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+    @patch("src.viz.command_following_viz.plt.colorbar")
+    @patch("mne.viz.plot_topomap")
+    def test_plot_topomap_returns_figure(self, mock_plot_topomap, mock_colorbar, visualizer, mock_epochs):
+        """Topomap renders with compute_welch_psd backend; mne.viz.plot_topomap is called."""
+        import matplotlib.pyplot as plt
+
+        mock_plot_topomap.return_value = (MagicMock(), MagicMock())
+
+        fig = visualizer.plot_topomap(mock_epochs, "Test Topo", fmin=8.0, fmax=13.0)
+
+        assert isinstance(fig, plt.Figure)
+        mock_plot_topomap.assert_called_once()
+        plt.close(fig)
