@@ -348,11 +348,12 @@ def build_status_badge(text: str, bg_color: str = "#16a34a", text_color: str = "
 
 
 def build_metric_cards(cards: List[Dict[str, str]]) -> str:
-    """Builds a row of metric cards. Each card is a dict with 'title', 'value', 'desc'."""
+    """Builds a row of metric cards. Each card is a dict with 'title', 'value', 'desc', and optional 'border_color'."""
     html = "<div class='metric-cards'>\n"
     for c in cards:
+        bcolor = c.get("border_color", UW_PURPLE)
         html += f"""
-        <div class="metric-card">
+        <div class="metric-card" style="border-top-color:{bcolor};">
             <div class="metric-card-title">{c.get("title", "")}</div>
             <div class="metric-card-value">{c.get("value", "")}</div>
             <div class="metric-card-desc">{c.get("desc", "")}</div>

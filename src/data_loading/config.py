@@ -47,6 +47,9 @@ QC_REPORTS_DIR = PROCESSED_DATA_DIR / "oddball_qc"
 # Report Directories (relative to LOCAL_DATA_ROOT)
 REPORTS_DIR = LOCAL_DATA_ROOT / "reports"
 
+REPORT_DIR_TEMPLATE = str(REPORTS_DIR / "{patient_id}" / "{session_id}" / "{pipeline_name}" / "{timestamp}")
+COMBINED_REPORT_DIR_TEMPLATE = str(REPORTS_DIR / "combined" / "{pipeline_name}" / "{timestamp}")
+
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
 SENTENCES_DIR = AUDIO_DIR / "sentences"

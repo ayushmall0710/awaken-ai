@@ -249,6 +249,12 @@ class CommandFollowingAnalysis(BasePipeline):
 
         return tuple(epochs_list)
 
+    # ==================== Channel Selection ====================
+
+    def _select_channels(self, epochs: mne.Epochs) -> None:
+        """Pick channels in-place. Override in subclasses to change channel scope."""
+        epochs.pick(self.roi_channels)
+
     # ==================== Data Loading ====================
 
     def load(self) -> None:
@@ -272,7 +278,7 @@ class CommandFollowingAnalysis(BasePipeline):
 
             # .copy() before .pick() so that any future cache layer won't receive a mutated object.
             all_epochs = all_epochs.copy()
-            all_epochs.pick(self.roi_channels)
+            self._select_channels(all_epochs)
 
             session_trials = self.aligned_events[self.aligned_events["session_id"] == session_id]
             tz_offset = detect_timezone_offset(all_epochs, session_trials)
