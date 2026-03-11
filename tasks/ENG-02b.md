@@ -114,6 +114,16 @@ data/processed/
 
 > 900ms epochs are not saved — they're re-sliced from ENG-03's 35s `.fif` on demand.
 
+### Oddball QC HTML Report
+
+A combined HTML QC report for the P300 oddball paradigm can be generated via:
+
+```bash
+awakenai run <patient_id> --pipeline oddball -r
+```
+
+It reads the three feature parquets (`p300_oddball_clinical`, `p300_oddball_electrode_detail`, `p300_oddball_mapping_qc`) and embeds the pre-generated plot PNGs from `plots/erp/`, producing `data/processed/reports/combined_oddball_qc.html`. The report includes metric cards (QC status, subtype, best electrode, epoch counts, mapping rate), clinical and electrode tables, a legend, and the ERP, topomap, and ERP-image figures. This is separate from the general ENG-06 QC report (`awakenai qc`), which covers multiple pipelines; the oddball QC report is P300-specific and parquet-driven.
+
 ### Metric Semantics
 
 **Primary P300 Metric**: The `diff_*` columns (difference wave amplitude/latency) are the **primary scientific metric** for P300, as they isolate the endogenous cognitive component by subtracting the standard (frequent) ERP from the rare (target) ERP. This eliminates the auditory N1-P2 envelope and exogenous noise that would otherwise contaminate peak measurements from the rare ERP alone.
