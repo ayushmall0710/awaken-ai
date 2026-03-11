@@ -7,7 +7,7 @@ from typing import Optional
 
 import typer
 
-from src.cli.cli_utils import print_table
+from src.cli.cli_utils import generate_pdf_from_html, print_report_paths, print_table
 from src.data_loading import UnifiedDataLoader
 from src.pipelines.command_following import CommandFollowingAnalysis
 from src.reports import style_utils
@@ -28,7 +28,7 @@ def run(
     session that ran successfully.
     """
     pipeline = CommandFollowingAnalysis()
-    generated_reports: list[tuple[str, str, Path]] = []
+    generated_reports: list[tuple[str, str, Path, Optional[Path]]] = []
 
     for pid in patient_ids:
         sessions = [session] if session else loader.get_patient(pid).list_session_ids()
@@ -45,18 +45,21 @@ def run(
 
                     if report:
                         cf_report = CommandFollowingReport(pipeline, session_id=sess)
+                        pdf_out = cf_report.report_file.with_suffix(".pdf")
                         style_utils.stitch_and_save(
                             [patient_panel, cf_report.build_session_html()],
                             output_path=cf_report.report_file,
                             title="Command Following",
                             generator_name="AwakenAI Capstone",
                             extra_css=cf_report._build_css_extensions(),
+                            pdf_path=pdf_out,
                         )
-                        generated_reports.append((pid, sess, cf_report.report_file))
+                        status = generate_pdf_from_html(cf_report.report_file, pdf_out)
+                        generated_reports.append((pid, sess, cf_report.report_file, pdf_out if status else None))
             except Exception as e:
                 typer.echo(f"  Failed: {e}", err=True)
 
     if report and generated_reports:
         typer.echo("\nGenerated Reports:")
-        for pid, sess, path in generated_reports:
-            typer.echo(f"  {pid} / {sess}: {path}")
+        for pid, sess, html_path, pdf_path in generated_reports:
+            print_report_paths(pid, sess, html_path=html_path, pdf_path=pdf_path)
