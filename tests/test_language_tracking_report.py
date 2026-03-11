@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.pipelines.language_tracking import LanguageConfig
 from src.reports.language_tracking_report import LanguageTrackingReport
 
 
@@ -17,6 +18,7 @@ def mock_pipeline():
     """Minimal mock LanguageTrackingAnalysis after analyze() has run."""
     pipeline = MagicMock()
     pipeline.patient_id = "CON008"
+    pipeline.cfg = LanguageConfig()
 
     pipeline.results = pd.DataFrame(
         [

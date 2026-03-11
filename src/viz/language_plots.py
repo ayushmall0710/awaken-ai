@@ -15,11 +15,13 @@ if TYPE_CHECKING:
     import mne
 
 import src.reports.style_utils as style_utils
-from src.pipelines.language_tracking import LanguageTrackingAnalysis
+from src.pipelines.language_tracking import LanguageConfig
 
-_TARGET_WORD_FREQ = LanguageTrackingAnalysis.TARGET_WORD_FREQ
-_TARGET_PHRASE_FREQ = LanguageTrackingAnalysis.TARGET_PHRASE_FREQ
-_TARGET_SENTENCE_FREQ = LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ
+_DEFAULT_CFG = LanguageConfig()
+
+_TARGET_WORD_FREQ = _DEFAULT_CFG.target_word_freq
+_TARGET_PHRASE_FREQ = _DEFAULT_CFG.target_phrase_freq
+_TARGET_SENTENCE_FREQ = _DEFAULT_CFG.target_sentence_freq
 
 _ITPC_TARGET_SPECS = [
     (_TARGET_WORD_FREQ, "Word", "#b2182b"),

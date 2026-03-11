@@ -9,7 +9,7 @@ import pandas as pd
 
 import src.reports.style_utils as style_utils
 from src.data_loading import config
-from src.pipelines.language_tracking import LanguageTrackingAnalysis
+from src.pipelines.language_tracking import LanguageConfig
 from src.viz.language_plots import (
     plot_focus_comparison_bar,
     plot_itpc_channel_bar,
@@ -21,11 +21,14 @@ from src.viz.language_plots import (
 
 logger = logging.getLogger(__name__)
 
+# Use default config for static labels/metrics
+_DEFAULT_CFG = LanguageConfig()
+
 _ENTRAINMENT_COLS = [
     ("Focus", "focus"),
-    (f"Word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz)", "itpc_word"),
-    (f"Phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz)", "itpc_phrase"),
-    (f"Sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz)", "itpc_sentence"),
+    (f"Word ({_DEFAULT_CFG.target_word_freq} Hz)", "itpc_word"),
+    (f"Phrase ({_DEFAULT_CFG.target_phrase_freq} Hz)", "itpc_phrase"),
+    (f"Sentence ({_DEFAULT_CFG.target_sentence_freq} Hz)", "itpc_sentence"),
     ("Comprehension", "itpc_comprehension"),
     ("Ratio S/W", "ratio_sent_word"),
     ("Ratio S/P", "ratio_sent_phrase"),
@@ -34,15 +37,15 @@ _ENTRAINMENT_COLS = [
 
 
 _TARGET_FREQS = [
-    (LanguageTrackingAnalysis.TARGET_WORD_FREQ, "Word"),
-    (LanguageTrackingAnalysis.TARGET_PHRASE_FREQ, "Phrase"),
-    (LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ, "Sentence"),
+    (_DEFAULT_CFG.target_word_freq, "Word"),
+    (_DEFAULT_CFG.target_phrase_freq, "Phrase"),
+    (_DEFAULT_CFG.target_sentence_freq, "Sentence"),
 ]
 
 _MORLET_METRICS = {
-    "freq_sentence_hz": LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ,
-    "freq_phrase_hz": LanguageTrackingAnalysis.TARGET_PHRASE_FREQ,
-    "freq_word_hz": LanguageTrackingAnalysis.TARGET_WORD_FREQ,
+    "freq_sentence_hz": _DEFAULT_CFG.target_sentence_freq,
+    "freq_phrase_hz": _DEFAULT_CFG.target_phrase_freq,
+    "freq_word_hz": _DEFAULT_CFG.target_word_freq,
 }
 
 _MORLET_COLS = [
@@ -93,7 +96,8 @@ class LanguageTrackingReport:
         paths["focus_comparison"] = plot_focus_comparison_bar(res, pid, self.output_dir)
 
         # 2. Per-Focus Plots (Clinical, LH, RH, and Optimal)
-        word_idx = int(np.argmin(np.abs(freqs_full - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
+        cfg = getattr(self.lt_obj, "cfg", _DEFAULT_CFG)
+        word_idx = int(np.argmin(np.abs(freqs_full - cfg.target_word_freq)))
         vmax = max(float(np.percentile(spectrum_full[:, word_idx], 95)) * 1.2, 0.1)
         vlim = (0.0, vmax)
 
@@ -158,14 +162,14 @@ class LanguageTrackingReport:
                     str(self.output_dir),
                     int(clinical_row["n_trials"]),
                     self.lt_obj._morlet_itc.freqs,
-                    LanguageTrackingAnalysis.SENTENCE_BAND,
-                    LanguageTrackingAnalysis.PHRASE_BAND,
-                    LanguageTrackingAnalysis.WORD_BAND,
+                    cfg.sentence_band,
+                    cfg.phrase_band,
+                    cfg.word_band,
                 )
                 morlet_spectrum = np.mean(morlet_data, axis=-1)  # (n_channels, n_freqs)
                 morlet_freqs = self.lt_obj._morlet_itc.freqs
 
-                morlet_word_idx = int(np.argmin(np.abs(morlet_freqs - LanguageTrackingAnalysis.TARGET_WORD_FREQ)))
+                morlet_word_idx = int(np.argmin(np.abs(morlet_freqs - cfg.target_word_freq)))
                 morlet_vmax = max(float(np.percentile(morlet_spectrum[:, morlet_word_idx], 95)) * 1.2, 0.1)
                 morlet_vlim = (0.0, morlet_vmax)
 
@@ -196,9 +200,9 @@ class LanguageTrackingReport:
                     str(self.output_dir),
                     int(clinical_row["n_trials"]),
                     freqs_full,
-                    LanguageTrackingAnalysis.SENTENCE_BAND,
-                    LanguageTrackingAnalysis.PHRASE_BAND,
-                    LanguageTrackingAnalysis.WORD_BAND,
+                    cfg.sentence_band,
+                    cfg.phrase_band,
+                    cfg.word_band,
                     method_label="DFT",
                 )
         except Exception as e:
@@ -402,19 +406,19 @@ class LanguageTrackingReport:
 
         rates = [
             (
-                f"Word ({LanguageTrackingAnalysis.TARGET_WORD_FREQ} Hz)",
+                f"Word ({_DEFAULT_CFG.target_word_freq} Hz)",
                 "lh_itpc_word",
                 "rh_itpc_word",
                 "lateralization_index_word",
             ),
             (
-                f"Phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz)",
+                f"Phrase ({_DEFAULT_CFG.target_phrase_freq} Hz)",
                 "lh_itpc_phrase",
                 "rh_itpc_phrase",
                 "lateralization_index_phrase",
             ),
             (
-                f"Sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz)",
+                f"Sentence ({_DEFAULT_CFG.target_sentence_freq} Hz)",
                 "lh_itpc_sentence",
                 "rh_itpc_sentence",
                 "lateralization_index_sentence",
@@ -473,9 +477,9 @@ class LanguageTrackingReport:
             # Build Topo Grid (3 columns horizontally)
             topo_cards = []
             targets = [
-                (LanguageTrackingAnalysis.TARGET_WORD_FREQ, "Word"),
-                (LanguageTrackingAnalysis.TARGET_PHRASE_FREQ, "Phrase"),
-                (LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ, "Sentence"),
+                (_DEFAULT_CFG.target_word_freq, "Word"),
+                (_DEFAULT_CFG.target_phrase_freq, "Phrase"),
+                (_DEFAULT_CFG.target_sentence_freq, "Sentence"),
             ]
 
             # Use same order as in _save_plots to match keys
@@ -571,8 +575,8 @@ class LanguageTrackingReport:
             {
                 "term": "itpc_comprehension",
                 "desc": (
-                    f"Average of phrase ({LanguageTrackingAnalysis.TARGET_PHRASE_FREQ} Hz) and "
-                    f"sentence ({LanguageTrackingAnalysis.TARGET_SENTENCE_FREQ} Hz) ITPC. "
+                    f"Average of phrase ({_DEFAULT_CFG.target_phrase_freq} Hz) and "
+                    f"sentence ({_DEFAULT_CFG.target_sentence_freq} Hz) ITPC. "
                     "These rates have no acoustic correlate in the stimulus envelope &mdash; "
                     "entrainment here reflects top-down cognitive speech comprehension (Sokoliuk 2021)."
                 ),
