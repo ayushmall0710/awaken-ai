@@ -1,5 +1,6 @@
 """Utility functions for HTML report styling and generation across AwakenAI pipelines."""
 
+import base64
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -183,7 +184,7 @@ def render_uw_css() -> str:
         cursor: pointer;
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
     }}
     details.session-wrapper > summary::-webkit-details-marker {{ display: none; }}
     details.session-wrapper > summary::marker {{ display: none; }}
@@ -192,10 +193,42 @@ def render_uw_css() -> str:
         color: {TEXT_MUTED};
         transition: transform 0.35s ease;
         user-select: none;
-        padding: 0 0.25rem;
+        padding: 0 0.5rem 0 0;
     }}
     details.session-wrapper[open] .session-toggle-arrow {{
         transform: rotate(180deg);
+    }}
+
+    /* Plot styles */
+    .plot-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .topo-grid {{
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .plot-card {{
+        background: {WHITE};
+        border: 1px solid {BORDER_LIGHT};
+        border-radius: 6px;
+        padding: 0.75rem;
+        text-align: center;
+    }}
+    .plot-card figcaption {{
+        font-size: 0.8rem;
+        color: {CARD_TEXT_MUTED};
+        margin-top: 0.4rem;
+    }}
+    .plot-caption-muted {{
+        font-size: 0.8rem;
+        color: {CARD_TEXT_MUTED};
+        text-align: center;
+        margin-top: 0.5rem;
     }}
 
     /* Universal image download button */
@@ -279,7 +312,7 @@ def build_session_panel(session_id: str, collapsible: bool = False) -> str:
 
     if collapsible:
         arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
-        return f"<summary class='session-header' style='{shared_style}'>{label}{arrow}</summary>"
+        return f"<summary class='session-header' style='{shared_style}'>{arrow}{label}</summary>"
     return f"<div class='session-header' style='{shared_style}'>{label}</div>"
 
 
@@ -302,7 +335,7 @@ def build_collapsible_panel(title: str, content: str, open_default: bool = False
     label = f"<h3 style='margin:0;font-size:1.1rem;color:{UW_PURPLE};'>{title}</h3>"
     arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
 
-    header = f"<summary class='session-header' style='{shared_style}'>{label}{arrow}</summary>"
+    header = f"<summary class='session-header' style='{shared_style}'>{arrow}{label}</summary>"
     content_div = f"<div class='session-content' style='border-radius:0 0 8px 8px;'>{content}</div>"
 
     return f"<details class='session-wrapper'{open_attr}>\n{header}\n{content_div}\n</details>"
@@ -454,3 +487,17 @@ def build_legend_box(title: str, items: List[Dict[str, Any]]) -> str:
     </div>
 """
     return html
+
+
+def embed_image(path: Path, alt: str = "") -> str:
+    """Read a PNG file and return a base64-encoded <img> tag."""
+    try:
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"<img src='data:image/png;base64,{b64}' alt='{alt}' style='width:100%;max-width:100%;' />"
+    except (FileNotFoundError, OSError):
+        return f"<p><em>Plot unavailable: {alt}</em></p>"
+
+
+def build_plot_card(img_html: str, caption: str) -> str:
+    """Wrap an <img> tag in a plot-card with a figcaption."""
+    return f"<div class='plot-card'>{img_html}<figcaption>{caption}</figcaption></div>"
