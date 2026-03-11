@@ -27,7 +27,7 @@ def run(
             typer.echo(f"[language] {pid} / {sess} ...")
             pipeline = LanguageTrackingAnalysis(loader=loader, session_id=sess)
             try:
-                df = pipeline.run(pid)
+                df = pipeline.run(pid, sess)
                 if not df.empty:
                     print_table(df, title=f"{pid} / {sess} — Language Tracking Results")
 

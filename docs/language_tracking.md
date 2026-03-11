@@ -291,13 +291,53 @@ itpc_sentence_avg = np.mean(itpc_sentence, axis=1)  # Shape: (n_channels,)
 
 To determine if the ITPC is **significant**, we use a trial-level random phase scrambling permutation test (n=1000). By adding a random phase offset (uniform [0, 2π)) to each trial identically across all channels, we mathematically simulate circular-shifting the trials. This destroys stimulus-locked timing while preserving both the 1/f noise profile and the spatial covariance across electrodes.
 
+For a simple single-channel sanity check, a one-sample t-test against the theoretical chance level `1/sqrt(N)` can also be used:
+
+```python
+from scipy.stats import ttest_1samp
+import numpy as np
+
+# Theoretical chance level: 1/sqrt(N_trials)
+chance_level = 1 / np.sqrt(len(epochs_list))
+t_stat, p_value = ttest_1samp(itpc_sentence_avg, chance_level)
+
+print(f"T-statistic: {t_stat:.2f}, p-value: {p_value:.4f}")
+
+if p_value < 0.05:
+    print("Significant language tracking detected!")
+else:
+    print("No significant language tracking.")
+```
+
 #### Step 3.2: Spatial Cluster Permutation
 
 For channel selection, we use spatial cluster permutation on comprehension-frequency phase coherence. Channels belonging to spatial clusters significant at α < 0.05 are identified as the **Optimal** focus for that specific patient session.
 
+For more robust statistics that account for multiple comparisons across channels, MNE's cluster permutation test can also be applied:
+
+```python
+from mne.stats import permutation_cluster_1samp_test
+
+# Reshape for cluster test: (n_trials, n_channels * n_times)
+itpc_reshaped = itpc_sentence.reshape(len(epochs_list), -1)
+
+# Run cluster test
+T_obs, clusters, cluster_p_values, H0 = permutation_cluster_1samp_test(
+    itpc_reshaped, threshold={'start': 0, 'step': 0.2}, n_permutations=1000
+)
+
+print(f"Significant clusters: {np.sum(cluster_p_values < 0.05)}")
+```
+
 ---
 
 ## 🔍 Optimization Strategies
+
+### Challenge: Sparse Electrode Array
+
+**Problem:** Prior studies (e.g., Ding & Simon, 2012) used **128-256 electrodes**. We have only **16-20**.
+
+**Our Optimization Approaches:**
 
 ### Focus Channel Selection
 
@@ -306,6 +346,74 @@ We evaluate four primary "Focus" channel sets:
 2. **LH (Left Hemisphere):** Channels over left-hemisphere language areas (F7, T7, P3, etc.).
 3. **RH (Right Hemisphere):** Channels over right-hemisphere areas.
 4. **Optimal:** Data-driven selection via spatial cluster permutation (identifies the most entrained cluster).
+
+#### Left-Hemisphere Focus (Code Example)
+
+```python
+# Define left-hemisphere language channels
+left_lang_channels = ['F7', 'T7', 'Fp1', 'F3', 'C3', 'P3']
+
+# Filter ITPC to these channels only
+left_lang_idx = [raw.ch_names.index(ch) for ch in left_lang_channels if ch in raw.ch_names]
+itpc_left = itpc_sentence_avg[left_lang_idx]
+
+# Average over left-hemisphere channels
+itpc_left_mean = np.mean(itpc_left)
+print(f"Left-hemisphere ITPC: {itpc_left_mean:.3f}")
+```
+
+#### Frequency Band Optimization
+
+Test multiple frequency bands to find the optimal window for sentence tracking:
+
+```python
+# Test different frequency ranges
+freq_bands = {
+    'sentence': (0.65, 0.90),   # Sentence-level (~0.78 Hz)
+    'phrase':   (1.40, 1.70),   # Phrase-level (~1.56 Hz)
+    'word':     (2.80, 3.40)    # Word-level (~3.125 Hz)
+}
+
+for band_name, (fmin, fmax) in freq_bands.items():
+    band_idx = (freqs >= fmin) & (freqs <= fmax)
+    itpc_band = np.mean(itpc[:, band_idx, :], axis=1)  # Average over freq band
+    itpc_band_avg = np.mean(itpc_band)
+    print(f"{band_name.capitalize()} ITPC: {itpc_band_avg:.3f}")
+```
+
+#### Artifact Rejection & Preprocessing
+
+Language trials are sensitive to high-frequency noise. Apply strict preprocessing:
+
+```python
+# Bandpass filter: 0.5 - 4 Hz (covers sentence, phrase, and word rates)
+raw_filtered = raw.copy().filter(l_freq=0.5, h_freq=4, method='iir')
+
+# Apply ICA to remove ocular artifacts
+from mne.preprocessing import ICA
+
+ica = ICA(n_components=15, random_state=42)
+ica.fit(raw_filtered, picks=picks)
+
+# Automatically detect eye blinks (if EOG channel available)
+ica.exclude = [0, 1]  # Typically components 0-1 are artifacts
+raw_clean = ica.apply(raw_filtered.copy())
+```
+
+#### Trial Averaging vs. Single-Trial Analysis
+
+Compare **grand average** (across all trials) vs. **single-trial** ITPC:
+
+```python
+# Grand Average: High statistical power, but may miss variability
+itpc_grand_avg = np.mean(itpc_sentence_avg)
+
+# Single-Trial: Lower SNR, but captures individual variability
+itpc_trials = [np.mean(tfr_list[i].data) for i in range(len(tfr_list))]
+
+print(f"Grand Average ITPC: {itpc_grand_avg:.3f}")
+print(f"Single-Trial ITPC (std): {np.std(itpc_trials):.3f}")
+```
 
 ### Key Metrics
 
