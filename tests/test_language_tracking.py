@@ -8,7 +8,7 @@ import mne
 import numpy as np
 import pytest
 
-from src.pipelines.language_tracking import LanguageTrackingAnalysis
+from src.pipelines.language_tracking import ITPCProcessor, LanguageConfig, LanguageTrackingAnalysis, PermutationEngine
 
 
 @pytest.fixture
@@ -79,6 +79,48 @@ def itpc_epochs():
     return mne.EpochsArray(data, info, events=events, event_id=event_id, tmin=0)
 
 
+# --- Helper Classes ---
+
+
+def test_language_config_defaults():
+    """Verify default values in LanguageConfig."""
+    cfg = LanguageConfig()
+    assert cfg.highpass_freq == 0.02
+    assert cfg.target_sfreq == 256.0
+    assert cfg.sentence_band[0] < cfg.target_sentence_freq < cfg.sentence_band[1]
+
+
+def test_itpc_processor_dft():
+    """Verify DFT ITPC calculation on synthetic data."""
+    sfreq = 100.0
+    n_trials = 10
+    n_samples = 1000
+    t = np.arange(n_samples) / sfreq
+
+    # 1 Hz signal with consistent phase across trials
+    data = np.array([np.sin(2 * np.pi * 1.0 * t) for _ in range(n_trials)])
+    data = np.stack([data, data], axis=1)  # (n_trials, n_channels, n_samples)
+
+    itpc, freqs = ITPCProcessor.compute_dft_itpc(data, sfreq)
+
+    # Find bin for 1 Hz
+    idx = np.argmin(np.abs(freqs - 1.0))
+    assert itpc[0, idx] > 0.99  # Should be near 1.0 for consistent phase
+
+
+def test_permutation_engine():
+    """Verify null distribution generation shape and bounds."""
+    rng = np.random.default_rng(42)
+    n_trials, n_channels = 10, 5
+    unit_vectors = np.exp(1j * rng.uniform(0, 2 * np.pi, size=(n_trials, n_channels)))
+
+    null_dist = PermutationEngine.generate_null_distribution(unit_vectors, n_permutations=100, rng=rng)
+
+    assert null_dist.shape == (100, n_channels)
+    assert np.all(null_dist >= 0)
+    assert np.all(null_dist <= 1.0)
+
+
 @pytest.fixture
 def mock_loader(mock_language_epochs):
     """Mock UnifiedDataLoader."""
@@ -113,7 +155,8 @@ def test_load_and_preprocess_success(mock_loader):
     processor.preprocess()
 
     assert processor.epochs is not None
-    # mne.EpochsArray does not inherit from mne.Epochs, but both share BaseEpochs (which is not always easy to import)
+    # mne.EpochsArray does not inherit from mne.Epochs, but both share
+    # BaseEpochs (which is not always easy to import)
     # So we just check if it looks like epochs
     assert len(processor.epochs) == 3
     mock_loader.load_clean_epochs.assert_called_with("TEST", "2024-01-01", trial_type="language")
@@ -156,16 +199,16 @@ def test_preprocess_signal(mock_language_epochs):
 
     filtered = processor._preprocess_signal(mock_language_epochs)
 
-    assert filtered.info["highpass"] == pytest.approx(processor.HIGHPASS_FREQ, abs=0.01)
-    assert filtered.info["lowpass"] == pytest.approx(processor.LOWPASS_FREQ, abs=0.1)
-    # Input is 1000 Hz -- should be downsampled to TARGET_SFREQ
-    assert filtered.info["sfreq"] == processor.TARGET_SFREQ
+    assert filtered.info["highpass"] == pytest.approx(processor.cfg.highpass_freq, abs=0.01)
+    assert filtered.info["lowpass"] == pytest.approx(processor.cfg.lowpass_freq, abs=0.1)
+    # Input is 1000 Hz -- should be downsampled to target_sfreq
+    assert filtered.info["sfreq"] == processor.cfg.target_sfreq
 
 
 def test_preprocess_signal_no_downsample(itpc_epochs):
     """_preprocess_signal should skip resampling when already at target or below."""
     processor = LanguageTrackingAnalysis(MagicMock())
-    # itpc_epochs is already at 256 Hz (TARGET_SFREQ), so no resampling should occur.
+    # itpc_epochs is already at 256 Hz (target_sfreq), so no resampling should occur.
     filtered = processor._preprocess_signal(itpc_epochs)
     assert filtered.info["sfreq"] == 256.0
 
@@ -179,7 +222,7 @@ def test_compute_itpc_returns_data_and_itc(itpc_epochs):
     itpc_data, itc_obj = processor._compute_itpc(itpc_epochs)
 
     n_channels = len(itpc_epochs.ch_names)
-    n_freqs = len(processor.ITPC_FREQS)
+    n_freqs = len(processor.cfg.itpc_freqs)
 
     assert isinstance(itpc_data, np.ndarray)
     # Shape must be (n_channels, n_freqs, n_times)
@@ -214,13 +257,13 @@ def test_compute_itpc_dft_returns_spectrum(itpc_epochs):
     assert itpc_spectrum.shape[1] == len(freqs)
     assert np.all(itpc_spectrum >= 0)
     assert np.all(itpc_spectrum <= 1)
-    # Zero-padding must achieve DFT_FREQ_RESOLUTION (0.01 Hz) or finer.
-    assert freqs[1] - freqs[0] <= processor.DFT_FREQ_RESOLUTION + 1e-9
+    # Zero-padding must achieve dft_freq_resolution (0.01 Hz) or finer.
+    assert freqs[1] - freqs[0] <= processor.cfg.dft_freq_resolution + 1e-9
     # Sentence and word rate bins must be within half a bin of their targets.
-    i_sent = np.argmin(np.abs(freqs - processor.TARGET_SENTENCE_FREQ))
-    i_word = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
-    assert abs(freqs[i_sent] - processor.TARGET_SENTENCE_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
-    assert abs(freqs[i_word] - processor.TARGET_WORD_FREQ) <= processor.DFT_FREQ_RESOLUTION / 2 + 1e-9
+    i_sent = np.argmin(np.abs(freqs - processor.cfg.target_sentence_freq))
+    i_word = np.argmin(np.abs(freqs - processor.cfg.target_word_freq))
+    assert abs(freqs[i_sent] - processor.cfg.target_sentence_freq) <= processor.cfg.dft_freq_resolution / 2 + 1e-9
+    assert abs(freqs[i_word] - processor.cfg.target_word_freq) <= processor.cfg.dft_freq_resolution / 2 + 1e-9
 
 
 # --- Metrics ---
@@ -258,14 +301,17 @@ def test_extract_itpc_metrics_zero_word():
 
 
 def test_band_averaging_uses_multiple_bins(itpc_epochs):
-    """_extract_itpc_metrics averages across all bins in SENTENCE_BAND, not just one."""
+    """
+    _extract_itpc_metrics averages across all bins in sentence_band, not just one.
+    """
     processor = LanguageTrackingAnalysis(MagicMock())
-    freqs = processor.ITPC_FREQS
-    sent_mask = (freqs >= processor.SENTENCE_BAND[0]) & (freqs <= processor.SENTENCE_BAND[1])
-    phrase_mask = (freqs >= processor.PHRASE_BAND[0]) & (freqs <= processor.PHRASE_BAND[1])
-    word_mask = (freqs >= processor.WORD_BAND[0]) & (freqs <= processor.WORD_BAND[1])
+    freqs = processor.cfg.itpc_freqs
+    sent_mask = (freqs >= processor.cfg.sentence_band[0]) & (freqs <= processor.cfg.sentence_band[1])
+    phrase_mask = (freqs >= processor.cfg.phrase_band[0]) & (freqs <= processor.cfg.phrase_band[1])
+    word_mask = (freqs >= processor.cfg.word_band[0]) & (freqs <= processor.cfg.word_band[1])
 
-    # At least some Morlet bins must fall inside each band for averaging to be meaningful.
+    # At least some Morlet bins must fall inside each band for averaging to be
+    # meaningful.
     assert sent_mask.sum() >= 1, "Sentence band must span at least 1 Morlet bin"
     assert phrase_mask.sum() >= 1, "Phrase band must span at least 1 Morlet bin"
     assert word_mask.sum() >= 1, "Word band must span at least 1 Morlet bin"
@@ -277,18 +323,17 @@ def test_band_averaging_uses_multiple_bins(itpc_epochs):
     assert 0.0 <= metrics["itpc_phrase"] <= 1.0
     assert 0.0 <= metrics["itpc_word"] <= 1.0
     # Peak frequency must lie within the respective band.
-    assert processor.SENTENCE_BAND[0] <= metrics["freq_sentence_hz"] <= processor.SENTENCE_BAND[1]
-    assert processor.PHRASE_BAND[0] <= metrics["freq_phrase_hz"] <= processor.PHRASE_BAND[1]
-    assert processor.WORD_BAND[0] <= metrics["freq_word_hz"] <= processor.WORD_BAND[1]
+    assert processor.cfg.sentence_band[0] <= metrics["freq_sentence_hz"] <= processor.cfg.sentence_band[1]
+    assert processor.cfg.phrase_band[0] <= metrics["freq_phrase_hz"] <= processor.cfg.phrase_band[1]
+    assert processor.cfg.word_band[0] <= metrics["freq_word_hz"] <= processor.cfg.word_band[1]
 
 
 def test_extract_morlet_observed_itpc_matches_null_math(itpc_epochs):
     """
-    _extract_morlet_observed_itpc uses identical math to _compute_surrogate_itpc.
+    _extract_morlet_observed_itpc uses identical math to PermutationEngine logic.
 
     Specifically: observed = |mean_trials(exp(i * angle(mean_t(complex))))|,
-    which is the same quantity the null scrambles. A zero-offset surrogate
-    must reproduce the observed value exactly (within floating-point precision).
+    which is the same quantity the null scrambles.
     """
     processor = LanguageTrackingAnalysis(MagicMock())
     processor._morlet_phases = processor._compute_morlet_target_phases(itpc_epochs)
@@ -299,7 +344,8 @@ def test_extract_morlet_observed_itpc_matches_null_math(itpc_epochs):
         assert key in observed, f"Missing key: {key}"
         assert 0.0 <= observed[key] <= 1.0, f"{key} = {observed[key]} out of range"
 
-    # Verify that manually applying zero random phase offset reproduces the same value.
+    # Verify that manually applying zero random phase offset reproduces
+    # the same value.
     phases = processor._morlet_phases  # (n_trials, n_channels, 3)
     for label, freq_idx in processor._MORLET_FREQ_IDX.items():
         unit_vectors = np.exp(1j * phases[:, :, freq_idx])
@@ -345,13 +391,17 @@ def test_permutation_null_shape(itpc_epochs):
 
 
 def test_permutation_null_near_chance(itpc_epochs):
-    """Null ITPC mean should be near theoretical chance 1/sqrt(n_trials * n_channels) or roughly 1/sqrt(n_trials)."""
+    """
+    Null ITPC mean should be near theoretical chance.
+    Theoretical chance: 1/sqrt(n_trials * n_channels) or ~1/sqrt(n_trials).
+    """
     processor = LanguageTrackingAnalysis(MagicMock())
     n_trials = len(itpc_epochs)
     chance = 1.0 / np.sqrt(n_trials)
     null = processor._compute_trial_shuffled_null_itpc(itpc_epochs, n_permutations=200, metric="sentence", seed=0)
-    # The actual null might be slightly off pure chance depending on true phase clustering,
-    # but with random permutation it suppresses false positives effectively.
+    # The actual null might be slightly off pure chance depending on true
+    # phase clustering, but with random permutation it suppresses false
+    # positives effectively.
     # Theoretical chance for purely random phase is ~1/sqrt(N)
     assert abs(np.mean(null) - chance) < 0.5 * chance
 
@@ -412,13 +462,13 @@ def test_dft_uses_peak_within_band():
     """DFT extraction uses peak (not mean) within band."""
     processor = LanguageTrackingAnalysis(MagicMock())
     sfreq = 256.0
-    n_fft = int(np.ceil(sfreq / processor.DFT_FREQ_RESOLUTION))
+    n_fft = int(np.ceil(sfreq / processor.cfg.dft_freq_resolution))
     freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
     n_channels = 6
     # Uniform ITPC at 0.12 everywhere
     itpc_spectrum = np.ones((n_channels, len(freqs))) * 0.12
     # Inject peak at word target
-    peak_idx = np.argmin(np.abs(freqs - processor.TARGET_WORD_FREQ))
+    peak_idx = np.argmin(np.abs(freqs - processor.cfg.target_word_freq))
     itpc_spectrum[:, peak_idx] = 0.40
     metrics = processor._extract_itpc_metrics_dft(itpc_spectrum, freqs)
     # Peak extraction should capture the 0.40 peak, not average it away
@@ -540,7 +590,9 @@ def test_morlet_pvalue_not_extreme_for_random_phases():
 
 
 def test_compute_per_channel_null_dft_shape(itpc_epochs):
-    """_compute_per_channel_null_dft returns per-channel null for each target frequency."""
+    """
+    _compute_per_channel_null_dft returns per-channel null for each frequency.
+    """
     processor = LanguageTrackingAnalysis(MagicMock())
     n_permutations = 20
     n_channels = len(itpc_epochs.ch_names)
@@ -600,7 +652,10 @@ def test_compute_per_channel_itpc_morlet_shape(itpc_epochs):
 
 
 def test_per_channel_itpc_morlet_consistent_with_observed(itpc_epochs):
-    """Per-channel morlet averaged over all channels matches _extract_morlet_observed_itpc."""
+    """
+    Per-channel morlet averaged over all channels matches
+    _extract_morlet_observed_itpc.
+    """
     processor = LanguageTrackingAnalysis(MagicMock())
     processor._morlet_phases = processor._compute_morlet_target_phases(itpc_epochs)
 
@@ -674,12 +729,14 @@ def test_compute_focus_pvalue_is_zero_when_observed_exceeds_all_null():
 
 
 def _make_focus_row_args(itpc_epochs, processor):
-    """Helper to construct valid per-channel arrays for _build_focus_row tests."""
+    """
+    Helper to construct valid per-channel arrays for _build_focus_row tests.
+    """
     ch_names = itpc_epochs.ch_names
     n_ch = len(ch_names)
     sfreq = itpc_epochs.info["sfreq"]
     n_times = itpc_epochs.get_data().shape[2]
-    n_pad = int(np.ceil(sfreq / processor.DFT_FREQ_RESOLUTION))
+    n_pad = int(np.ceil(sfreq / processor.cfg.dft_freq_resolution))
     n_fft = max(n_pad, n_times)
     dft_freqs = np.fft.rfftfreq(n_fft, d=1.0 / sfreq)
     n_freqs = len(dft_freqs)
@@ -792,7 +849,10 @@ def test_select_optimal_channels_returns_list_of_strings(itpc_epochs):
 
 
 def test_select_optimal_channels_sparse_for_random_phases(itpc_epochs):
-    """Across 10 random seeds, the mean number of selected channels is below half of total."""
+    """
+    Across 10 random seeds, the mean number of selected channels is below
+    half of total.
+    """
     processor = LanguageTrackingAnalysis(MagicMock())
     info = itpc_epochs.info.copy()
     try:
@@ -821,7 +881,8 @@ def test_select_optimal_channels_sparse_for_random_phases(itpc_epochs):
         counts.append(len(result))
 
     assert float(np.mean(counts)) < n_channels / 2, (
-        f"Too many channels selected on average ({np.mean(counts):.1f} / {n_channels}); "
+        f"Too many channels selected on average "
+        f"({np.mean(counts):.1f} / {n_channels}); "
         "cluster permutation may not be working correctly."
     )
 
