@@ -291,7 +291,10 @@ class LanguageTrackingReport:
 
         if significant_focuses:
             focus_str = ", ".join(significant_focuses)
-            badge = style_utils.build_status_badge("Significant", bg_color="#16a34a")
+            # Use amber if ONLY optimal is significant (data-driven vs clinical/anatomical)
+            is_only_optimal = significant_focuses == ["OPTIMAL"]
+            bg_color = "#d97706" if is_only_optimal else "#16a34a"
+            badge = style_utils.build_status_badge("Significant", bg_color=bg_color)
             badge_desc = f"Permutation test at phrase+sentence rates<br><strong>Significant:</strong> {focus_str}"
         else:
             badge = style_utils.build_status_badge("Not Significant", bg_color="#dc2626")
