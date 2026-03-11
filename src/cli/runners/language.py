@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -47,7 +48,15 @@ def run(
                 available_cols = [c for c in cli_cols if c in df.columns]
                 print_table(df[available_cols], title=f"{pid} / {sess} — Language Tracking Results")
 
-                out_dir = config.LOCAL_DATA_ROOT / "outputs" / "language" / pid / sess / timestamp
+                # Construct standardized output directory
+                out_dir = Path(
+                    config.REPORT_DIR_TEMPLATE.format(
+                        patient_id=pid,
+                        session_id=sess,
+                        pipeline_name="language_tracking",
+                        timestamp=timestamp,
+                    )
+                )
                 out_dir.mkdir(parents=True, exist_ok=True)
 
                 # Save CSV
@@ -87,11 +96,16 @@ def run(
         if report and len(report_fragments) >= 1:
             from src.reports import style_utils
 
-            combined_dir = config.LOCAL_DATA_ROOT / "outputs" / "language" / timestamp
+            combined_dir = Path(
+                config.COMBINED_REPORT_DIR_TEMPLATE.format(
+                    pipeline_name="language_tracking",
+                    timestamp=timestamp,
+                )
+            )
             combined_dir.mkdir(parents=True, exist_ok=True)
             out_path = style_utils.stitch_and_save(
                 report_fragments,
-                output_path=combined_dir / "language_combined_report.html",
+                output_path=combined_dir / "report.html",
                 title=f"{pid} — Language Tracking Combined Report",
                 generator_name="Language Tracking Pipeline",
                 extra_css=extra_css,

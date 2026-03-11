@@ -1,5 +1,6 @@
 """HTML report for Language Tracking Analysis."""
 
+import datetime
 import logging
 from pathlib import Path
 from typing import Optional
@@ -67,13 +68,26 @@ class LanguageTrackingReport:
         if not getattr(self.lt_obj, "patient_id", None):
             raise ValueError("Pipeline patient_id is missing.")
 
-        if output_dir is None:
-            output_dir = config.REPORTS_DIR / self.lt_obj.patient_id / self.session_id / "language_tracking"
-        self.output_dir = Path(output_dir)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.report_file = self.output_dir / f"{self.session_id}_language_report.html"
+        self._setup_output_dir(output_dir)
         self._plot_paths: Optional[dict] = None
         self._summary: Optional[dict] = None
+
+    def _setup_output_dir(self, output_dir: Optional[Path] = None) -> None:
+        """Setup the output directory using the standardized template if not provided."""
+        if output_dir is None:
+            timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+            path_str = config.REPORT_DIR_TEMPLATE.format(
+                patient_id=self.lt_obj.patient_id,
+                session_id=self.session_id,
+                pipeline_name="language_tracking",
+                timestamp=timestamp,
+            )
+            output_dir = Path(path_str)
+
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Consistent filename across paradigms
+        self.report_file = self.output_dir / "report.html"
 
     def _get_summary(self) -> dict:
         if self._summary is None:
