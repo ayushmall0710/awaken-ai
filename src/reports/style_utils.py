@@ -35,6 +35,35 @@ CARD_TEXT_DARK = "#1e293b"  # Dark slate text
 ICON_TRUE = "<span style='color:#16a34a;font-size:1rem;' title='True'>&#10003;</span>"
 ICON_FALSE = "<span style='color:#dc2626;font-size:1rem;' title='False'>&#10007;</span>"
 
+# Significance icons
+ICON_SIG_1 = "*"  # p < 0.05
+ICON_SIG_2 = "**"  # p < 0.01
+ICON_SIG_3 = "***"  # p < 0.001
+ICON_SIG_NONE = ""  # p >= 0.05
+
+
+def format_with_significance(value: float, p_value: float, precision: int = 4) -> str:
+    """Format a value with its significance indicator based on p-value.
+
+    Args:
+        value: The numerical value to format (e.g., ITPC).
+        p_value: The p-value for significance testing.
+        precision: Decimal places for the value.
+
+    Returns:
+        String with formatted value and significance icon.
+    """
+    if p_value < 0.001:
+        icon = ICON_SIG_3
+    elif p_value < 0.01:
+        icon = ICON_SIG_2
+    elif p_value < 0.05:
+        icon = ICON_SIG_1
+    else:
+        icon = ICON_SIG_NONE
+
+    return f"{value:.{precision}f}{icon}"
+
 
 def render_uw_css() -> str:
     """Inline CSS for a clean, readable report matching the UW visual identity."""
@@ -252,6 +281,31 @@ def build_session_panel(session_id: str, collapsible: bool = False) -> str:
         arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
         return f"<summary class='session-header' style='{shared_style}'>{label}{arrow}</summary>"
     return f"<div class='session-header' style='{shared_style}'>{label}</div>"
+
+
+def build_collapsible_panel(title: str, content: str, open_default: bool = False) -> str:
+    """Build a collapsible section using <details> and <summary>.
+
+    Args:
+        title: Title for the panel header.
+        content: HTML content inside the panel.
+        open_default: Whether the panel should be open by default.
+    """
+    open_attr = " open" if open_default else ""
+    # Reuse session-wrapper and session-header styles for consistency
+    shared_style = (
+        f"background-color:{ROW_EVEN};padding:0.75rem 1.5rem;"
+        f"border-left:4px solid {UW_PURPLE};border-top:1px solid {BORDER_LIGHT};"
+        f"border-right:1px solid {BORDER_LIGHT};margin-top:1.5rem;"
+        f"border-radius:8px 8px 0 0;cursor:pointer;"
+    )
+    label = f"<h3 style='margin:0;font-size:1.1rem;color:{UW_PURPLE};'>{title}</h3>"
+    arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
+
+    header = f"<summary class='session-header' style='{shared_style}'>{label}{arrow}</summary>"
+    content_div = f"<div class='session-content' style='border-radius:0 0 8px 8px;'>{content}</div>"
+
+    return f"<details class='session-wrapper'{open_attr}>\n{header}\n{content_div}\n</details>"
 
 
 def stitch_and_save(

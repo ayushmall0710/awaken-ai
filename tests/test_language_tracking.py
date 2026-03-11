@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import mne
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.pipelines.language_tracking import ITPCProcessor, LanguageConfig, LanguageTrackingAnalysis, PermutationEngine
@@ -375,7 +376,7 @@ def test_load_no_data():
     processor.loader.get_patient.return_value = mock_patient
     processor.loader.load_clean_epochs.side_effect = FileNotFoundError("no epochs")
 
-    with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai preprocess' first\\."):
+    with pytest.raises(ValueError, match="No clean epochs found for TEST\\. Run 'awakenai setup TEST' first\\."):
         processor.load()
 
 
@@ -813,6 +814,12 @@ def test_build_focus_row_column_set(itpc_epochs):
         "morlet_p_phrase",
         "morlet_p_sentence",
         "morlet_p_comprehension",
+        "ratio_sent_word",
+        "ratio_sent_phrase",
+        "ratio_bw_normalized",
+        "freq_sentence_hz",
+        "freq_phrase_hz",
+        "freq_word_hz",
     }
     assert expected_keys == set(row.keys())
 
@@ -1047,3 +1054,84 @@ def test_generate_summary_empty_when_no_results():
     """generate_summary() returns {} when results is None."""
     processor = LanguageTrackingAnalysis(MagicMock())
     assert processor.generate_summary() == {}
+
+
+def test_build_focus_row_contains_new_ratio_metrics(itpc_epochs):
+    """_build_focus_row includes ratio and frequency columns when channels are provided."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor.patient_id = "CON008"
+    processor._epochs_filtered = itpc_epochs
+    args = _make_focus_row_args(itpc_epochs, processor)
+
+    row = processor._build_focus_row(focus="clinical", channels=itpc_epochs.ch_names, **args)
+
+    for key in (
+        "ratio_sent_word",
+        "ratio_sent_phrase",
+        "ratio_bw_normalized",
+        "freq_sentence_hz",
+        "freq_phrase_hz",
+        "freq_word_hz",
+    ):
+        assert key in row, f"Missing column: {key}"
+        assert not np.isnan(row[key]), f"Expected finite value for {key}"
+
+
+def test_build_focus_row_empty_channels_new_metrics_are_nan(itpc_epochs):
+    """_build_focus_row with empty channels returns NaN for ratio/freq columns."""
+    processor = LanguageTrackingAnalysis(MagicMock())
+    processor.patient_id = "CON008"
+    processor._epochs_filtered = itpc_epochs
+    args = _make_focus_row_args(itpc_epochs, processor)
+
+    row = processor._build_focus_row(focus="optimal", channels=[], **args)
+
+    for key in (
+        "ratio_sent_word",
+        "ratio_sent_phrase",
+        "ratio_bw_normalized",
+        "freq_sentence_hz",
+        "freq_phrase_hz",
+        "freq_word_hz",
+    ):
+        assert key in row, f"Missing column: {key}"
+        assert np.isnan(row[key]), f"Expected NaN for {key} when channels=[]"
+
+
+def test_generate_summary_contains_lh_rh_metrics():
+    """generate_summary() includes per-hemisphere ITPC and p-values for all rates."""
+    pipeline = LanguageTrackingAnalysis(MagicMock())
+    pipeline.results = pd.DataFrame(
+        [
+            {
+                "focus": focus,
+                "itpc_word": 0.1,
+                "itpc_phrase": 0.2,
+                "itpc_sentence": 0.3,
+                "itpc_comprehension": 0.25,
+                "dft_p_word": 0.04,
+                "dft_p_phrase": 0.03,
+                "dft_p_sentence": 0.02,
+                "dft_p_comprehension": 0.01,
+                "morlet_itpc_word": 0.11,
+                "morlet_itpc_phrase": 0.21,
+                "morlet_itpc_sentence": 0.31,
+                "morlet_itpc_comprehension": 0.26,
+                "morlet_p_word": 0.04,
+                "morlet_p_phrase": 0.03,
+                "morlet_p_sentence": 0.02,
+                "morlet_p_comprehension": 0.01,
+            }
+            for focus in ("clinical", "lh", "rh", "optimal")
+        ]
+    )
+    pipeline.patient_id = "test_patient"
+
+    summary = pipeline.generate_summary()
+
+    for side in ("lh", "rh"):
+        for m in ("word", "phrase", "sentence", "comprehension"):
+            assert f"{side}_itpc_{m}" in summary
+            assert f"{side}_p_{m}" in summary
+            assert f"{side}_morlet_itpc_{m}" in summary
+            assert f"{side}_morlet_p_{m}" in summary

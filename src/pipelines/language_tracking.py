@@ -291,7 +291,9 @@ class LanguageTrackingAnalysis(BasePipeline):
                 continue
 
         if not all_epochs:
-            raise ValueError(f"No clean epochs found for {self.patient_id}. Run 'awakenai preprocess' first.")
+            raise ValueError(
+                f"No clean epochs found for {self.patient_id}. Run 'awakenai setup {self.patient_id}' first."
+            )
 
         self.epochs = mne.concatenate_epochs(all_epochs) if len(all_epochs) > 1 else all_epochs[0]
 
@@ -436,6 +438,17 @@ class LanguageTrackingAnalysis(BasePipeline):
         clinical_row = get_focus("clinical")
 
         li_word = li_phrase = li_sentence = li_comp = None
+        side_metrics = {}
+
+        for side, row in (("lh", lh_row), ("rh", rh_row)):
+            if row is None:
+                continue
+            for m in ["word", "phrase", "sentence", "comprehension"]:
+                side_metrics[f"{side}_itpc_{m}"] = row.get(f"itpc_{m}")
+                side_metrics[f"{side}_p_{m}"] = row.get(f"dft_p_{m}")
+                side_metrics[f"{side}_morlet_itpc_{m}"] = row.get(f"morlet_itpc_{m}")
+                side_metrics[f"{side}_morlet_p_{m}"] = row.get(f"morlet_p_{m}")
+
         if lh_row is not None and rh_row is not None:
             li_word = self._compute_lateralization_index(lh_row["itpc_word"], rh_row["itpc_word"])
             li_phrase = self._compute_lateralization_index(lh_row["itpc_phrase"], rh_row["itpc_phrase"])
@@ -461,6 +474,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "lateralization_index_comprehension": li_comp,
             "ratio_cognitive_acoustic": ratio_cog_ac,
             "morlet_ratio": morlet_ratio,
+            **side_metrics,
         }
 
     def _pick_channel_subset(self, epochs: mne.Epochs, channels: list) -> mne.Epochs:
@@ -671,7 +685,7 @@ class LanguageTrackingAnalysis(BasePipeline):
 
         ratio_sw = itpc_sent_val / itpc_word_val if itpc_word_val > 0 else 0.0
         ratio_sp = itpc_sent_val / itpc_phrase_val if itpc_phrase_val > 0 else 0.0
-        itpc_comprehension_combined = (itpc_sent_val + itpc_phrase_val) / 2.0
+        itpc_comprehension = (itpc_sent_val + itpc_phrase_val) / 2.0
 
         sent_density = itpc_sent_val / self.cfg.sentence_band_width_hz if self.cfg.sentence_band_width_hz > 0 else 0.0
         word_density = itpc_word_val / self.cfg.word_band_width_hz if self.cfg.word_band_width_hz > 0 else 0.0
@@ -681,7 +695,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "itpc_sentence": itpc_sent_val,
             "itpc_phrase": itpc_phrase_val,
             "itpc_word": itpc_word_val,
-            "itpc_comprehension_combined": itpc_comprehension_combined,
+            "itpc_comprehension": itpc_comprehension,
             "ratio_sent_word": ratio_sw,
             "ratio_sent_phrase": ratio_sp,
             "ratio_bw_normalized": ratio_bw,
@@ -1108,6 +1122,12 @@ class LanguageTrackingAnalysis(BasePipeline):
             "morlet_p_phrase": nan,
             "morlet_p_sentence": nan,
             "morlet_p_comprehension": nan,
+            "ratio_sent_word": nan,
+            "ratio_sent_phrase": nan,
+            "ratio_bw_normalized": nan,
+            "freq_sentence_hz": nan,
+            "freq_phrase_hz": nan,
+            "freq_word_hz": nan,
         }
 
         if not channels:
@@ -1146,7 +1166,7 @@ class LanguageTrackingAnalysis(BasePipeline):
             "itpc_word": dft_metrics["itpc_word"],
             "itpc_phrase": dft_metrics["itpc_phrase"],
             "itpc_sentence": dft_metrics["itpc_sentence"],
-            "itpc_comprehension": (dft_metrics["itpc_sentence"] + dft_metrics["itpc_phrase"]) / 2.0,
+            "itpc_comprehension": dft_metrics["itpc_comprehension"],
             "morlet_itpc_word": obs_morlet["word"],
             "morlet_itpc_phrase": obs_morlet["phrase"],
             "morlet_itpc_sentence": obs_morlet["sentence"],
@@ -1159,4 +1179,10 @@ class LanguageTrackingAnalysis(BasePipeline):
             "morlet_p_phrase": morlet_pvals["p_phrase"],
             "morlet_p_sentence": morlet_pvals["p_sentence"],
             "morlet_p_comprehension": morlet_pvals["p_comprehension"],
+            "ratio_sent_word": dft_metrics["ratio_sent_word"],
+            "ratio_sent_phrase": dft_metrics["ratio_sent_phrase"],
+            "ratio_bw_normalized": dft_metrics["ratio_bw_normalized"],
+            "freq_sentence_hz": dft_metrics["freq_sentence_hz"],
+            "freq_phrase_hz": dft_metrics["freq_phrase_hz"],
+            "freq_word_hz": dft_metrics["freq_word_hz"],
         }
