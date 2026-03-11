@@ -28,6 +28,50 @@ _ITPC_TARGET_SPECS = [
 ]
 
 
+def _setup_figure_and_ax(figsize=(10, 5), title=None, xlabel=None, ylabel=None):
+    """Generic setup for matplotlib figure and axis."""
+    fig, ax = plt.subplots(figsize=figsize)
+    if title:
+        ax.set_title(title, fontsize=13, fontweight="bold")
+    if xlabel:
+        ax.set_xlabel(xlabel, fontsize=11)
+    if ylabel:
+        ax.set_ylabel(ylabel, fontsize=11)
+    return fig, ax
+
+
+def _save_and_close(fig, path, dpi=150):
+    """Save figure and close it to free memory."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def _add_itpc_annotations(ax, metrics, method_label, y_top, plot_freqs):
+    """Add vertical lines and text annotations for target ITPC frequencies."""
+    method_key = method_label.lower()
+    for freq, label, color in _ITPC_TARGET_SPECS:
+        if freq < float(plot_freqs[0]) or freq > float(plot_freqs[-1]):
+            continue
+
+        l_lbl = label.lower()
+        p_val = metrics.get(f"p_{l_lbl}", metrics.get(f"{method_key}_p_{l_lbl}", 1.0))
+        itpc_val = metrics.get(f"itpc_{l_lbl}", metrics.get(f"{method_key}_itpc_{l_lbl}", 0.0))
+
+        itpc_str = style_utils.format_with_significance(itpc_val, p_val)
+        ax.axvline(freq, color=color, linestyle="--", linewidth=1.5)
+        ax.text(
+            freq + 0.04,
+            y_top * 0.95,
+            f"{label}\n{itpc_str}",
+            color=color,
+            fontsize=8,
+            verticalalignment="top",
+        )
+
+
 def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     """
     Generate and save enhanced ITPC plots (Topomap and TFR).
@@ -40,14 +84,16 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     """
 
     output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
     target_freq = metrics["freq_sentence_hz"]
     phrase_freq = metrics["freq_phrase_hz"]
     word_freq = metrics["freq_word_hz"]
 
     vlim_max = max(float(np.percentile(itc.data, 95)) * 1.2, 0.05)
 
-    fig_topo, ax_topo = plt.subplots(1, 1, figsize=(10, 8))
+    fig_topo, ax_topo = _setup_figure_and_ax(
+        figsize=(10, 8),
+        title=f"ITPC Topomap @ {target_freq:.3f} Hz\n{patient_id}",
+    )
     itc.plot_topomap(
         tmin=0,
         tmax=None,
@@ -61,12 +107,14 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
         colorbar=True,
         vlim=(0, vlim_max),
     )
-    ax_topo.set_title(f"ITPC Topomap @ {target_freq:.3f} Hz\n{patient_id}", fontsize=14, fontweight="bold")
-    topo_path = output_dir / f"{patient_id}_language_ITPC_topomap.png"
-    fig_topo.savefig(topo_path, dpi=300, bbox_inches="tight")
-    plt.close(fig_topo)
+    _save_and_close(fig_topo, output_dir / f"{patient_id}_language_ITPC_topomap.png", dpi=300)
 
-    fig_tfr, ax_tfr = plt.subplots(1, 1, figsize=(14, 8))
+    fig_tfr, ax_tfr = _setup_figure_and_ax(
+        figsize=(14, 8),
+        title=f"ITPC Time-Frequency ({patient_id}) - Hemisphere Mean",
+        xlabel="Time (s)",
+        ylabel="Frequency (Hz)",
+    )
     itc.plot(
         baseline=None,
         mode=None,
@@ -83,13 +131,8 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     ax_tfr.text(itc.times[0], phrase_freq, " Phrase", color="white", verticalalignment="bottom", fontweight="bold")
     ax_tfr.axhline(y=word_freq, color="white", linestyle=":", linewidth=2, label=f"Word ({word_freq:.3f} Hz)")
     ax_tfr.text(itc.times[0], word_freq, " Word", color="white", verticalalignment="bottom", fontweight="bold")
-    ax_tfr.set_title(f"ITPC Time-Frequency ({patient_id}) - Hemisphere Mean", fontsize=16)
-    ax_tfr.set_xlabel("Time (s)", fontsize=12)
-    ax_tfr.set_ylabel("Frequency (Hz)", fontsize=12)
 
-    tfr_path = output_dir / f"{patient_id}_language_ITPC_tfr.png"
-    fig_tfr.savefig(tfr_path, dpi=300, bbox_inches="tight")
-    plt.close(fig_tfr)
+    tfr_path = _save_and_close(fig_tfr, output_dir / f"{patient_id}_language_ITPC_tfr.png", dpi=300)
     return tfr_path
 
 
@@ -162,44 +205,39 @@ def plot_itpc_channels_horizontal(
     phrase_mask = (freqs >= phrase_band[0]) & (freqs <= phrase_band[1])
     word_mask = (freqs >= word_band[0]) & (freqs <= word_band[1])
 
-    if itpc_data.ndim == 3:
-        # Morlet: average over freqs and times
-        sent_per_ch = np.mean(itpc_data[:, sent_mask, :], axis=(1, 2))
-        phrase_per_ch = np.mean(itpc_data[:, phrase_mask, :], axis=(1, 2))
-        word_per_ch = np.mean(itpc_data[:, word_mask, :], axis=(1, 2))
-    else:
-        # DFT: average over freqs
-        sent_per_ch = np.mean(itpc_data[:, sent_mask], axis=1)
-        phrase_per_ch = np.mean(itpc_data[:, phrase_mask], axis=1)
-        word_per_ch = np.mean(itpc_data[:, word_mask], axis=1)
+    sent_per_ch = (
+        np.mean(itpc_data[:, sent_mask], axis=1)
+        if itpc_data.ndim == 2
+        else np.mean(itpc_data[:, sent_mask, :], axis=(1, 2))
+    )
+    phrase_per_ch = (
+        np.mean(itpc_data[:, phrase_mask], axis=1)
+        if itpc_data.ndim == 2
+        else np.mean(itpc_data[:, phrase_mask, :], axis=(1, 2))
+    )
+    word_per_ch = (
+        np.mean(itpc_data[:, word_mask], axis=1)
+        if itpc_data.ndim == 2
+        else np.mean(itpc_data[:, word_mask, :], axis=(1, 2))
+    )
 
     chance = 1.0 / np.sqrt(n_trials)
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    y = np.arange(len(ch_names))
+    y = np.arange(len(ch_names))[::-1]  # Reverse order
     height = 0.25
 
-    # Reverse order so first channel is at the top
-    y = y[::-1]
-
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = _setup_figure_and_ax(
+        figsize=(10, 8),
+        title=f"{patient_id}: Per-Channel {method_label} ITPC",
+        xlabel="ITPC",
+    )
     ax.barh(y + height, sent_per_ch, height, label="Sentence band", color="#2166ac")
     ax.barh(y, phrase_per_ch, height, label="Phrase band", color="#f4a582")
     ax.barh(y - height, word_per_ch, height, label="Word band", color="#b2182b")
 
-    ax.axvline(
-        chance,
-        color="gray",
-        linestyle="--",
-        linewidth=1.5,
-        label=f"Chance (1/sqrt({n_trials}) = {chance:.3f})",
-    )
+    ax.axvline(chance, color="gray", linestyle="--", linewidth=1.5, label=f"Chance (1/sqrt({n_trials}) = {chance:.3f})")
 
     ax.set_yticks(y)
     ax.set_yticklabels(ch_names)
-    ax.set_xlabel("ITPC")
-    ax.set_title(f"{patient_id}: Per-Channel {method_label} ITPC")
     ax.legend(loc="lower right")
 
     # Add value labels
@@ -212,10 +250,7 @@ def plot_itpc_channels_horizontal(
     ax.set_xlim(0, max(np.max([sent_per_ch, phrase_per_ch, word_per_ch]) * 1.15, chance * 1.5, 0.15))
     plt.tight_layout()
 
-    out_path = out_dir / f"{patient_id}_lang_{method_label.lower()}_channels_horizontal.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
+    return _save_and_close(fig, Path(output_dir) / f"{patient_id}_lang_{method_label.lower()}_channels_horizontal.png")
 
 
 def plot_itpc_spectrum(
@@ -262,48 +297,21 @@ def plot_itpc_spectrum(
     Path
         Absolute path to the saved PNG.
     """
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     mask = (freqs >= 0.5) & (freqs <= 4.0)
     plot_freqs = freqs[mask]
     mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
 
-    method_key = method_label.lower()
-    target_specs = []
-    for freq, lbl, color in _ITPC_TARGET_SPECS:
-        l_lbl = lbl.lower()
-        # Try generic "p_sentence", then "dft_p_sentence", then "morlet_p_sentence"
-        p_val = metrics.get(f"p_{l_lbl}", metrics.get(f"{method_key}_p_{l_lbl}", 1.0))
-        itpc_val = metrics.get(f"itpc_{l_lbl}", metrics.get(f"{method_key}_itpc_{l_lbl}", 0.0))
-        target_specs.append((freq, lbl, itpc_val, p_val, color))
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label="Mean ITPC")
-
-    y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
-    for freq, label, itpc_val, p_val, color in target_specs:
-        if freq < float(plot_freqs[0]) or freq > float(plot_freqs[-1]):
-            continue
-        # Use centralized significance indicator
-        itpc_str = style_utils.format_with_significance(itpc_val, p_val)
-        ax.axvline(freq, color=color, linestyle="--", linewidth=1.5)
-        ax.text(
-            freq + 0.04,
-            y_top * 0.95,
-            f"{label}\n{itpc_str}",
-            color=color,
-            fontsize=8,
-            verticalalignment="top",
-        )
-
-    ax.set_xlabel("Frequency (Hz)", fontsize=11)
-    ax.set_ylabel("ITPC", fontsize=11)
     if not title:
         title = f"{patient_id}: {method_label} ITPC Frequency Spectrum"
         if focus_label:
             title += f" ({focus_label})"
-    ax.set_title(title, fontsize=13, fontweight="bold")
+
+    fig, ax = _setup_figure_and_ax(figsize=(10, 5), title=title, xlabel="Frequency (Hz)", ylabel="ITPC")
+    ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label="Mean ITPC")
+
+    y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
+    _add_itpc_annotations(ax, metrics, method_label, y_top, plot_freqs)
+
     ax.set_xlim(0.5, 4.0)
     ax.legend(fontsize=9)
     plt.tight_layout()
@@ -311,10 +319,8 @@ def plot_itpc_spectrum(
     fname = f"{patient_id}_lang_{method_label.lower()}_spectrum"
     if focus_label:
         fname += f"_{focus_label.lower()}"
-    out_path = out_dir / f"{fname}.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
+
+    return _save_and_close(fig, Path(output_dir) / f"{fname}.png")
 
 
 def plot_itpc_topomap(
@@ -369,9 +375,6 @@ def plot_itpc_topomap(
     """
     import mne as _mne
 
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     bin_idx = int(np.argmin(np.abs(freqs - target_freq)))
     per_channel_itpc = itpc_spectrum[:, bin_idx]
 
@@ -386,7 +389,11 @@ def plot_itpc_topomap(
         mask = np.array([ch in highlight_channels for ch in info.ch_names])
         mask_params = dict(marker="o", markerfacecolor="white", markeredgecolor="black", markersize=6)
 
-    fig, ax = plt.subplots(figsize=(5, 5))
+    actual_freq = float(freqs[bin_idx])
+    if not title:
+        title = f"{label} ({actual_freq:.3f} Hz)\n{patient_id}"
+
+    fig, ax = _setup_figure_and_ax(figsize=(5, 5), title=title)
     im, _ = _mne.viz.plot_topomap(
         per_channel_itpc,
         info,
@@ -400,21 +407,10 @@ def plot_itpc_topomap(
     )
     if show_colorbar:
         plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="ITPC")
-    actual_freq = float(freqs[bin_idx])
-    if not title:
-        title = f"{label} ({actual_freq:.3f} Hz)\n{patient_id}"
-    ax.set_title(
-        title,
-        fontsize=11,
-        fontweight="bold",
-    )
     plt.tight_layout()
 
     safe_label = label.lower()
-    out_path = out_dir / f"{patient_id}_lang_topomap_{method_label.lower()}_{safe_label}.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    return out_path
+    return _save_and_close(fig, Path(output_dir) / f"{patient_id}_lang_topomap_{method_label.lower()}_{safe_label}.png")
 
 
 def plot_focus_comparison_bar(
@@ -452,15 +448,15 @@ def plot_focus_comparison_bar(
 
     if plot_df.empty:
         # Create an empty plot if no data available
-        fig, ax = plt.subplots(figsize=(6, 4))
+        fig, ax = _setup_figure_and_ax(figsize=(6, 4), title=f"{patient_id}: Comprehension ITPC by Focus")
         ax.text(0.5, 0.5, "No focus data available", ha="center", va="center")
-        ax.set_title(f"{patient_id}: Comprehension ITPC by Focus")
-        out_path = out_dir / f"{patient_id}_lang_focus_comparison.png"
-        fig.savefig(out_path, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        return out_path
+        return _save_and_close(fig, Path(output_dir) / f"{patient_id}_lang_focus_comparison.png")
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = _setup_figure_and_ax(
+        figsize=(8, 5),
+        title=f"{patient_id}: Language Comprehension Tracking by Focus",
+        ylabel="Comprehension ITPC (Sentence + Phrase) / 2",
+    )
 
     # Colors: use different colors for focuses
     colors = ["#7f7f7f", "#1f77b4", "#d62728", "#2ca02c"]  # Gray, Blue, Red, Green
@@ -480,20 +476,18 @@ def plot_focus_comparison_bar(
         if pd.isna(p_val):
             continue
 
-        height = bar.get_height()
+        stars = ""
         if p_val < 0.001:
             stars = style_utils.ICON_SIG_3
         elif p_val < 0.01:
             stars = style_utils.ICON_SIG_2
         elif p_val < 0.05:
             stars = style_utils.ICON_SIG_1
-        else:
-            stars = style_utils.ICON_SIG_NONE
 
         if stars:
             ax.text(
                 bar.get_x() + bar.get_width() / 2,
-                height + 0.01,
+                bar.get_height() + 0.01,
                 stars,
                 ha="center",
                 va="bottom",
@@ -501,14 +495,8 @@ def plot_focus_comparison_bar(
                 fontsize=10,
             )
 
-    ax.set_ylabel("Comprehension ITPC (Sentence + Phrase) / 2")
-    ax.set_title(f"{patient_id}: Language Comprehension Tracking by Focus", fontsize=12, fontweight="bold")
     ax.set_ylim(0, max(plot_df["itpc_comprehension"].max() * 1.2, 0.2))
     ax.grid(axis="y", linestyle="--", alpha=0.7)
-
     plt.tight_layout()
-    out_path = out_dir / f"{patient_id}_lang_focus_comparison.png"
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
 
-    return out_path
+    return _save_and_close(fig, Path(output_dir) / f"{patient_id}_lang_focus_comparison.png")
