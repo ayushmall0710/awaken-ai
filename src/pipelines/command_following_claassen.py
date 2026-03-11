@@ -15,16 +15,18 @@ Key differences from the parent ERD pipeline:
 """
 
 import logging
+import multiprocessing
 from typing import Any, Dict, List, Optional, Tuple
 
 import mne
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from scipy import stats
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import LeaveOneOut
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
+from sklearn.svm import LinearSVC
 
 from src.data_loading import config
 from src.pipelines.command_following import CommandFollowingAnalysis, CommandPair, compute_log_band_power
@@ -87,16 +89,18 @@ def build_feature_matrix(
 def run_loo_svm(
     X: np.ndarray,
     y: np.ndarray,
-) -> Tuple[np.ndarray, float, float]:
+) -> Tuple[np.ndarray, float, float, np.ndarray]:
     """Run Leave-One-Out cross-validation with a Linear SVM.
 
     Returns:
         y_scores: (n_samples,) decision function scores per fold
         auc: ROC AUC score
         accuracy: overall classification accuracy
+        mean_coefs: (n_features,) mean SVM weight vector across folds
     """
     loo = LeaveOneOut()
     y_scores = np.zeros(len(y))
+    coefs = []
 
     for train_idx, test_idx in loo.split(X):
         X_train, X_test = X[train_idx], X[test_idx]
@@ -106,20 +110,29 @@ def run_loo_svm(
         X_train_s = scaler.fit_transform(X_train)
         X_test_s = scaler.transform(X_test)
 
-        svm = SVC(kernel="linear", probability=False)
+        svm = LinearSVC(dual="auto", random_state=42)
         svm.fit(X_train_s, y_train)
         y_scores[test_idx] = svm.decision_function(X_test_s)
+        coefs.append(svm.coef_.ravel())
 
     auc = roc_auc_score(y, y_scores)
     y_pred = (y_scores > 0).astype(int)
     accuracy = np.mean(y_pred == y)
+    mean_coefs = np.mean(coefs, axis=0)
 
-    return y_scores, auc, accuracy
+    return y_scores, auc, accuracy, mean_coefs
 
 
 # ---------------------------------------------------------------------------
 # Permutation Testing
 # ---------------------------------------------------------------------------
+
+
+def _run_single_permutation(X: np.ndarray, y: np.ndarray, seed: int) -> float:
+    rng = np.random.default_rng(seed)
+    y_perm = rng.permutation(y)
+    _, perm_auc, _, _ = run_loo_svm(X, y_perm)
+    return perm_auc
 
 
 def permutation_test_auc(
@@ -128,25 +141,23 @@ def permutation_test_auc(
     observed_auc: float,
     n_permutations: int = N_PERMUTATIONS,
     rng_seed: int = 42,
-) -> float:
+) -> Tuple[float, np.ndarray]:
     """Compute empirical p-value for observed AUC via label permutation.
 
-    Shuffles labels, re-runs LOO-SVM, and counts how often the permuted
-    AUC exceeds the observed AUC.
+    Shuffles labels, re-runs LOO-SVM, and counts how often the permuted.
     """
-    rng = np.random.default_rng(rng_seed)
-    n_exceed = 0
+    master_rng = np.random.default_rng(rng_seed)
+    # Generate unique seeds for each permutation so parallel workers have independent RNG streams
+    seeds = master_rng.integers(0, 2**32 - 1, size=n_permutations)
 
-    for i in range(n_permutations):
-        y_perm = rng.permutation(y)
-        _, perm_auc, _ = run_loo_svm(X, y_perm)
-        if perm_auc >= observed_auc:
-            n_exceed += 1
+    n_jobs = multiprocessing.cpu_count()
+    logger.debug("Running %d permutations across %d cores...", n_permutations, n_jobs)
 
-        if (i + 1) % 100 == 0:
-            logger.debug("Permutation %d/%d done (p so far: %.3f)", i + 1, n_permutations, n_exceed / (i + 1))
+    perm_aucs = Parallel(n_jobs=n_jobs, verbose=0)(delayed(_run_single_permutation)(X, y, seed) for seed in seeds)
+    perm_aucs = np.array(perm_aucs)
 
-    return (n_exceed + 1) / (n_permutations + 1)
+    p_value = (np.sum(perm_aucs >= observed_auc) + 1) / (n_permutations + 1)
+    return p_value, perm_aucs
 
 
 # ---------------------------------------------------------------------------
@@ -223,11 +234,11 @@ class CommandFollowingClaassen(CommandFollowingAnalysis):
         logger.info("SVM classification for '%s' command (%d pairs)...", side, len(pairs))
 
         X, y, trial_ids = build_feature_matrix(pairs, self.bands)
-        y_scores, auc, accuracy = run_loo_svm(X, y)
+        y_scores, auc, accuracy, mean_coefs = run_loo_svm(X, y)
 
         logger.info("  ROC AUC: %.3f  |  Accuracy: %.1f%%", auc, accuracy * 100)
 
-        p_value = permutation_test_auc(X, y, auc, n_permutations=self.n_permutations)
+        p_value, perm_aucs = permutation_test_auc(X, y, auc, n_permutations=self.n_permutations)
         logger.info("  Permutation p-value: %.4f (n_perms=%d)", p_value, self.n_permutations)
 
         n_pairs = len(pairs)
@@ -246,6 +257,8 @@ class CommandFollowingClaassen(CommandFollowingAnalysis):
             "significant": p_value < alpha,
             "y_true": y,
             "y_scores": y_scores,
+            "perm_aucs": perm_aucs,
+            "svm_coefs": mean_coefs,
         }
 
     def _aggregate_results(self, side_results: List[Dict[str, Any]], alpha: float) -> Dict[str, Any]:
@@ -305,19 +318,7 @@ class CommandFollowingClaassen(CommandFollowingAnalysis):
             "left_pairs": left_pairs,
             "right_pairs": right_pairs,
             "n_permutations": self.svm_results["n_permutations"],
-            "side_results": [],
+            "side_results": self.svm_results.get("side_results", []),
         }
-
-        for r in self.svm_results.get("side_results", []):
-            summary["side_results"].append(
-                {
-                    "side": r["side"],
-                    "auc": r["auc"],
-                    "accuracy": r["accuracy"],
-                    "chance_level": r["chance_level"],
-                    "p_value_perm": r["p_value_perm"],
-                    "significant": r["significant"],
-                }
-            )
 
         return summary

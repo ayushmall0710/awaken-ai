@@ -128,7 +128,7 @@ class TestLooSvm:
         """Clearly separable classes → AUC should be well above chance."""
         pairs = _make_separable_pairs(n=10, keep_amp=0.5, stop_amp=4.0)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, auc, accuracy = run_loo_svm(X, y)
+        _, auc, accuracy, _ = run_loo_svm(X, y)
         assert auc > 0.7
         assert accuracy > 0.6
 
@@ -137,7 +137,7 @@ class TestLooSvm:
         np.random.seed(123)
         pairs = _make_random_pairs(n=10)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, auc, accuracy = run_loo_svm(X, y)
+        _, auc, _, _ = run_loo_svm(X, y)
         # With identical classes, AUC can swing widely on small samples,
         # but should never reach the levels of truly separable data (>0.9)
         assert auc < 0.9
@@ -146,15 +146,23 @@ class TestLooSvm:
         """y_scores should have one score per sample."""
         pairs = _make_separable_pairs(n=6)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        y_scores, _, _ = run_loo_svm(X, y)
+        y_scores, _, _, _ = run_loo_svm(X, y)
         assert y_scores.shape == y.shape
 
     def test_accuracy_is_fraction(self):
         """Accuracy should be between 0 and 1."""
         pairs = _make_separable_pairs(n=6)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, _, accuracy = run_loo_svm(X, y)
+        _, _, accuracy, _ = run_loo_svm(X, y)
         assert 0.0 <= accuracy <= 1.0
+
+    def test_returns_mean_coefs(self):
+        """Should return mean SVM coefficients with shape (n_features,)."""
+        pairs = _make_separable_pairs(n=6)
+        X, y, _ = build_feature_matrix(pairs, BANDS)
+        _, _, _, coefs = run_loo_svm(X, y)
+        assert coefs.shape == (X.shape[1],)
+        assert np.all(np.isfinite(coefs))
 
 
 # ---------------------------------------------------------------------------
@@ -168,25 +176,26 @@ class TestPermutationTest:
         np.random.seed(42)
         pairs = _make_separable_pairs(n=10, keep_amp=0.5, stop_amp=5.0)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, observed_auc, _ = run_loo_svm(X, y)
-        p = permutation_test_auc(X, y, observed_auc, n_permutations=50)
-        assert p < 0.2  # with only 50 perms, can't be super precise
+        _, observed_auc, _, _ = run_loo_svm(X, y)
+        p, perm_aucs = permutation_test_auc(X, y, observed_auc, n_permutations=50)
+        assert p < 0.2
+        assert perm_aucs.shape == (50,)
 
     def test_random_gives_high_p(self):
         """Identical classes → permutation p should be high (non-significant)."""
         np.random.seed(42)
         pairs = _make_random_pairs(n=8)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, observed_auc, _ = run_loo_svm(X, y)
-        p = permutation_test_auc(X, y, observed_auc, n_permutations=50)
+        _, observed_auc, _, _ = run_loo_svm(X, y)
+        p, _ = permutation_test_auc(X, y, observed_auc, n_permutations=50)
         assert p > 0.05
 
     def test_p_value_bounds(self):
         """p-value must be in (0, 1] — never exactly 0 due to +1 correction."""
         pairs = _make_separable_pairs(n=6)
         X, y, _ = build_feature_matrix(pairs, BANDS)
-        _, auc, _ = run_loo_svm(X, y)
-        p = permutation_test_auc(X, y, auc, n_permutations=20)
+        _, auc, _, _ = run_loo_svm(X, y)
+        p, _ = permutation_test_auc(X, y, auc, n_permutations=20)
         assert 0 < p <= 1.0
 
 
@@ -302,6 +311,32 @@ class TestClaassenPipeline:
         assert summary["right_pairs"] == 6
         assert isinstance(summary["side_results"], list)
         assert len(summary["side_results"]) == 2
+
+    def test_generate_summary_reports_n_permutations(self, mock_loader):
+        """Summary should reflect the n_permutations used during analysis."""
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
+        pipeline.pairs = _make_separable_pairs(n=6, side="left")
+        pipeline.analyze(alpha=0.05)
+
+        summary = pipeline.generate_summary()
+
+        assert summary["n_permutations"] == 10
+
+    def test_generate_summary_contains_full_side_results(self, mock_loader):
+        """Summary's side_results should contain the full data (including numpy arrays)."""
+        pipeline = CommandFollowingClaassen(n_permutations=10, loader=mock_loader)
+        pipeline.pairs = _make_separable_pairs(n=6, side="left")
+        pipeline.analyze(alpha=0.05)
+
+        summary = pipeline.generate_summary()
+
+        assert len(summary["side_results"]) == 1
+        side_res = summary["side_results"][0]
+        # Check that non-scalar elements returned from _classify_side are present
+        assert "y_true" in side_res
+        assert "y_scores" in side_res
+        assert "perm_aucs" in side_res
+        assert "svm_coefs" in side_res
 
     def test_generate_summary_without_analyze_returns_error(self, mock_loader):
         """Calling generate_summary before analyze should return an error status."""

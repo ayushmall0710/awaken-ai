@@ -177,6 +177,7 @@ def run_cmd(
     # command-following specific
     alpha: Annotated[float, typer.Option("--alpha", help="Significance threshold for ERD test")] = 0.05,
     report: Annotated[bool, typer.Option("--report", "-r", help="Generate HTML report with visualizations")] = False,
+    n_perms: Annotated[int, typer.Option("--n-perms", help="Number of permutations for SVM command following")] = 1000,
     # language specific
     focus: Annotated[str, typer.Option("--focus", help="Channel focus for language pipeline: LH or Clinical")] = "LH",
     # oddball specific
@@ -219,6 +220,7 @@ def run_cmd(
         session,
         alpha,
         report,
+        n_perms,
         focus,
         parsed_electrodes,
         cf_runner,
@@ -267,6 +269,7 @@ def _dispatch_pipelines(
     session: Optional[str],
     alpha: float,
     report: bool,
+    n_perms: int,
     focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
@@ -278,7 +281,7 @@ def _dispatch_pipelines(
     if Pipeline.command_following in pipelines:
         cf_runner.run(loader, patient_ids, session, alpha, report)
     if Pipeline.command_following_svm in pipelines:
-        cf_svm_runner.run(loader, patient_ids, session, alpha)
+        cf_svm_runner.run(loader, patient_ids, session, alpha, report, n_perms)
     if Pipeline.language in pipelines:
         lang_runner.run(loader, patient_ids, session, focus)
     if Pipeline.oddball in pipelines:

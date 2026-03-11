@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -9,6 +10,8 @@ import typer
 from src.cli.cli_utils import print_table
 from src.data_loading import UnifiedDataLoader
 from src.pipelines.command_following_claassen import CommandFollowingClaassen
+from src.reports import style_utils
+from src.reports.command_following_claassen_report import CommandFollowingClaassenReport
 
 
 def run(
@@ -16,12 +19,18 @@ def run(
     patient_ids: list[str],
     session: Optional[str],
     alpha: float,
+    report: bool = False,
+    n_perms: int = 1000,
 ) -> None:
     """Run CommandFollowingClaassen (SVM) for the given patients/sessions."""
-    pipeline = CommandFollowingClaassen(loader=loader)
+    pipeline = CommandFollowingClaassen(loader=loader, n_permutations=n_perms)
+    generated_reports: list[tuple[str, str, Path]] = []
 
     for pid in patient_ids:
         sessions = [session] if session else loader.get_patient(pid).list_session_ids()
+
+        if report:
+            patient_panel = style_utils.build_patient_panel(pid)
 
         for sess in sessions:
             typer.echo(f"[command-following-svm] {pid} / {sess} ...")
@@ -40,5 +49,21 @@ def run(
                         f"p={sr['p_value_perm']:.4f}  "
                         f"{'✓ Significant' if sr['significant'] else '✗ Not significant'}"
                     )
+
+                if report:
+                    svm_report = CommandFollowingClaassenReport(pipeline, session_id=sess)
+                    style_utils.stitch_and_save(
+                        [patient_panel, svm_report.build_session_html()],
+                        output_path=svm_report.report_file,
+                        title="Command Following SVM",
+                        generator_name="AwakenAI Capstone",
+                        extra_css=svm_report._build_css_extensions(),
+                    )
+                    generated_reports.append((pid, sess, svm_report.report_file))
             except Exception as e:
                 typer.echo(f"  Failed: {e}", err=True)
+
+    if report and generated_reports:
+        typer.echo("\nGenerated Reports:")
+        for pid, sess, path in generated_reports:
+            typer.echo(f"  {pid} / {sess}: {path}")
