@@ -309,25 +309,16 @@ else:
     print("No significant language tracking.")
 ```
 
-#### Step 3.2: Spatial Cluster Permutation
+#### Step 3.2: Spatial Cluster Permutation & Cluster-informed Peak Selection
 
-For channel selection, we use spatial cluster permutation on comprehension-frequency phase coherence. Channels belonging to spatial clusters significant at α < 0.05 are identified as the **Optimal** focus for that specific patient session.
+For channel selection, we use spatial cluster permutation on comprehension-frequency phase coherence (average of sentence and phrase rates). This identifies statistically significant neural regions where phase locking occurs.
 
-For more robust statistics that account for multiple comparisons across channels, MNE's cluster permutation test can also be applied:
+To maximize the Signal-to-Noise Ratio (SNR) and ensure a robust focus for sparse clinical arrays, we perform **Cluster-informed Peak Selection**:
+1.  **Vetting:** Identify all electrode clusters significant at α < 0.05.
+2.  **Artifact Shield:** Filter out clusters or electrodes purely associated with frontal pole eye artifacts (`Fp1`, `Fp2`).
+3.  **Peak Pick:** From the vetted neural areas, pick the **Top 3** electrodes with the highest comprehension-rate ITPC.
 
-```python
-from mne.stats import permutation_cluster_1samp_test
-
-# Reshape for cluster test: (n_trials, n_channels * n_times)
-itpc_reshaped = itpc_sentence.reshape(len(epochs_list), -1)
-
-# Run cluster test
-T_obs, clusters, cluster_p_values, H0 = permutation_cluster_1samp_test(
-    itpc_reshaped, threshold={'start': 0, 'step': 0.2}, n_permutations=1000
-)
-
-print(f"Significant clusters: {np.sum(cluster_p_values < 0.05)}")
-```
+If no clusters survive vetting, the **Optimal** focus is returned as empty. This data-driven approach ensures that the identified focus is both statistically sound and representative of the strongest neural tracking response.
 
 ---
 

@@ -387,3 +387,83 @@ def calculate_band_power(
         results[band_name] = band_power
 
     return results
+
+
+def select_optimal_channels(
+    morlet_phases: np.ndarray,
+    ch_names: List[str],
+    info: Any,
+    itpc_comp: np.ndarray,
+    n_permutations: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 42,
+) -> List[str]:
+    """
+    Select optimal electrodes via spatial cluster permutation and Cluster-informed Peak Selection.
+
+    Identifies significant neural regions using phase coherence at comprehension frequencies
+    (sentence + phrase average). Within these vetted regions, selects the Top 3 electrodes
+    with the highest comprehension ITPC.
+
+    Args:
+        morlet_phases: Phase angles (n_trials, n_channels, 2) at [sentence, phrase].
+        ch_names: List of channel names.
+        info: MNE Info object with channel positions for adjacency matrix.
+        itpc_comp: Per-channel comprehension ITPC (n_channels,).
+        n_permutations: Number of surrogates for cluster permutation.
+        alpha: Significance threshold for clusters.
+        seed: Random seed.
+
+    Returns:
+        List of selected channel names. Returns [] if no neural clusters are significant.
+    """
+    import mne
+    from mne.stats import permutation_cluster_1samp_test
+
+    # 1. Project phases onto mean direction for cluster test
+    # (n_trials, n_channels, 2) -> Average of cos(phi - mean_phi) across both bands
+    X_sent = np.cos(
+        morlet_phases[:, :, 0] - np.angle(np.mean(np.exp(1j * morlet_phases[:, :, 0]), axis=0))[np.newaxis, :]
+    )
+    X_phrase = np.cos(
+        morlet_phases[:, :, 1] - np.angle(np.mean(np.exp(1j * morlet_phases[:, :, 1]), axis=0))[np.newaxis, :]
+    )
+    X = (X_sent + X_phrase) / 2.0
+
+    # 2. Run spatial cluster permutation
+    try:
+        adjacency, _ = mne.channels.find_ch_adjacency(info, ch_type="eeg")
+        _, clusters, cluster_pv, _ = permutation_cluster_1samp_test(
+            X,
+            adjacency=adjacency,
+            threshold=None,  # Default: t-threshold corresponding to p < 0.05
+            n_permutations=n_permutations,
+            seed=seed,
+            verbose=False,
+        )
+    except Exception:
+        logger.warning("Cluster permutation failed. Returning empty focus.")
+        return []
+
+    # 3. Aggregate vetted neural channels (excluding Fp1/Fp2 eye artifacts)
+    vetted_idx = []
+    for cluster, pv in zip(clusters, cluster_pv):
+        if pv < alpha:
+            if isinstance(cluster, tuple):
+                idx = cluster[0]
+            else:
+                idx = np.where(cluster.ravel())[0]
+            vetted_idx.extend(idx)
+
+    vetted_idx = sorted(list(set(vetted_idx)))
+    neural_vetted_idx = [i for i in vetted_idx if ch_names[i] not in ["Fp1", "Fp2"]]
+
+    if not neural_vetted_idx:
+        return []
+
+    # 4. Cluster-informed Peak Selection: Pick Top 3 from vetted neural areas by ITPC
+    n_to_pick = min(3, len(neural_vetted_idx))
+    sorted_idx = np.array(neural_vetted_idx)[np.argsort(itpc_comp[neural_vetted_idx])]
+    optimal = [ch_names[i] for i in sorted_idx[-n_to_pick:]]
+
+    return optimal

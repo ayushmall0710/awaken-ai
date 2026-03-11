@@ -20,7 +20,7 @@ import pandas as pd
 from src.data_loading import config
 from src.data_loading.unified_data_loader import UnifiedDataLoader
 from src.pipelines.base import BasePipeline
-from src.utils.signal_processing import normalize_channel_names
+from src.utils.signal_processing import normalize_channel_names, select_optimal_channels
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ class LanguageTrackingAnalysis(BasePipeline):
 
     def load(self) -> None:
         """Load and concatenate all language epochs for the patient."""
-        sessions = [self.session_id] if self.session_id else self.loader.get_patient(self.patient_id).list_sessions()
+        sessions = [self.session_id] if self.session_id else self.loader.get_patient(self.patient_id).list_session_ids()
         all_epochs = []
 
         for session_id in sessions:
@@ -447,9 +447,9 @@ class LanguageTrackingAnalysis(BasePipeline):
         """
         Select optimal channels via spatial cluster permutation on comprehension-frequency phase coherence.
 
-        Projects per-trial phases onto their mean direction using cos(phase - mean_phase),
-        yielding per-trial scalars testable against zero with a 1-sample t-test. Channels
-        belonging to spatial clusters significant at alpha are returned as the optimal focus.
+        Delegates to ``src.utils.signal_processing.select_optimal_channels`` to identify
+        significant neural regions and perform Cluster-informed Peak Selection (Top 3
+        electrodes by comprehension-rate ITPC).
 
         Parameters
         ----------
@@ -469,52 +469,28 @@ class LanguageTrackingAnalysis(BasePipeline):
         Returns
         -------
         list of str
-            Channels belonging to significant clusters. Returns [] if none survive or
-            if adjacency/permutation computation fails.
+            Top 3 channels belonging to significant neural clusters, or empty list.
         """
-        from mne.stats import permutation_cluster_1samp_test
+        # 1. Compute comprehension ITPC (average of sentence and phrase) from already-computed DFT spectrum
+        itpc_dft = self._dft_spectrum_full
+        freqs = self._dft_freqs
+        sent_f_idx = np.argmin(np.abs(freqs - self.TARGET_SENTENCE_FREQ))
+        phrase_f_idx = np.argmin(np.abs(freqs - self.TARGET_PHRASE_FREQ))
+        itpc_comp = (itpc_dft[:, sent_f_idx] + itpc_dft[:, phrase_f_idx]) / 2.0
 
-        sent_idx = self._MORLET_FREQ_IDX["sentence"]
-        phrase_idx = self._MORLET_FREQ_IDX["phrase"]
+        # 2. Extract phases for sentence and phrase only (first two indices of axis-2)
+        target_phases = morlet_phases[:, :, :2]
 
-        sent_phases = morlet_phases[:, :, sent_idx]
-        phrase_phases = morlet_phases[:, :, phrase_idx]
-
-        mean_sent = np.angle(np.mean(np.exp(1j * sent_phases), axis=0))
-        mean_phrase = np.angle(np.mean(np.exp(1j * phrase_phases), axis=0))
-
-        X_sent = np.cos(sent_phases - mean_sent[np.newaxis, :])
-        X_phrase = np.cos(phrase_phases - mean_phrase[np.newaxis, :])
-        X = (X_sent + X_phrase) / 2.0
-
-        try:
-            adjacency, _ = mne.channels.find_ch_adjacency(info, ch_type="eeg")
-        except Exception as e:
-            logger.warning(
-                f"[{self.patient_id}] Could not compute channel adjacency: {e}. Returning empty optimal focus."
-            )
-            return []
-
-        try:
-            _, clusters, cluster_pv, _ = permutation_cluster_1samp_test(
-                X,
-                adjacency=adjacency,
-                threshold={"start": 0, "step": 0.2},
-                n_permutations=n_permutations,
-                seed=seed,
-                verbose=False,
-            )
-        except Exception as e:
-            logger.warning(f"[{self.patient_id}] Cluster permutation failed: {e}. Returning empty optimal focus.")
-            return []
-
-        optimal = []
-        for cluster, pv in zip(clusters, cluster_pv):
-            if pv < alpha:
-                ch_mask = np.asarray(cluster, dtype=bool).ravel()
-                optimal.extend(ch_names[i] for i in np.where(ch_mask)[0])
-
-        return list(dict.fromkeys(optimal))
+        # 3. Call utility
+        return select_optimal_channels(
+            morlet_phases=target_phases,
+            ch_names=ch_names,
+            info=info,
+            itpc_comp=itpc_comp,
+            n_permutations=n_permutations,
+            alpha=alpha,
+            seed=seed,
+        )
 
     def _preprocess_signal(self, epochs: mne.Epochs) -> mne.Epochs:
         """Apply bandpass filtering, downsampling, and epoch cropping.

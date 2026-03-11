@@ -85,9 +85,10 @@ def mock_loader(mock_language_epochs):
     with patch("src.pipelines.language_tracking.UnifiedDataLoader") as MockLoader:
         loader_instance = MockLoader.return_value
 
-        # Mock get_patient().list_sessions()
+        # Mock get_patient().list_sessions() and list_session_ids()
         mock_patient = MagicMock()
         mock_patient.list_sessions.return_value = ["2024-01-01"]
+        mock_patient.list_session_ids.return_value = ["2024-01-01"]
         loader_instance.get_patient.return_value = mock_patient
 
         # Mock load_clean_epochs
@@ -767,6 +768,10 @@ def test_select_optimal_channels_returns_list_of_strings(itpc_epochs):
     processor = LanguageTrackingAnalysis(MagicMock())
     phases = processor._compute_morlet_target_phases(itpc_epochs)
 
+    # Mock DFT results required by the surgical selection logic
+    processor._dft_spectrum_full = np.zeros((len(itpc_epochs.ch_names), 100))
+    processor._dft_freqs = np.linspace(0, 10, 100)
+
     info = itpc_epochs.info.copy()
     try:
         montage = mne.channels.make_standard_montage("standard_1020")
@@ -800,6 +805,10 @@ def test_select_optimal_channels_sparse_for_random_phases(itpc_epochs):
     n_channels = len(itpc_epochs.ch_names)
     counts = []
     for seed in range(10):
+        # Mock DFT results required by the surgical selection logic
+        processor._dft_spectrum_full = np.zeros((n_channels, 100))
+        processor._dft_freqs = np.linspace(0, 10, 100)
+
         rng = np.random.default_rng(seed)
         random_phases = rng.uniform(0, 2 * np.pi, size=(n_trials, n_channels, 3))
         result = processor._select_optimal_channels(
@@ -821,6 +830,10 @@ def test_select_optimal_channels_graceful_on_bad_info(itpc_epochs):
     """Returns [] gracefully when adjacency computation fails (no montage set)."""
     processor = LanguageTrackingAnalysis(MagicMock())
     phases = processor._compute_morlet_target_phases(itpc_epochs)
+
+    # Mock DFT results required by the surgical selection logic
+    processor._dft_spectrum_full = np.zeros((len(itpc_epochs.ch_names), 100))
+    processor._dft_freqs = np.linspace(0, 10, 100)
 
     bare_info = mne.create_info(itpc_epochs.ch_names, itpc_epochs.info["sfreq"], ch_types="eeg")
 
