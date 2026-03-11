@@ -171,7 +171,8 @@ class P300OddballPipeline(BasePipeline):
         if self.aligned_events is None or self.aligned_events.empty:
             raise ValueError(f"No aligned events found for patient {self.patient_id}")
 
-        oddball_trials = self.aligned_events[self.aligned_events["trial_type"].str.lower() == "oddball"].copy()
+        is_oddball = self.aligned_events["trial_type"].str.lower().str.startswith("oddball")
+        oddball_trials = self.aligned_events[is_oddball].copy()
 
         if oddball_trials.empty:
             raise ValueError(f"No oddball trials found for patient {self.patient_id}")

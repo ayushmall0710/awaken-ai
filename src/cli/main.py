@@ -285,4 +285,4 @@ def _dispatch_pipelines(
     if Pipeline.language in pipelines:
         lang_runner.run(loader, patient_ids, session, focus)
     if Pipeline.oddball in pipelines:
-        ob_runner.run(loader, patient_ids, session, electrodes)
+        ob_runner.run(loader, patient_ids, session, electrodes, report)
