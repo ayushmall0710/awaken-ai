@@ -59,9 +59,9 @@ class OddballQCReport:
         parts = [
             self._build_results_overview(),
             self._build_plots_section(),
+            self._build_electrode_table(),
             self._build_clinical_table(),
             self._build_legend_box(),
-            self._build_electrode_table(),
             self._build_mapping_table(),
         ]
         return "\n".join(parts)
@@ -77,20 +77,47 @@ class OddballQCReport:
         n_rare = self.clinical_row.get("n_rare_epochs")
         n_std = self.clinical_row.get("n_standard_epochs")
 
-        pz_amp = self._format_cell(
+        # Difference wave Pz
+        diff_amp = self._format_cell(
             "p300_diff_amplitude_Pz_uV",
             self.clinical_row.get("p300_diff_amplitude_Pz_uV"),
         )
-        pz_lat = self._format_cell(
+        diff_lat = self._format_cell(
             "p300_diff_latency_Pz_ms",
             self.clinical_row.get("p300_diff_latency_Pz_ms"),
         )
-        baseline = self._format_baseline(self.clinical_row.get("baseline_std_uV"))
+        # Rare-only Pz
+        rare_amp = self._format_cell(
+            "p300_rare_amplitude_Pz_uV",
+            self.clinical_row.get("p300_rare_amplitude_Pz_uV"),
+        )
+        rare_lat = self._format_cell(
+            "p300_rare_latency_Pz_ms",
+            self.clinical_row.get("p300_rare_latency_Pz_ms"),
+        )
         cards = [
             {"title": "QC Status", "value": badge, "desc": "Pass = ≥2 valid electrodes, subtype ≠ absent"},
             {"title": "Subtype", "value": subtype, "desc": "P3b (Pz-max), P3a (Fz-max), mixed, absent"},
-            {"title": "Pz Amplitude (µV)", "value": pz_amp, "desc": "Difference wave peak at Pz"},
-            {"title": "Pz Latency (ms)", "value": pz_lat, "desc": "Timing of the peak at Pz"},
+            {
+                "title": "Diff Pz Amplitude (µV)",
+                "value": diff_amp,
+                "desc": "Difference wave (Rare − Standard) peak at Pz",
+            },
+            {
+                "title": "Diff Pz Latency (ms)",
+                "value": diff_lat,
+                "desc": "Latency of difference wave peak at Pz",
+            },
+            {
+                "title": "Rare Pz Amplitude (µV)",
+                "value": rare_amp,
+                "desc": "Rare-only ERP peak at Pz",
+            },
+            {
+                "title": "Rare Pz Latency (ms)",
+                "value": rare_lat,
+                "desc": "Latency of rare-only peak at Pz",
+            },
             {
                 "title": "Rare Epochs",
                 "value": str(n_rare) if n_rare is not None else "N/A",
@@ -101,35 +128,39 @@ class OddballQCReport:
                 "value": str(n_std) if n_std is not None else "N/A",
                 "desc": "Included standard events",
             },
-            {"title": "Baseline σ (µV)", "value": baseline, "desc": "Pre-stimulus noise level"},
         ]
         return style_utils.build_metric_cards(cards)
 
     def _build_clinical_table(self) -> str:
         row = self.clinical_row
+        baseline = self._format_baseline(row.get("baseline_std_uV"))
         headers = [
             "Best Electrode",
             "Valid Electrodes",
+            "Baseline σ (µV)",
             "QC Notes",
         ]
         cells = [
             self._format_cell("p300_best_electrode", row.get("p300_best_electrode")),
             self._format_cell("p300_n_valid_electrodes", row.get("p300_n_valid_electrodes")),
+            baseline,
             self._format_cell("qc_notes", row.get("qc_notes", "")),
         ]
         return style_utils.build_metric_table(headers, [cells], title="Additional Metadata")
 
     def _build_electrode_table(self) -> str:
+        headers = [
+            "Electrode",
+            "Valid",
+            "Rare Amp (µV)",
+            "Rare Lat (ms)",
+            "Diff Amp (µV)",
+            "Diff Lat (ms)",
+            "Flag",
+        ]
         if self.detail_df.empty:
-            empty_table = style_utils.build_metric_table(
-                ["Electrode", "Valid", "Amplitude (µV)", "Latency (ms)", "Flag"], [], title=""
-            )
-            return (
-                f"<details class='tech-details'>"
-                f"<summary>Technical Diagnostics: Electrode Detail</summary>"
-                f"{empty_table}</details>"
-            )
-        headers = ["Electrode", "Valid", "Amplitude (µV)", "Latency (ms)", "Flag"]
+            empty_table = style_utils.build_metric_table(headers, [], title="Electrode Breakdown")
+            return empty_table
         rows = []
         for _, r in self.detail_df.iterrows():
             rows.append(
@@ -138,15 +169,12 @@ class OddballQCReport:
                     self._format_cell("is_valid", r.get("is_valid")),
                     self._format_cell("p300_amplitude_uV", r.get("p300_amplitude_uV")),
                     self._format_cell("p300_latency_ms", r.get("p300_latency_ms")),
+                    self._format_cell("diff_amplitude_uV", r.get("diff_amplitude_uV")),
+                    self._format_cell("diff_latency_ms", r.get("diff_latency_ms")),
                     self._format_cell("flagged_reason", r.get("flagged_reason")),
                 ]
             )
-        table_html = style_utils.build_metric_table(headers, rows, title="")
-        return (
-            f"<details class='tech-details'>"
-            f"<summary>Technical Diagnostics: Electrode Detail</summary>"
-            f"{table_html}</details>"
-        )
+        return style_utils.build_metric_table(headers, rows, title="Electrode Breakdown")
 
     def _build_mapping_table(self) -> str:
         r = self.mapping_row
@@ -209,7 +237,11 @@ class OddballQCReport:
 
     def _build_plots_section(self) -> str:
         paths = self._resolve_plot_paths()
-        labels = {"erp": "ERP (4-panel)", "topomap": "Difference Topomap", "erp_image": "ERP Image (Pz)"}
+        labels = {
+            "erp": "ERP Waveforms",
+            "topomap": "Scalp Topography (Difference Wave)",
+            "erp_image": "Single-Trial ERP Image (Pz)",
+        }
 
         def card(key: str) -> str:
             src = paths.get(key)

@@ -999,6 +999,8 @@ class P300OddballPipeline(BasePipeline):
                     "n_rare_epochs": features.get("n_epochs"),
                     "n_standard_epochs": features.get("n_standard_epochs"),
                     "baseline_std_uV": features.get("baseline_std_uV"),
+                    "p300_rare_amplitude_Pz_uV": features.get("p300_amplitude_Pz_uV"),
+                    "p300_rare_latency_Pz_ms": features.get("p300_latency_Pz_ms"),
                     "p300_diff_amplitude_Pz_uV": features.get("diff_amplitude_Pz_uV"),
                     "p300_diff_latency_Pz_ms": features.get("diff_latency_Pz_ms"),
                     "p300_diff_amplitude_Cz_uV": features.get("diff_amplitude_Cz_uV"),

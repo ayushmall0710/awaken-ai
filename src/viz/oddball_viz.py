@@ -126,7 +126,30 @@ class OddballVisualizer:
         ax3.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
         ax3.set_xlabel("Time (ms)")
         ax3.set_ylabel("Amplitude (µV)")
-        ax3.set_title("P300: Rare-Stimulus Evoked Response at Midline")
+        ax3.set_title("Rare-Only ERP — Midline Electrodes")
+
+        # Mark detected Pz peak
+        pz_rare_lat = features.get("p300_latency_Pz_ms")
+        pz_rare_amp = features.get("p300_amplitude_Pz_uV")
+        if pz_rare_lat is not None and pz_rare_amp is not None:
+            ax3.axvline(
+                pz_rare_lat, color="blue", linestyle="--", linewidth=1.5, alpha=0.7,
+            )
+            ax3.scatter(
+                [pz_rare_lat], [pz_rare_amp], color="blue", s=100, zorder=5, marker="v",
+            )
+            ax3.annotate(
+                f"Pz: {pz_rare_amp:.1f}µV\n@ {pz_rare_lat:.0f}ms",
+                xy=(pz_rare_lat, pz_rare_amp),
+                xytext=(15, 10),
+                textcoords="offset points",
+                fontsize=8,
+                fontweight="bold",
+                color="blue",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="blue"),
+                arrowprops=dict(arrowstyle="->", color="blue"),
+            )
+
         ax3.legend(loc="upper right")
         ax3.grid(True, alpha=0.3)
 
@@ -146,7 +169,30 @@ class OddballVisualizer:
         ax4.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
         ax4.set_xlabel("Time (ms)")
         ax4.set_ylabel("Amplitude (µV)")
-        ax4.set_title("MNN: Difference Wave (Rare − Standard)")
+        ax4.set_title("Difference Wave (Rare − Standard) — P300 Detection")
+
+        # Mark detected Pz peak on difference wave
+        pz_diff_lat = features.get("diff_latency_Pz_ms")
+        pz_diff_amp = features.get("diff_amplitude_Pz_uV")
+        if pz_diff_lat is not None and pz_diff_amp is not None:
+            ax4.axvline(
+                pz_diff_lat, color="blue", linestyle="--", linewidth=1.5, alpha=0.7,
+            )
+            ax4.scatter(
+                [pz_diff_lat], [pz_diff_amp], color="blue", s=100, zorder=5, marker="v",
+            )
+            ax4.annotate(
+                f"Pz: {pz_diff_amp:.1f}µV\n@ {pz_diff_lat:.0f}ms",
+                xy=(pz_diff_lat, pz_diff_amp),
+                xytext=(15, 10),
+                textcoords="offset points",
+                fontsize=8,
+                fontweight="bold",
+                color="blue",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="blue"),
+                arrowprops=dict(arrowstyle="->", color="blue"),
+            )
+
         ax4.legend(loc="upper right")
         ax4.grid(True, alpha=0.3)
 
