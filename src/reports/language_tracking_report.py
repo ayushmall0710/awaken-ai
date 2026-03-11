@@ -1,6 +1,5 @@
 """HTML report for Language Tracking Analysis."""
 
-import base64
 import logging
 from pathlib import Path
 from typing import Optional
@@ -53,33 +52,6 @@ _MORLET_COLS = [
     ("Sentence (Morlet)", "morlet_itpc_sentence"),
     ("Comprehension (Morlet)", "morlet_itpc_comprehension"),
 ]
-
-_PLOT_CSS = """
-        .plot-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        .topo-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        .plot-card {
-            background: #fff;
-            border: 1px solid #e0e0e0;
-            border-radius: 6px;
-            padding: 0.75rem;
-            text-align: center;
-        }
-        .plot-card figcaption {
-            font-size: 0.8rem;
-            color: #64748b;
-            margin-top: 0.4rem;
-        }
-        """
 
 
 class LanguageTrackingReport:
@@ -235,14 +207,6 @@ class LanguageTrackingReport:
         self._plot_paths = paths
         return paths
 
-    @staticmethod
-    def _embed_image(path: Path, alt: str = "") -> str:
-        try:
-            b64 = base64.b64encode(path.read_bytes()).decode("ascii")
-            return f"<img src='data:image/png;base64,{b64}' alt='{alt}' style='width:100%;max-width:100%;' />"
-        except (FileNotFoundError, OSError):
-            return f"<p><em>Plot unavailable: {alt}</em></p>"
-
     def _format_cell(self, key: str, row: pd.Series) -> str:
         val = row.get(key)
         if val is None or (isinstance(val, float) and not np.isfinite(val)):
@@ -287,9 +251,6 @@ class LanguageTrackingReport:
             color = "#16a34a" if v > 0.1 else ("#dc2626" if v < -0.1 else "#856404")
             return f"<span style='color:{color};font-weight:bold;'>{v:+.3f}</span>"
         return str(val)
-
-    def _build_css_extensions(self) -> str:
-        return _PLOT_CSS
 
     def _build_overview_cards(self) -> str:
         res = self.lt_obj.results
@@ -372,7 +333,7 @@ class LanguageTrackingReport:
         # Focus Comparison Plot
         comp_html = ""
         if "focus_comparison" in plot_paths:
-            img = self._embed_image(plot_paths["focus_comparison"], "Focus Comparison")
+            img = style_utils.embed_image(plot_paths["focus_comparison"], "Focus Comparison")
             comp_html = (
                 "<div style='flex: 1.2; min-width: 350px; max-width: 500px;'>"
                 f"<div class='plot-card' style='padding: 0.5rem;'>{img}"
@@ -501,14 +462,13 @@ class LanguageTrackingReport:
                 continue
 
             # Build Spectrum Card (Full Width)
-            spec_img = self._embed_image(plot_paths[spec_key], f"{focus.capitalize()} Spectrum")
-            spec_html = (
-                f"<div class='plot-card'>{spec_img}"
-                f"<figcaption><strong>Frequency Spectrum ({focus.upper()} focus):</strong> "
+            spec_img = style_utils.embed_image(plot_paths[spec_key], f"{focus.capitalize()} Spectrum")
+            spec_desc = (
+                f"<strong>Frequency Spectrum ({focus.upper()} focus):</strong> "
                 "Channel-averaged ITPC vs Frequency. Vertical lines mark target Word (3.125 Hz), "
                 "Phrase (1.56 Hz), and Sentence (0.78 Hz) rates. Peaks confirm stimulus-locked entrainment."
-                "</figcaption></div>"
             )
+            spec_html = style_utils.build_plot_card(spec_img, spec_desc)
 
             # Build Topo Grid (3 columns horizontally)
             topo_cards = []
@@ -522,13 +482,13 @@ class LanguageTrackingReport:
             for i, (freq, label) in enumerate(targets):
                 key = f"topomap_{label.lower()}_{focus}"
                 if key in plot_paths:
-                    img = self._embed_image(plot_paths[key], f"{label} Topomap ({focus})")
+                    img = style_utils.embed_image(plot_paths[key], f"{label} Topomap ({focus})")
                     desc = f"<strong>{label} Rate</strong> ({freq} Hz)"
-                    topo_cards.append(f"<div class='plot-card'>{img}<figcaption>{desc}</figcaption></div>")
+                    topo_cards.append(style_utils.build_plot_card(img, desc))
 
             topo_html = f"<div class='topo-grid'>{''.join(topo_cards)}</div>"
             topo_caption = (
-                "<p style='font-size:0.8rem;color:#64748b;text-align:center;margin-top:0.5rem;'>"
+                "<p class='plot-caption-muted'>"
                 "<strong>Topographic ITPC Maps:</strong> Spatial distribution of phase-locking at target frequencies. "
                 "All maps in this row share a unified scale for direct comparison. "
                 f"{'White markers highlight the data-driven optimal cluster.' if focus == 'optimal' else ''}"
@@ -547,33 +507,26 @@ class LanguageTrackingReport:
         # 3. Validation & Per-Channel Analysis
         validation_html = []
         if "morlet_tfr" in plot_paths:
-            img = self._embed_image(plot_paths["morlet_tfr"], "Morlet TFR")
-            validation_html.append(
-                "<h3>Time-Frequency Representation (Morlet)</h3>"
-                f"<div class='plot-card'>{img}"
-                "<figcaption>ITPC time-frequency map averaged across channels (Clinical focus). "
+            img = style_utils.embed_image(plot_paths["morlet_tfr"], "Morlet TFR")
+            desc = (
+                "ITPC time-frequency map averaged across channels (Clinical focus). "
                 "Shows temporal stability of phase-locking to the speech stimulus."
-                "</figcaption></div>"
+            )
+            validation_html.append(
+                "<h3>Time-Frequency Representation (Morlet)</h3>" + style_utils.build_plot_card(img, desc)
             )
 
         # Side-by-side Channel Bar Charts
         bar_cards = []
         if "dft_channel_bar" in plot_paths:
-            img = self._embed_image(plot_paths["dft_channel_bar"], "DFT Per-Channel ITPC")
-            bar_cards.append(
-                f"<div class='plot-card'>{img}"
-                "<figcaption>DFT Per-Channel ITPC (Horizontal). "
-                "Dashed line = chance level 1/&radic;N."
-                "</figcaption></div>"
-            )
+            img = style_utils.embed_image(plot_paths["dft_channel_bar"], "DFT Per-Channel ITPC")
+            desc = "DFT Per-Channel ITPC (Horizontal). Dashed line = chance level 1/&radic;N."
+            bar_cards.append(style_utils.build_plot_card(img, desc))
+
         if "morlet_channel_bar" in plot_paths:
-            img = self._embed_image(plot_paths["morlet_channel_bar"], "Morlet Per-Channel ITPC")
-            bar_cards.append(
-                f"<div class='plot-card'>{img}"
-                "<figcaption>Morlet Band-Averaged Per-Channel ITPC. "
-                "Dashed line = chance level 1/&radic;N."
-                "</figcaption></div>"
-            )
+            img = style_utils.embed_image(plot_paths["morlet_channel_bar"], "Morlet Per-Channel ITPC")
+            desc = "Morlet Band-Averaged Per-Channel ITPC. Dashed line = chance level 1/&radic;N."
+            bar_cards.append(style_utils.build_plot_card(img, desc))
 
         if bar_cards:
             validation_html.append("<h3>Per-Channel Validation (DFT vs Morlet)</h3>")
@@ -583,13 +536,13 @@ class LanguageTrackingReport:
         for freq, label in _TARGET_FREQS:
             key = f"morlet_topomap_{label.lower()}"
             if key in plot_paths:
-                img = self._embed_image(plot_paths[key], f"Morlet {label} Topomap")
-                morlet_topo_html += (
-                    f"<div class='plot-card'>{img}"
-                    f"<figcaption>Morlet ITPC Topomap @ {freq} Hz ({label} rate). "
+                img = style_utils.embed_image(plot_paths[key], f"Morlet {label} Topomap")
+                desc = (
+                    f"Morlet ITPC Topomap @ {freq} Hz ({label} rate). "
                     "Left temporal/frontal hotspots indicate expected language lateralization."
-                    "</figcaption></div>"
                 )
+                morlet_topo_html += style_utils.build_plot_card(img, desc)
+
         if morlet_topo_html:
             validation_html.append(
                 f"<h3>ITPC Topographic Maps (Morlet)</h3><div class='plot-grid'>{morlet_topo_html}</div>"
@@ -711,7 +664,6 @@ class LanguageTrackingReport:
             title=f"Language Tracking Report \u2014 {pid} / {self.session_id}",
             patient_id=pid,
             session_id=self.session_id,
-            extra_css=self._build_css_extensions(),
         )
         html += self._build_overview_cards()
         html += self._build_entrainment_table()
