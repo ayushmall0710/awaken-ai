@@ -1,3 +1,4 @@
+import datetime
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,12 +71,18 @@ class CommandFollowingReport:
 
     def _setup_output_dir(self, output_dir: Optional[Path] = None) -> None:
         if output_dir is None:
-            output_dir = config.REPORTS_DIR / self.cf_obj.patient_id / self.session_id / "command_following"
+            path_str = config.REPORT_DIR_TEMPLATE.format(
+                patient_id=self.cf_obj.patient_id,
+                session_id=self.session_id,
+                pipeline_name="command_following",
+                timestamp=datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S"),
+            )
+            output_dir = Path(path_str)
 
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.report_file = self.output_dir / f"{self.session_id}_cf_report.html"
+        self.report_file = self.output_dir / "report.html"
 
     # ──────────────────────────────────────────────────────────────
     #  CELL FORMATTERS

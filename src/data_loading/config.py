@@ -45,7 +45,11 @@ ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
 QC_REPORTS_DIR = PROCESSED_DATA_DIR / "oddball_qc"
 
 # Analysis (ENG-06) outputs
-REPORTS_DIR = PROCESSED_DATA_DIR / "reports"
+REPORTS_DIR = LOCAL_DATA_ROOT / "reports"
+
+REPORT_DIR_TEMPLATE = str(REPORTS_DIR / "{patient_id}" / "{session_id}" / "{pipeline_name}" / "{timestamp}")
+COMBINED_REPORT_DIR_TEMPLATE = str(REPORTS_DIR / "combined" / "{pipeline_name}" / "{timestamp}")
+
 
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
