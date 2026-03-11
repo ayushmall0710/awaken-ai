@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
 
 from src.cli.cli_utils import print_table
-from src.data_loading import UnifiedDataLoader, config
+from src.data_loading import UnifiedDataLoader
 from src.pipelines.command_following import CommandFollowingAnalysis
 from src.reports import style_utils
 from src.reports.command_following_report import CommandFollowingReport
@@ -27,14 +28,13 @@ def run(
     session that ran successfully.
     """
     pipeline = CommandFollowingAnalysis()
-    html_fragments: list[str] = []
-    extra_css: str = ""
+    generated_reports: list[tuple[str, str, Path]] = []
 
     for pid in patient_ids:
         sessions = [session] if session else loader.get_patient(pid).list_session_ids()
 
         if report:
-            html_fragments.append(style_utils.build_patient_panel(pid))
+            patient_panel = style_utils.build_patient_panel(pid)
 
         for sess in sessions:
             typer.echo(f"[command-following] {pid} / {sess} ...")
@@ -45,17 +45,18 @@ def run(
 
                     if report:
                         cf_report = CommandFollowingReport(pipeline, session_id=sess)
-                        extra_css = cf_report._build_css_extensions()
-                        html_fragments.append(cf_report.build_session_html())
+                        style_utils.stitch_and_save(
+                            [patient_panel, cf_report.build_session_html()],
+                            output_path=cf_report.report_file,
+                            title="Command Following",
+                            generator_name="AwakenAI Capstone",
+                            extra_css=cf_report._build_css_extensions(),
+                        )
+                        generated_reports.append((pid, sess, cf_report.report_file))
             except Exception as e:
                 typer.echo(f"  Failed: {e}", err=True)
 
-    if report and html_fragments:
-        out = style_utils.stitch_and_save(
-            html_fragments,
-            output_path=config.REPORTS_DIR / "combined_cf_report.html",
-            title="Command Following — Combined Report",
-            generator_name="AwakenAI Capstone",
-            extra_css=extra_css,
-        )
-        typer.echo(f"Combined report: {out}")
+    if report and generated_reports:
+        typer.echo("\nGenerated Reports:")
+        for pid, sess, path in generated_reports:
+            typer.echo(f"  {pid} / {sess}: {path}")

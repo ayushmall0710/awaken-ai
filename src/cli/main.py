@@ -107,6 +107,7 @@ def qc_cmd(
 
 class Pipeline(str, Enum):
     command_following = "command-following"
+    command_following_svm = "command-following-svm"
     language = "language"
     oddball = "oddball"
 
@@ -176,6 +177,7 @@ def run_cmd(
     # command-following specific
     alpha: Annotated[float, typer.Option("--alpha", help="Significance threshold for ERD test")] = 0.05,
     report: Annotated[bool, typer.Option("--report", "-r", help="Generate HTML report with visualizations")] = False,
+    n_perms: Annotated[int, typer.Option("--n-perms", help="Number of permutations for SVM command following")] = 1000,
     # language specific
     focus: Annotated[str, typer.Option("--focus", help="Channel focus for language pipeline: LH or Clinical")] = "LH",
     # oddball specific
@@ -190,6 +192,7 @@ def run_cmd(
     Without --pipeline, auto-detects which pipelines apply based on available trial types.
     """
     from src.cli.runners import command_following as cf_runner
+    from src.cli.runners import command_following_claassen as cf_svm_runner
     from src.cli.runners import language as lang_runner
     from src.cli.runners import oddball as ob_runner
 
@@ -217,9 +220,11 @@ def run_cmd(
         session,
         alpha,
         report,
+        n_perms,
         focus,
         parsed_electrodes,
         cf_runner,
+        cf_svm_runner,
         lang_runner,
         ob_runner,
     )
@@ -264,15 +269,19 @@ def _dispatch_pipelines(
     session: Optional[str],
     alpha: float,
     report: bool,
+    n_perms: int,
     focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
+    cf_svm_runner: types.ModuleType,
     lang_runner: types.ModuleType,
     ob_runner: types.ModuleType,
 ) -> None:
     """Dispatch to each applicable pipeline runner."""
     if Pipeline.command_following in pipelines:
         cf_runner.run(loader, patient_ids, session, alpha, report)
+    if Pipeline.command_following_svm in pipelines:
+        cf_svm_runner.run(loader, patient_ids, session, alpha, report, n_perms)
     if Pipeline.language in pipelines:
         lang_runner.run(loader, patient_ids, session, focus)
     if Pipeline.oddball in pipelines:
