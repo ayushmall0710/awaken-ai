@@ -3,6 +3,10 @@ import json
 import numpy as np
 import pandas as pd
 
+from src.data_processing.normalization import (
+    convert_new_format_to_canonical,
+    is_new_format,
+)
 from src.data_processing.pipeline import process_stimulus_df
 
 
@@ -153,3 +157,120 @@ class TestDataIntegrityEdgeCases:
         # All actual types should be in expected set
         unexpected = processed_types - expected_types
         assert unexpected == set(), f"Unexpected trial types: {unexpected}"
+
+
+def _make_new_format_df(rows: list[dict]) -> pd.DataFrame:
+    """Build a minimal new-format DataFrame from a list of row dicts."""
+    base = {
+        "patient_id": "CON010",
+        "date": "2026-03-06",
+        "start_time": 1000.0,
+        "end_time": 1010.0,
+    }
+    records = [{**base, **r} for r in rows]
+    return pd.DataFrame(records)
+
+
+class TestNewCON010Format:
+    """Unit tests for new CON010 (Mar 2026) CSV format detection and conversion."""
+
+    def test_format_detection_new(self):
+        """is_new_format returns True for new-format DataFrame."""
+        df = _make_new_format_df([{"stim_type": "familiar", "notes": ""}])
+        assert is_new_format(df) is True
+
+    def test_format_detection_old(self):
+        """is_new_format returns False for old-format DataFrame."""
+        df = pd.DataFrame({"patient_id": ["CON008"], "trial_type": ["language"], "sentences": ["[]"]})
+        assert is_new_format(df) is False
+
+    def test_familiar_maps_to_loved_one_voice(self):
+        """stim_type='familiar' converts to trial_type='loved_one_voice'."""
+        df = _make_new_format_df([{"stim_type": "familiar", "notes": "file: CON010_femalevoice.wav"}])
+        result = convert_new_format_to_canonical(df)
+        assert result["trial_type"].iloc[0] == "loved_one_voice"
+
+    def test_unfamiliar_maps_to_control(self):
+        """stim_type='unfamiliar' converts to trial_type='control'."""
+        df = _make_new_format_df([{"stim_type": "unfamiliar", "notes": "speaker: Hannah"}])
+        result = convert_new_format_to_canonical(df)
+        assert result["trial_type"].iloc[0] == "control"
+
+    def test_sync_pulse_preserved(self):
+        """manual_sync_pulse rows survive conversion with trial_type='manual_sync_pulse'."""
+        df = _make_new_format_df([{"stim_type": "manual_sync_pulse", "notes": "Manual sync pulse at 11:07:21"}])
+        result = convert_new_format_to_canonical(df)
+        assert "manual_sync_pulse" in result["trial_type"].values
+
+    def test_language_sentences_parsed(self):
+        """language notes are parsed into a list of event dicts."""
+        notes = "Sentences: ['8', '16', '14']"
+        df = _make_new_format_df([{"stim_type": "language", "notes": notes}])
+        result = convert_new_format_to_canonical(df)
+        sentences = result["sentences"].iloc[0]
+        assert isinstance(sentences, list)
+        assert len(sentences) == 3
+        events = [s["event"] for s in sentences]
+        assert events == ["8", "16", "14"]
+        assert all(s["onset_time"] is None for s in sentences)
+
+    def test_oddball_aggregated_into_blocks(self):
+        """Contiguous oddball+p rows are aggregated into a single trial row."""
+        rows = [
+            {"stim_type": "oddball+p", "notes": "standard_tone", "start_time": 100.0, "end_time": 100.03},
+            {"stim_type": "oddball+p", "notes": "standard_tone", "start_time": 101.0, "end_time": 101.03},
+            {"stim_type": "oddball+p", "notes": "rare_tone", "start_time": 102.0, "end_time": 102.03},
+        ]
+        df = _make_new_format_df(rows)
+        result = convert_new_format_to_canonical(df)
+        oddball_rows = result[result["trial_type"] == "oddball"]
+        # All 3 tones should collapse into 1 block row
+        assert len(oddball_rows) == 1
+        sentences = oddball_rows["sentences"].iloc[0]
+        assert len(sentences) == 3
+        assert sentences[0]["event"] == "standard"
+        assert sentences[2]["event"] == "rare"
+
+    def test_duration_computed(self):
+        """duration is computed as end_time - start_time when column absent."""
+        df = _make_new_format_df([{"stim_type": "familiar", "notes": "", "start_time": 200.0, "end_time": 210.5}])
+        result = convert_new_format_to_canonical(df)
+        assert abs(result["duration"].iloc[0] - 10.5) < 1e-6
+
+    def test_full_pipeline_new_format(self):
+        """process_stimulus_df produces the canonical schema for new-format input."""
+        rows = [
+            {"stim_type": "manual_sync_pulse", "notes": "sync", "start_time": 50.0, "end_time": 51.0},
+            {"stim_type": "familiar", "notes": "file: CON010_femalevoice.wav", "start_time": 100.0, "end_time": 110.0},
+            {"stim_type": "unfamiliar", "notes": "speaker: Hannah", "start_time": 112.0, "end_time": 122.0},
+            {"stim_type": "language", "notes": "Sentences: ['3', '7']", "start_time": 130.0, "end_time": 146.0},
+            {"stim_type": "oddball+p", "notes": "standard_tone", "start_time": 200.0, "end_time": 200.03},
+            {"stim_type": "oddball+p", "notes": "rare_tone", "start_time": 201.0, "end_time": 201.03},
+        ]
+        df = _make_new_format_df(rows)
+        result = process_stimulus_df(df, "CON010_2026-03-06_stimulus_results.csv")
+
+        # Canonical schema present
+        required = [
+            "patient_id",
+            "date",
+            "trial_type",
+            "sentences",
+            "start_time",
+            "end_time",
+            "duration",
+            "source_file",
+        ]
+        for col in required:
+            assert col in result.columns, f"Missing column: {col}"
+
+        # Trial types are normalised correctly
+        types = set(result["trial_type"].unique())
+        assert "loved_one_voice" in types
+        assert "control" in types
+        assert "language" in types
+        assert "oddball" in types
+        assert "manual_sync_pulse" in types
+        # stim_type / notes should not appear
+        assert "stim_type" not in result.columns
+        assert "notes" not in result.columns

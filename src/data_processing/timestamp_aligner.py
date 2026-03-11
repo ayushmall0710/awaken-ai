@@ -34,6 +34,7 @@ TRIAL_TYPE_TO_METHOD = {
     "beep": "peak_detection",
     "control": "peak_detection",
     "loved_one_voice": "peak_detection",  # TODO: Confirm method (placeholder)
+    "manual_sync_pulse": "sync_pulse",  # New CON010 (Mar 2026): DC step-edge alignment
 }
 
 
@@ -144,8 +145,27 @@ class TimestampAligner:
         # Store EDF start time for unix-to-edf conversion
         self.edf_start_unix = raw.info["meas_date"].timestamp()
 
-        # Detect timezone offset
-        self.timezone_offset = detect_timezone_offset(raw, trials_df)
+        # Handle manual sync pulse (new protocol) vs legacy timezone offset
+        sync_pulse_trials = trials_df[trials_df["trial_type"] == "manual_sync_pulse"]
+        self._has_sync_pulse = not sync_pulse_trials.empty
+        if self._has_sync_pulse:
+            sync_pulse_start = sync_pulse_trials.iloc[0]["start_time"]
+
+            # Find the largest DC step across the *entire* recording
+            diff = np.abs(np.diff(self.dc_signal.astype(float)))
+            edge_idx = int(np.argmax(diff))
+            true_edf_edge = edge_idx / self.sr
+
+            # Calculate perfect timezone offset so that:
+            # unix_to_edf(sync_pulse_start) == true_edf_edge
+            self.timezone_offset = true_edf_edge - sync_pulse_start + self.edf_start_unix
+            logger.info(
+                f"Sync pulse detected globally at EDF={true_edf_edge:.3f}s. "
+                f"Calculated precise timezone_offset={self.timezone_offset:.3f}s"
+            )
+        else:
+            # Fallback for legacy protocols
+            self.timezone_offset = detect_timezone_offset(raw, trials_df)
 
         events = []
         for _, trial in trials_df.iterrows():
@@ -160,6 +180,8 @@ class TimestampAligner:
                         df = self._align_commands(trial)
                     case "peak_detection":
                         df = self._align_peaks(trial)
+                    case "sync_pulse":
+                        df = self._align_sync_pulse(trial)
                     case _:
                         raise ValueError(f"Unknown method: {method}")
 
@@ -228,6 +250,7 @@ class TimestampAligner:
         search_end_edf: float,
         audio_path: Path,
         buffer: float = 0.0,
+        min_score: float = 0.75,
     ) -> Optional[AlignmentResult]:
         """
         Align a single speech file within a time window of the EDF.
@@ -247,7 +270,7 @@ class TimestampAligner:
         chunk = self.dc_signal[start_idx:end_idx]
 
         # Compute Match
-        match = self._compute_audio_match(chunk, audio_path, min_score=0.75)
+        match = self._compute_audio_match(chunk, audio_path, min_score=min_score)
 
         if not match:
             return None
@@ -371,14 +394,16 @@ class TimestampAligner:
                 # If we fail to find Keep in 8s, maybe it's further away?
                 # If we don't find it, we advance cursor by fixed step to keep searching?
 
+                cmd_min_score = 0.40 if self._has_sync_pulse else 0.75
                 res = self._align_speech(
                     search_start_edf=current_cursor,
                     search_end_edf=min(trial_end, current_cursor + 8.0),
                     audio_path=cmd_path,
                     buffer=1.0,
+                    min_score=cmd_min_score,
                 )
 
-                if res and res.correlation_score > 0.75:  # Good match
+                if res:
                     event_dict = asdict(res)
                     event_dict["event"] = cmd_file.replace(".mp3", "")
                     enriched_events.append(event_dict)
@@ -469,6 +494,76 @@ class TimestampAligner:
             enriched_events.append(enriched_event)
 
         return self._build_trial_result(trial, enriched_events, "peak_detection")
+
+    def _align_sync_pulse(self, trial: pd.Series) -> pd.DataFrame:
+        """Align a ``manual_sync_pulse`` trial by detecting the DC step edge.
+
+        The new CON010 protocol fires a brief step-function on the DC channel
+        at a known software-clock time.  By locating the edge in EDF time we
+        obtain ``clock_offset = edf_edge_time - software_reported_time`` which
+        downstream consumers can use to correct all other stimulus timestamps.
+
+        Strategy
+        --------
+        1. Convert the software-reported ``start_time`` to EDF time.
+        2. Extract a ±5 s window around that point on the DC channel.
+        3. Find the sample with the maximum absolute first-order derivative
+           (i.e. the largest step).
+        4. Return a single-event row with ``event='sync_pulse'`` and the
+           detected EDF-clock time expressed in Unix seconds.
+        """
+        # Software-reported timestamp in EDF time
+        t_center_edf = unix_to_edf(
+            trial["start_time"],
+            edf_start_unix=self.edf_start_unix,
+            timezone_offset=self.timezone_offset,
+        )
+
+        window_sec = 5.0
+        t_start_edf = max(0.0, t_center_edf - window_sec)
+        t_end_edf = min(self.raw.times[-1], t_center_edf + window_sec)
+
+        start_idx = int(t_start_edf * self.sr)
+        end_idx = int(t_end_edf * self.sr)
+
+        if end_idx <= start_idx:
+            logger.warning(f"sync_pulse window out of bounds for trial at {trial['start_time']}")
+            return pd.DataFrame()
+
+        dc_chunk = self.dc_signal[start_idx:end_idx]
+
+        # Largest absolute derivative = step edge
+        diff = np.abs(np.diff(dc_chunk.astype(float)))
+        if len(diff) == 0:
+            logger.warning("sync_pulse: empty DC chunk — skipping")
+            return pd.DataFrame()
+
+        edge_idx_local = int(np.argmax(diff))
+        edge_idx_global = start_idx + edge_idx_local
+        edge_time_edf = edge_idx_global / self.sr
+        edge_time_unix = edf_to_unix(
+            edge_time_edf,
+            edf_start_unix=self.edf_start_unix,
+            timezone_offset=self.timezone_offset,
+        )
+
+        clock_offset = float(edge_time_unix) - float(trial["start_time"])
+        logger.info(
+            f"sync_pulse detected at EDF={edge_time_edf:.3f}s "
+            f"(software={trial['start_time']:.3f}s), "
+            f"clock_offset={clock_offset:+.4f}s"
+        )
+
+        enriched_event = {
+            "event": "sync_pulse",
+            "onset_time": float(trial["start_time"]),
+            "event_start": float(edge_time_unix),
+            "event_end": float(edge_time_unix),
+            "event_duration": 0.0,
+            "clock_offset_seconds": clock_offset,
+        }
+
+        return self._build_trial_result(trial, [enriched_event], "sync_pulse")
 
     def _detect_instruction_end(self, dc_chunk: np.ndarray, trial_type: str) -> int:
         """Find where instruction audio ends using unified match logic."""
