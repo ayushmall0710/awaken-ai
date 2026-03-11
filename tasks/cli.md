@@ -48,6 +48,19 @@ awakenai info trial CON008 0            # View exact timestamps and sentences fo
 awakenai info trial-types               # View built-in documentation mapping trial types to pipelines
 ```
 
+**Reports (`qc`, oddball via `run -r`)**
+
+```bash
+awakenai qc                              # Generate ENG-06 QC report (all patients/sessions)
+awakenai qc -p CON008                    # QC report for one patient
+awakenai qc -p CON008 -p CON009         # Multiple patients
+awakenai qc -s 2025-08-14               # Restrict to session date
+
+# P300 oddball QC HTML (writes data/processed/reports/combined_oddball_qc.html)
+awakenai run CON008 --pipeline oddball -r
+awakenai run CON008 --pipeline oddball -s 2025-08-14 -r   # if restricting by session date
+```
+
 **Global Flags**
 
 ```bash
@@ -69,7 +82,8 @@ src/cli/
 └── runners/
     ├── command_following.py # Eng-04 dispatcher
     ├── language.py          # Eng-03 dispatcher
-    └── oddball.py           # Eng-02 dispatcher
+    ├── oddball.py           # Eng-02b oddball pipeline
+    └── qc_report.py         # ENG-06 QC report dispatcher
 ```
 
 ## 🛠️ Features Developed

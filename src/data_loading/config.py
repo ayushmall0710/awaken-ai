@@ -44,8 +44,8 @@ FEATURES_DIR = PROCESSED_DATA_DIR / "features"
 ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
 QC_REPORTS_DIR = PROCESSED_DATA_DIR / "oddball_qc"
 
-# Analysis (ENG-06) outputs
-REPORTS_DIR = PROCESSED_DATA_DIR / "reports"
+# Report Directories (relative to LOCAL_DATA_ROOT)
+REPORTS_DIR = LOCAL_DATA_ROOT / "reports"
 
 # Audio directories (relative to LOCAL_DATA_ROOT)
 AUDIO_DIR = LOCAL_DATA_ROOT / "Audio"
