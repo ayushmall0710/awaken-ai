@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -24,8 +25,8 @@ def run(
 ) -> None:
     """Run P300OddballPipeline for the given patients/sessions.
 
-    When report=True, one HTML report is written per session to:
-        REPORTS_DIR/{patient_id}/{session_id}/oddball/{YYYYMMDD_HHMMSS}/oddball_qc.html
+    When report=True, one HTML report is written per session to the path
+        defined by config.REPORT_DIR_TEMPLATE (patient_id/session_id/oddball/timestamp).
     """
     pipeline = P300OddballPipeline(loader=loader)
 
@@ -79,7 +80,14 @@ def run(
                 sess_detail = detail_df[(detail_df["patient_id"] == pid) & (detail_df["session_id"] == sess)]
                 mapping_row = mapping_df[(mapping_df["patient_id"] == pid) & (mapping_df["session_id"] == sess)].iloc[0]
 
-                out_dir = config.REPORTS_DIR / pid / sess / "oddball" / timestamp
+                out_dir = Path(
+                    config.REPORT_DIR_TEMPLATE.format(
+                        patient_id=pid,
+                        session_id=sess,
+                        pipeline_name="oddball",
+                        timestamp=timestamp,
+                    )
+                )
                 out_path = out_dir / "oddball_qc.html"
 
                 html_fragments: list[str] = []
