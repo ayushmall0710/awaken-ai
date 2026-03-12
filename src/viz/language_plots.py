@@ -308,7 +308,7 @@ def plot_itpc_spectrum(
         if focus_label:
             title += f" ({focus_label})"
 
-    fig, ax = _setup_figure_and_ax(figsize=(10, 5), title=title, xlabel="Frequency (Hz)", ylabel="ITPC")
+    fig, ax = _setup_figure_and_ax(figsize=(10, 3), title=title, xlabel="Frequency (Hz)", ylabel="ITPC")
     ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label="Mean ITPC")
 
     y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1

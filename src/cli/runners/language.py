@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +20,6 @@ def run(
     report: bool = False,
 ) -> None:
     """Run LanguageTrackingAnalysis for the given patients/sessions."""
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     for pid in patient_ids:
         sessions = [session] if session else loader.get_patient(pid).list_session_ids()
@@ -46,15 +44,17 @@ def run(
                 ]
                 # Filter to available columns (protect against schema changes)
                 available_cols = [c for c in cli_cols if c in df.columns]
-                print_table(df[available_cols], title=f"{pid} / {sess} — Language Tracking Results")
+                print_table(
+                    df[available_cols],
+                    title=f"{pid} / {sess} — Language Tracking Results",
+                )
 
-                # Construct standardized output directory
+                # Construct standardized output directory for artifacts (CSV, NPZ)
                 out_dir = Path(
                     config.REPORT_DIR_TEMPLATE.format(
                         patient_id=pid,
                         session_id=sess,
                         pipeline_name="language_tracking",
-                        timestamp=timestamp,
                     )
                 )
                 out_dir.mkdir(parents=True, exist_ok=True)
@@ -77,37 +77,32 @@ def run(
                     typer.echo(f"  Saved arrays to: {npz_file}")
 
                 if report:
-                    from src.reports import style_utils
-                    from src.reports.language_tracking_report import LanguageTrackingReport
-
                     rpt = LanguageTrackingReport(pipeline, session_id=sess, output_dir=out_dir)
-                    if len(sessions) == 1:
-                        path = rpt.generate()
-                        typer.echo(f"  Report: {path}")
-                    else:
-                        if not extra_css:
-                            extra_css = ""
-                        report_fragments.append(rpt.build_session_html())
+                    fragment = rpt.build_session_html()
+                    report_fragments.append(fragment)
+
+                    # Always provide the standalone report in the session dir
+                    path = rpt.generate()
+                    typer.echo(f"  Report: {path}")
 
             except Exception as e:
                 typer.echo(f"  Failed: {e}", err=True)
 
-        # Multi-session combined report
-        if report and len(report_fragments) >= 1:
+        # Per-patient combined report (shows all successful sessions for this patient)
+        if report and len(report_fragments) > 1:
             from src.reports import style_utils
 
-            combined_dir = Path(
-                config.COMBINED_REPORT_DIR_TEMPLATE.format(
-                    pipeline_name="language_tracking",
-                    timestamp=timestamp,
-                )
+            # Save in patient's report using the combined template
+            patient_report_dir = Path(
+                config.COMBINED_REPORT_DIR_TEMPLATE.format(patient_id=pid, pipeline_name="language_tracking")
             )
-            combined_dir.mkdir(parents=True, exist_ok=True)
+            patient_report_dir.mkdir(parents=True, exist_ok=True)
+
             out_path = style_utils.stitch_and_save(
-                report_fragments,
-                output_path=combined_dir / "report.html",
-                title=f"{pid} — Language Tracking Combined Report",
+                [style_utils.build_patient_panel(pid)] + report_fragments,
+                output_path=patient_report_dir / "report.html",
+                title=f"{pid} — Language Tracking Summary",
                 generator_name="Language Tracking Pipeline",
                 extra_css=extra_css,
             )
-            typer.echo(f"  Combined report: {out_path}")
+            typer.echo(f"  Patient report: {out_path}")
