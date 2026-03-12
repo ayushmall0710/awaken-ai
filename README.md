@@ -59,3 +59,8 @@ ruff check --fix . && ruff format .
 ```
 
 This ensures your code passes the CI format check. You can also install `Ruff` extension to auto-format the code everytime you save the file.
+
+
+## Data Preprocessing
+
+![WhatsApp Image 2026-03-12 at 13 59 41](https://github.com/user-attachments/assets/edff523c-2d2a-49bc-928c-1ff1f1d85796)
