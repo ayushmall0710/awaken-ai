@@ -99,7 +99,7 @@ def run(
                 out = style_utils.stitch_and_save(
                     html_fragments,
                     output_path=out_path,
-                    title="P300 Oddball QC — Combined Report",
+                    title="P300 Oddball Summary — Combined Report",
                     generator_name="P300 Oddball Pipeline",
                     extra_css=extra_css,
                 )
