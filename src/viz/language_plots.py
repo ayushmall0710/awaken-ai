@@ -4,6 +4,7 @@ Visualization module for language tracking results.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
 
 import src.reports.style_utils as style_utils
 from src.pipelines.language_tracking import LanguageConfig
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_CFG = LanguageConfig()
 
@@ -74,7 +77,7 @@ def _add_itpc_annotations(ax, metrics, method_label, y_top, plot_freqs):
         )
 
 
-def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
+def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict, n_cycles: Optional[np.ndarray] = None):
     """
     Generate and save enhanced ITPC plots (Topomap and TFR).
 
@@ -83,6 +86,7 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
         patient_id: Patient ID string.
         output_dir: Path to save outputs.
         metrics: Metrics dictionary from _extract_itpc_metrics.
+        n_cycles: Optional number of cycles used for TFR calculation for adaptive cropping.
     """
 
     output_dir = Path(output_dir)
@@ -111,13 +115,26 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
     )
     _save_and_close(fig_topo, output_dir / f"{patient_id}_language_ITPC_topomap.png", dpi=300)
 
+    # Adaptive cropping to remove edge artifacts
+    itc_plot = itc.copy()
+    if n_cycles is not None:
+        # Half-width of wavelet at each frequency
+        half_widths = n_cycles / (2.0 * itc.freqs)
+        crop_val = float(np.max(half_widths))
+        tmin_new = itc.times[0] + crop_val
+        tmax_new = itc.times[-1] - crop_val
+        if tmin_new < tmax_new:
+            itc_plot.crop(tmin=tmin_new, tmax=tmax_new)
+        else:
+            logger.warning("Adaptive cropping failed: cropped window is empty. Skipping cropping.")
+
     fig_tfr, ax_tfr = _setup_figure_and_ax(
         figsize=(14, 8),
         title=f"ITPC Time-Frequency ({patient_id}) - Hemisphere Mean",
         xlabel="Time (s)",
         ylabel="Frequency (Hz)",
     )
-    itc.plot(
+    itc_plot.plot(
         baseline=None,
         mode=None,
         axes=ax_tfr,
@@ -128,11 +145,13 @@ def plot_itpc_results(itc, patient_id: str, output_dir: str, metrics: dict):
         colorbar=True,
     )
     ax_tfr.axhline(y=target_freq, color="white", linestyle="--", linewidth=2, label=f"Sentence ({target_freq:.3f} Hz)")
-    ax_tfr.text(itc.times[0], target_freq, " Sentence", color="white", verticalalignment="bottom", fontweight="bold")
+    ax_tfr.text(
+        itc_plot.times[0], target_freq, " Sentence", color="white", verticalalignment="bottom", fontweight="bold"
+    )
     ax_tfr.axhline(y=phrase_freq, color="white", linestyle="-.", linewidth=2, label=f"Phrase ({phrase_freq:.3f} Hz)")
-    ax_tfr.text(itc.times[0], phrase_freq, " Phrase", color="white", verticalalignment="bottom", fontweight="bold")
+    ax_tfr.text(itc_plot.times[0], phrase_freq, " Phrase", color="white", verticalalignment="bottom", fontweight="bold")
     ax_tfr.axhline(y=word_freq, color="white", linestyle=":", linewidth=2, label=f"Word ({word_freq:.3f} Hz)")
-    ax_tfr.text(itc.times[0], word_freq, " Word", color="white", verticalalignment="bottom", fontweight="bold")
+    ax_tfr.text(itc_plot.times[0], word_freq, " Word", color="white", verticalalignment="bottom", fontweight="bold")
 
     tfr_path = _save_and_close(fig_tfr, output_dir / f"{patient_id}_language_ITPC_tfr.png", dpi=300)
     return tfr_path
@@ -322,6 +341,91 @@ def plot_itpc_spectrum(
     if focus_label:
         fname += f"_{focus_label.lower()}"
 
+    return _save_and_close(fig, Path(output_dir) / f"{fname}.png")
+
+
+def plot_itpc_spectrum_stacked(
+    spectrum_full: np.ndarray,
+    freqs: np.ndarray,
+    ch_names: list[str],
+    res_df: pd.DataFrame,
+    patient_id: str,
+    output_dir: str | Path,
+    method_label: str = "DFT",
+) -> Path:
+    """
+    Generate a single figure with 4 stacked subplots showing frequency spectrums
+    for Clinical, LH, RH, and Optimal focuses.
+
+    Parameters
+    ----------
+    spectrum_full : np.ndarray
+        Shape (n_channels, n_freqs). Full spectrum data.
+    freqs : np.ndarray
+        Frequency axis.
+    ch_names : list of str
+        Names of channels in spectrum_full.
+    res_df : pd.DataFrame
+        Results dataframe containing 'focus', 'channels', and ITPC metrics.
+    patient_id : str
+        Patient identifier.
+    output_dir : str or Path
+        Directory to save the plot.
+    method_label : str, optional
+        Analysis method label (e.g. "DFT").
+
+    Returns
+    -------
+    Path
+        Path to the saved PNG.
+    """
+    focuses = ["clinical", "lh", "rh", "optimal"]
+    fig, axes = plt.subplots(len(focuses), 1, figsize=(12, 3 * len(focuses)), sharex=True)
+
+    mask = (freqs >= 0.5) & (freqs <= 4.0)
+    plot_freqs = freqs[mask]
+
+    ch_to_idx = {ch: i for i, ch in enumerate(ch_names)}
+
+    for i, focus in enumerate(focuses):
+        ax = axes[i]
+        rows = res_df[res_df["focus"] == focus]
+        if rows.empty:
+            ax.text(0.5, 0.5, f"No data for {focus.upper()} focus", ha="center", va="center")
+            continue
+
+        row = rows.iloc[0]
+        focus_channels = row.get("channels", [])
+        if not isinstance(focus_channels, (list, tuple, np.ndarray)) or len(focus_channels) == 0:
+            ax.text(0.5, 0.5, f"No channels for {focus.upper()} focus", ha="center", va="center")
+            continue
+
+        indices = [ch_to_idx[ch] for ch in focus_channels if ch in ch_to_idx]
+        if not indices:
+            ax.text(0.5, 0.5, f"Channels not found for {focus.upper()} focus", ha="center", va="center")
+            continue
+
+        focus_spectrum = spectrum_full[indices, :]
+        mean_itpc = np.mean(focus_spectrum, axis=0)[mask]
+
+        ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label=f"{focus.upper()} Mean ITPC")
+
+        y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
+        _add_itpc_annotations(ax, row.to_dict(), method_label, y_top, plot_freqs)
+
+        ax.set_ylabel("ITPC", fontsize=10)
+        ax.set_title(f"Focus: {focus.upper()}", fontsize=11, fontweight="bold", loc="left")
+        ax.set_xlim(0.5, 4.0)
+        ax.grid(axis="y", linestyle="--", alpha=0.3)
+        ax.legend(fontsize=8, loc="upper right")
+
+    axes[-1].set_xlabel("Frequency (Hz)", fontsize=11)
+    fig.suptitle(
+        f"{patient_id}: {method_label} ITPC Frequency Spectrum (Stacked Focuses)", fontsize=14, fontweight="bold"
+    )
+    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+
+    fname = f"{patient_id}_lang_{method_label.lower()}_spectrum_stacked"
     return _save_and_close(fig, Path(output_dir) / f"{fname}.png")
 
 

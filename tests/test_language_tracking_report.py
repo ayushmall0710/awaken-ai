@@ -98,7 +98,9 @@ def test_generate_creates_html_file(mock_pipeline):
     """generate() writes an HTML file to output_dir."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch(
+                "src.reports.language_tracking_report.plot_itpc_spectrum_stacked", return_value=Path(tmpdir) / "s.png"
+            ),
             patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
@@ -111,7 +113,9 @@ def test_generate_html_contains_key_sections(mock_pipeline):
     """generate() HTML contains entrainment table and lateralization section."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch(
+                "src.reports.language_tracking_report.plot_itpc_spectrum_stacked", return_value=Path(tmpdir) / "s.png"
+            ),
             patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
@@ -126,7 +130,9 @@ def test_build_session_html_returns_details_element(mock_pipeline):
     """build_session_html() returns a collapsible <details> fragment."""
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
-            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch(
+                "src.reports.language_tracking_report.plot_itpc_spectrum_stacked", return_value=Path(tmpdir) / "s.png"
+            ),
             patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
@@ -155,7 +161,9 @@ def test_report_html_contains_morlet_section(mock_pipeline):
     with tempfile.TemporaryDirectory() as tmpdir:
         with (
             patch("src.reports.language_tracking_report.plot_itpc_results", return_value=Path(tmpdir) / "m.png"),
-            patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=Path(tmpdir) / "s.png"),
+            patch(
+                "src.reports.language_tracking_report.plot_itpc_spectrum_stacked", return_value=Path(tmpdir) / "s.png"
+            ),
             patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=Path(tmpdir) / "t.png"),
         ):
             rpt = LanguageTrackingReport(mock_pipeline, session_id="sess_01", output_dir=Path(tmpdir))
@@ -193,7 +201,7 @@ def test_build_overview_cards_includes_optimal_in_significance(mock_pipeline, tm
 def test_save_plots_conditional_highlighting_for_optimal_word(mock_pipeline, tmp_path):
     """_save_plots passes highlight_channels=None for Word rate in Optimal focus."""
     with (
-        patch("src.reports.language_tracking_report.plot_itpc_spectrum", return_value=tmp_path / "s.png"),
+        patch("src.reports.language_tracking_report.plot_itpc_spectrum_stacked", return_value=tmp_path / "s.png"),
         patch("src.reports.language_tracking_report.plot_itpc_topomap", return_value=tmp_path / "t.png") as mock_topo,
         patch("src.reports.language_tracking_report.plot_focus_comparison_bar", return_value=tmp_path / "c.png"),
     ):

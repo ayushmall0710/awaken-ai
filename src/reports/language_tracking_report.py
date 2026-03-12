@@ -16,7 +16,7 @@ from src.viz.language_plots import (
     plot_itpc_channel_bar,
     plot_itpc_channels_horizontal,
     plot_itpc_results,
-    plot_itpc_spectrum,
+    plot_itpc_spectrum_stacked,
     plot_itpc_topomap,
 )
 
@@ -109,63 +109,50 @@ class LanguageTrackingReport:
         # 1. Focus Comparison Bar Plot
         paths["focus_comparison"] = plot_focus_comparison_bar(res, pid, self.output_dir)
 
-        # 2. Per-Focus Plots (Clinical, LH, RH, and Optimal)
+        # 2. Stacked Spectrum Plot (Clinical, LH, RH, Optimal)
+        paths["itpc_spectrum_stacked"] = plot_itpc_spectrum_stacked(
+            spectrum_full, freqs_full, list(self.lt_obj._dft_ch_names), res, pid, self.output_dir
+        )
+
+        # 3. Unified Topomaps (Word, Phrase, Sentence)
         cfg = getattr(self.lt_obj, "cfg", _DEFAULT_CFG)
         word_idx = int(np.argmin(np.abs(freqs_full - cfg.target_word_freq)))
         vmax = max(float(np.percentile(spectrum_full[:, word_idx], 95)) * 1.2, 0.1)
         vlim = (0.0, vmax)
 
-        for focus in ["clinical", "lh", "rh", "optimal"]:
-            rows = res[res["focus"] == focus]
-            if rows.empty:
-                continue
-            row = rows.iloc[0]
-            channels = row.get("channels")
-            if not isinstance(channels, (list, tuple, np.ndarray)) or len(channels) == 0:
-                continue
+        # Get optimal channels for highlighting
+        opt_rows = res[res["focus"] == "optimal"]
+        opt_channels = None
+        if not opt_rows.empty:
+            opt_channels = opt_rows.iloc[0].get("channels")
 
-            metrics = row.to_dict()
-            focus_label = focus.capitalize()
+        for freq, label in _TARGET_FREQS:
+            # Highlight optimal focus channels (except for Word rate, per protocol)
+            highlight = opt_channels if label != "Word" else None
 
-            # Map channel names to indices
-            ch_to_idx = {ch: i for i, ch in enumerate(self.lt_obj._dft_ch_names)}
-            ch_indices = [ch_to_idx[ch] for ch in channels if ch in ch_to_idx]
-            if not ch_indices:
-                continue
-
-            # Subset spectrum for this focus
-            focus_spectrum = spectrum_full[ch_indices, :]
-
-            # Spectrum Plot
-            paths[f"itpc_spectrum_{focus}"] = plot_itpc_spectrum(
-                focus_spectrum, freqs_full, pid, self.output_dir, metrics, focus_label=focus_label
+            paths[f"unified_topomap_{label.lower()}"] = plot_itpc_topomap(
+                spectrum_full,
+                freqs_full,
+                info_full,
+                freq,
+                label,
+                pid,
+                self.output_dir,
+                vlim=vlim,
+                highlight_channels=highlight,
             )
 
-            # Topomaps (at target frequencies)
-            # Use full spectrum but highlight focus channels (except for Word rate in Optimal focus)
-            for freq, label in _TARGET_FREQS:
-                highlight = None
-                if focus == "optimal" and label != "Word":
-                    highlight = channels
-
-                paths[f"topomap_{label.lower()}_{focus}"] = plot_itpc_topomap(
-                    spectrum_full,
-                    freqs_full,
-                    info_full,
-                    freq,
-                    label,
-                    pid,
-                    self.output_dir,
-                    vlim=vlim,
-                    highlight_channels=highlight,
-                )
-
-        # 3. Morlet Plots (Secondary validation, usually Clinical focus only)
+        # 4. Morlet Plots (Secondary validation, usually Clinical focus only)
         if self.lt_obj._morlet_itc is not None:
             try:
                 clinical_row = res[res["focus"] == "clinical"].iloc[0]
+                itc = self.lt_obj._morlet_itc
+                # n_cycles = 2f for the TFR visualisation pass: time resolution ≈ 2/f seconds.
+                # This matches the calculation in LanguageTrackingAnalysis._compute_itpc
+                n_cycles = np.array([max(0.5, f * 2.0) for f in itc.freqs])
+
                 paths["morlet_tfr"] = plot_itpc_results(
-                    self.lt_obj._morlet_itc, pid, str(self.output_dir), _MORLET_METRICS
+                    itc, pid, str(self.output_dir), _MORLET_METRICS, n_cycles=n_cycles
                 )
 
                 morlet_data = self.lt_obj._morlet_itc.data  # (n_channels, n_freqs, n_times)
@@ -468,64 +455,42 @@ class LanguageTrackingReport:
     def _build_plots_section(self, plot_paths: dict) -> str:
         sections = []
 
-        # 2. Per-Focus Details (Unified Spectrum + Topomaps)
+        # 1. Linguistic Tracking Visualizations (Consolidated)
         sections.append("<h2>Linguistic Tracking Visualizations</h2>")
-        focus_labels = {
-            "clinical": "Standard 10-20 Clinical Focus",
-            "lh": "Left Hemisphere (LH) Focus",
-            "rh": "Right Hemisphere (RH) Focus",
-            "optimal": "Data-Driven Optimal Focus",
-        }
 
-        for focus in ["clinical", "lh", "rh", "optimal"]:
-            spec_key = f"itpc_spectrum_{focus}"
-            if spec_key not in plot_paths:
-                continue
-
-            # Build Spectrum Card (Full Width)
-            spec_img = style_utils.embed_image(plot_paths[spec_key], f"{focus.capitalize()} Spectrum")
+        # Build Stacked Spectrum Plot (Full Width)
+        if "itpc_spectrum_stacked" in plot_paths:
+            spec_img = style_utils.embed_image(plot_paths["itpc_spectrum_stacked"], "Stacked Spectrum Focuses")
             spec_desc = (
-                f"<strong>Frequency Spectrum ({focus.upper()} focus):</strong> "
-                "Channel-averaged ITPC vs Frequency. Vertical lines mark target Word (3.125 Hz), "
-                "Phrase (1.56 Hz), and Sentence (0.78 Hz) rates. Peaks confirm stimulus-locked entrainment."
+                "<strong>Frequency Spectrum Comparison:</strong> Channel-averaged ITPC vs Frequency (0.5-4.0 Hz) "
+                "across Clinical, LH, RH, and Optimal focuses. Vertical dashed lines mark target Word (3.125 Hz), "
+                "Phrase (1.56 Hz), and Sentence (0.78 Hz) rates. Consistent Y-axis across focuses "
+                "enables direct comparison."
             )
             spec_html = style_utils.build_plot_card(spec_img, spec_desc)
+            sections.append(spec_html)
 
-            # Build Topo Grid (3 columns horizontally)
-            topo_cards = []
-            targets = [
-                (_DEFAULT_CFG.target_word_freq, "Word"),
-                (_DEFAULT_CFG.target_phrase_freq, "Phrase"),
-                (_DEFAULT_CFG.target_sentence_freq, "Sentence"),
-            ]
+        # Build Unified Topo Grid (3 columns horizontally)
+        topo_cards = []
+        for _, label in _TARGET_FREQS:
+            key = f"unified_topomap_{label.lower()}"
+            if key in plot_paths:
+                img = style_utils.embed_image(plot_paths[key], f"{label} Topomap (Unified)")
+                desc = f"<strong>{label} Rate</strong>"
+                topo_cards.append(style_utils.build_plot_card(img, desc))
 
-            # Use same order as in _save_plots to match keys
-            for i, (freq, label) in enumerate(targets):
-                key = f"topomap_{label.lower()}_{focus}"
-                if key in plot_paths:
-                    img = style_utils.embed_image(plot_paths[key], f"{label} Topomap ({focus})")
-                    desc = f"<strong>{label} Rate</strong> ({freq} Hz)"
-                    topo_cards.append(style_utils.build_plot_card(img, desc))
-
+        if topo_cards:
             topo_html = f"<div class='topo-grid'>{''.join(topo_cards)}</div>"
             topo_caption = (
                 "<p class='plot-caption-muted'>"
                 "<strong>Topographic ITPC Maps:</strong> Spatial distribution of phase-locking at target frequencies. "
                 "All maps in this row share a unified scale for direct comparison. "
-                f"{'White markers highlight the data-driven optimal cluster.' if focus == 'optimal' else ''}"
+                "White markers highlight the data-driven optimal cluster channels (for Phrase and Sentence rates)."
                 "</p>"
             )
+            sections.append(topo_html + topo_caption)
 
-            # Combine: Spectrum followed by Topo row
-            grid_content = f"{spec_html}{topo_html}{topo_caption}"
-
-            # Wrap in Collapsible Panel
-            panel_title = focus_labels.get(focus, focus.capitalize())
-            sections.append(
-                style_utils.build_collapsible_panel(panel_title, grid_content, open_default=(focus == "clinical"))
-            )
-
-        # 3. Validation & Per-Channel Analysis
+        # 2. Validation & Per-Channel Analysis
         validation_html = []
         if "morlet_tfr" in plot_paths:
             img = style_utils.embed_image(plot_paths["morlet_tfr"], "Morlet TFR")
