@@ -274,6 +274,30 @@ def plot_itpc_channels_horizontal(
     return _save_and_close(fig, Path(output_dir) / f"{patient_id}_lang_{method_label.lower()}_channels_horizontal.png")
 
 
+def _plot_single_spectrum(
+    ax: plt.Axes,
+    itpc_spectrum: np.ndarray,
+    freqs: np.ndarray,
+    metrics: dict,
+    method_label: str,
+    label: str,
+):
+    """Internal helper to plot a single ITPC spectrum on an axis."""
+    mask = (freqs >= 0.5) & (freqs <= 4.0)
+    plot_freqs = freqs[mask]
+    mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
+
+    ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label=f"{label} Mean ITPC")
+
+    y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
+    _add_itpc_annotations(ax, metrics, method_label, y_top, plot_freqs)
+
+    ax.set_xlim(0.5, 4.0)
+    ax.set_ylabel("ITPC", fontsize=10)
+    ax.grid(axis="y", linestyle="--", alpha=0.3)
+    ax.legend(fontsize=8, loc="upper right")
+
+
 def plot_itpc_spectrum(
     itpc_spectrum: np.ndarray,
     freqs: np.ndarray,
@@ -318,23 +342,22 @@ def plot_itpc_spectrum(
     Path
         Absolute path to the saved PNG.
     """
-    mask = (freqs >= 0.5) & (freqs <= 4.0)
-    plot_freqs = freqs[mask]
-    mean_itpc = np.mean(itpc_spectrum, axis=0)[mask]
-
     if not title:
         title = f"{patient_id}: {method_label} ITPC Frequency Spectrum"
         if focus_label:
             title += f" ({focus_label})"
 
     fig, ax = _setup_figure_and_ax(figsize=(10, 3), title=title, xlabel="Frequency (Hz)", ylabel="ITPC")
-    ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label="Mean ITPC")
 
-    y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
-    _add_itpc_annotations(ax, metrics, method_label, y_top, plot_freqs)
+    _plot_single_spectrum(
+        ax,
+        itpc_spectrum,
+        freqs,
+        metrics,
+        method_label,
+        focus_label.upper() if focus_label else method_label,
+    )
 
-    ax.set_xlim(0.5, 4.0)
-    ax.legend(fontsize=9)
     plt.tight_layout()
 
     fname = f"{patient_id}_lang_{method_label.lower()}_spectrum"
@@ -382,9 +405,6 @@ def plot_itpc_spectrum_stacked(
     focuses = ["clinical", "lh", "rh", "optimal"]
     fig, axes = plt.subplots(len(focuses), 1, figsize=(12, 3 * len(focuses)), sharex=True)
 
-    mask = (freqs >= 0.5) & (freqs <= 4.0)
-    plot_freqs = freqs[mask]
-
     ch_to_idx = {ch: i for i, ch in enumerate(ch_names)}
 
     for i, focus in enumerate(focuses):
@@ -405,19 +425,15 @@ def plot_itpc_spectrum_stacked(
             ax.text(0.5, 0.5, f"Channels not found for {focus.upper()} focus", ha="center", va="center")
             continue
 
-        focus_spectrum = spectrum_full[indices, :]
-        mean_itpc = np.mean(focus_spectrum, axis=0)[mask]
-
-        ax.plot(plot_freqs, mean_itpc, color="#1a1a1a", linewidth=1.5, label=f"{focus.upper()} Mean ITPC")
-
-        y_top = float(np.max(mean_itpc)) if len(mean_itpc) > 0 else 0.1
-        _add_itpc_annotations(ax, row.to_dict(), method_label, y_top, plot_freqs)
-
-        ax.set_ylabel("ITPC", fontsize=10)
+        _plot_single_spectrum(
+            ax,
+            spectrum_full[indices, :],
+            freqs,
+            row.to_dict(),
+            method_label,
+            focus.upper(),
+        )
         ax.set_title(f"Focus: {focus.upper()}", fontsize=11, fontweight="bold", loc="left")
-        ax.set_xlim(0.5, 4.0)
-        ax.grid(axis="y", linestyle="--", alpha=0.3)
-        ax.legend(fontsize=8, loc="upper right")
 
     axes[-1].set_xlabel("Frequency (Hz)", fontsize=11)
     fig.suptitle(
