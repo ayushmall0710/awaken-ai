@@ -11,6 +11,7 @@ import typer
 from src.cli.cli_utils import print_table
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.language_tracking import LanguageTrackingAnalysis
+from src.reports.language_tracking_report import LanguageTrackingReport
 
 
 def run(
