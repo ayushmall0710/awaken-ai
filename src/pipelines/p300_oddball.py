@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.base import BasePipeline
@@ -59,7 +60,10 @@ class SessionData:
     rare_events: Optional[List[Dict[str, Any]]] = None
     standard_events: Optional[List[Dict[str, Any]]] = None
     rare_mapped_df: Optional[pd.DataFrame] = None
+    # Rare sub-epochs (time-locked to rare events; main analysis epochs)
     epochs: Optional[mne.Epochs] = None
+    # Standard sub-epochs mapped into the same 900 ms windows (may be None)
+    standard_epochs: Optional[mne.Epochs] = None
     rare_erp: Optional[mne.Evoked] = None
     rare_sem: Optional[mne.Evoked] = None
     standard_erp: Optional[mne.Evoked] = None
@@ -274,6 +278,7 @@ class P300OddballPipeline(BasePipeline):
                 sess.standard_events = standard_events
                 sess.rare_mapped_df = rare_mapped_df
                 sess.epochs = epochs
+                sess.standard_epochs = standard_epochs if n_standard_epochs >= ERP_CONFIG["min_epochs"] else None
                 sess.rare_erp = rare_erp
                 sess.rare_sem = rare_sem
                 sess.standard_erp = standard_erp
@@ -305,6 +310,12 @@ class P300OddballPipeline(BasePipeline):
                 if sess.mapping_diag:
                     self._last_epoch_diagnostics = sess.mapping_diag
 
+                # Compute per-session P300 significance (Welch t-test) using single-trial data
+                p300_sig = self._compute_p300_significance(
+                    rare_epochs=sess.epochs,
+                    standard_epochs=sess.standard_epochs,
+                )
+
                 features = self._quantify_p300(
                     erp=sess.rare_erp,
                     patient_id=self.patient_id or "",
@@ -316,6 +327,9 @@ class P300OddballPipeline(BasePipeline):
                     n_standard_epochs=sess.n_standard_epochs,
                     n_standard_events_candidate=sess.n_standard_events_candidate,
                 )
+
+                # Merge significance statistics into feature dict
+                features.update(p300_sig)
 
                 rows.append(features)
 
@@ -620,6 +634,66 @@ class P300OddballPipeline(BasePipeline):
         erp_sem = epochs.standard_error()
         logger.info(f"Computed ERP from {len(epochs)} epochs")
         return erp, erp_sem
+
+    def _compute_p300_significance(
+        self,
+        rare_epochs: Optional[mne.Epochs],
+        standard_epochs: Optional[mne.Epochs],
+    ) -> Dict[str, Any]:
+        """Compute per-session P300 significance (Welch t-test) at Pz, 300–600 ms.
+
+        Returns a dict with p300_p_value, p300_t_stat, p300_n_rare, p300_n_standard.
+        If inputs are insufficient, values are set to NaN or 0.
+        """
+        out: Dict[str, Any] = {
+            "p300_p_value": float("nan"),
+            "p300_t_stat": float("nan"),
+            "p300_n_rare": 0,
+            "p300_n_standard": 0,
+        }
+
+        if rare_epochs is None or standard_epochs is None:
+            return out
+
+        if len(rare_epochs) < ERP_CONFIG["min_epochs"] or len(standard_epochs) < ERP_CONFIG["min_epochs"]:
+            return out
+
+        # Find Pz channel
+        ch_names = [ch.upper() for ch in rare_epochs.ch_names]
+        if "PZ" not in ch_names:
+            logger.warning("P300 significance: Pz not found in channels; skipping test.")
+            return out
+        ch_idx = ch_names.index("PZ")
+
+        times = rare_epochs.times
+        t_start, t_end = ERP_CONFIG["p300_window"]
+        mask = (times >= t_start) & (times <= t_end)
+        if not mask.any():
+            logger.warning("P300 significance: 300–600 ms window outside epoch range; skipping test.")
+            return out
+
+        # rare_epochs.get_data() shape: (n_epochs, n_channels, n_times)
+        data_rare = rare_epochs.get_data()[:, ch_idx, :][:, mask]
+        data_std = standard_epochs.get_data()[:, ch_idx, :][:, mask]
+
+        rare_means = data_rare.mean(axis=1)
+        std_means = data_std.mean(axis=1)
+
+        out["p300_n_rare"] = int(len(rare_means))
+        out["p300_n_standard"] = int(len(std_means))
+
+        if len(rare_means) < 2 or len(std_means) < 2:
+            return out
+
+        try:
+            t_stat, p_val = stats.ttest_ind(rare_means, std_means, equal_var=False, nan_policy="omit")
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"P300 significance: t-test failed: {e}")
+            return out
+
+        out["p300_t_stat"] = float(t_stat)
+        out["p300_p_value"] = float(p_val)
+        return out
 
     def _compute_difference_erp(self, rare_erp: mne.Evoked, standard_erp: mne.Evoked) -> mne.Evoked:
         """Compute difference ERP (rare - standard)."""
@@ -1067,6 +1141,11 @@ class P300OddballPipeline(BasePipeline):
                     "p300_n_valid_electrodes": features.get("p300_n_valid_electrodes"),
                     "qc_notes": features.get("qc_notes", ""),
                     "qc_pass": qc_pass,
+                    # Per-session P300 significance (Welch t-test at Pz, 300–600 ms)
+                    "p300_p_value": features.get("p300_p_value"),
+                    "p300_t_stat": features.get("p300_t_stat"),
+                    "p300_n_rare": features.get("p300_n_rare"),
+                    "p300_n_standard": features.get("p300_n_standard"),
                 }
             ]
         )

@@ -67,25 +67,49 @@ class OddballQCReport:
         ]
         return "\n".join(parts)
 
-    def _p300_detected(self) -> bool:
-        """Heuristic: P300 is 'detected' if a finite Pz peak exists within the P300 window."""
-        amp = self.clinical_row.get("p300_rare_amplitude_Pz_uV")
-        lat = self.clinical_row.get("p300_rare_latency_Pz_ms")
+    def _p300_significance(self) -> Dict[str, Any]:
+        """Return significance information for the P300 (rare vs standard at Pz, 300–600 ms).
+
+        Expects per-session statistics from the clinical parquet:
+          - p300_p_value
+          - p300_t_stat
+          - p300_n_rare
+          - p300_n_standard
+
+        Falls back to 'not significant' when values are missing.
+        """
+        p = self.clinical_row.get("p300_p_value")
+        t = self.clinical_row.get("p300_t_stat")
+        n_rare = self.clinical_row.get("p300_n_rare")
+        n_std = self.clinical_row.get("p300_n_standard")
+
         try:
-            amp_f = float(amp)
-            lat_f = float(lat)
+            p_f = float(p)
         except Exception:
-            return False
-        if math.isnan(amp_f) or math.isnan(lat_f):
-            return False
-        # P300 window (ms) matches ERP_CONFIG["p300_window"] = 300–600ms
-        return (amp_f > 0.0) and (300.0 <= lat_f <= 600.0)
+            p_f = math.nan
+
+        significant = False
+        if not (isinstance(p_f, float) and math.isnan(p_f)):
+            significant = p_f < 0.05
+
+        return {
+            "significant": significant,
+            "p_value": p_f,
+            "t_stat": t,
+            "n_rare": n_rare,
+            "n_standard": n_std,
+        }
 
     def _build_results_overview(self) -> str:
-        detected = self._p300_detected()
-        badge_text = "P300 Detected" if detected else "P300 Not Detected"
-        badge_color = style_utils.BG_SUCCESS if detected else style_utils.BG_DANGER
-        text_color = style_utils.TEXT_SUCCESS if detected else style_utils.TEXT_DANGER
+        sig = self._p300_significance()
+        is_sig = sig["significant"]
+        p_val = sig["p_value"]
+        n_rare_p300 = sig["n_rare"]
+        n_std_p300 = sig["n_standard"]
+
+        badge_text = "P300 Significant" if is_sig else "P300 Not Significant"
+        badge_color = style_utils.BG_SUCCESS if is_sig else style_utils.BG_DANGER
+        text_color = style_utils.TEXT_SUCCESS if is_sig else style_utils.TEXT_DANGER
         badge = style_utils.build_status_badge(badge_text, bg_color=badge_color, text_color=text_color)
 
         # --- Row 1 (P300 focus) ---
@@ -99,9 +123,17 @@ class OddballQCReport:
         except Exception:
             snr_str = "N/A"
 
+        # Human-readable summary for the Welch test (if values are available)
+        if isinstance(p_val, float) and not math.isnan(p_val):
+            p_desc = f"Welch t-test rare vs standard at Pz (300–600 ms), p={p_val:.3f}"
+            if n_rare_p300 is not None and n_std_p300 is not None:
+                p_desc += f" (n_rare={n_rare_p300}, n_std={n_std_p300})"
+        else:
+            p_desc = "Welch t-test rare vs standard at Pz (300–600 ms); insufficient data."
+
         row1 = [
-            {"title": "P300 Status", "value": badge, "desc": "Detected if Pz peak is finite and within 300–600 ms"},
-            {"title": "Signal/Noise", "value": snr_str, "desc": "P300 Amp (Pz) ÷ baseline σ"},
+            {"title": "P300 Significance", "value": badge, "desc": p_desc},
+            {"title": "Signal/Noise", "value": snr_str, "desc": "P300 Amp (Pz) ÷ baseline σ (rare-only)"},
             {"title": "P300 Amplitude (Pz)", "value": p300_amp_pz, "desc": "Rare-only ERP peak at Pz (µV)"},
             {"title": "P300 Latency (Pz)", "value": p300_lat_pz, "desc": "Rare-only ERP peak latency at Pz (ms)"},
         ]
@@ -278,6 +310,14 @@ class OddballQCReport:
             {
                 "term": "mmn_validity",
                 "desc": "MMN Valid: difference-wave MMN amplitude < 0 µV and latency within 100–250 ms.",
+                "ranges": None,
+            },
+            {
+                "term": "P300 significance",
+                "desc": (
+                    "Welch t-test on single-trial mean amplitude at Pz (300–600 ms), "
+                    "comparing rare vs standard. P300 is called significant when p &lt; 0.05."
+                ),
                 "ranges": None,
             },
         ]
