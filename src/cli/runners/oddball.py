@@ -13,7 +13,7 @@ from src.cli.cli_utils import print_table
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.p300_oddball import P300OddballPipeline
 from src.reports import style_utils
-from src.reports.oddball_qc_report import OddballQCReport
+from src.reports.oddball_report import OddballQCReport
 
 
 def run(

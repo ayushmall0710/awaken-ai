@@ -312,6 +312,13 @@ The oddball report is now **morphology-first** and **p-value-second**. The first
 
 The report must not equate `not significant` with `no P300-like morphology`.
 
+The report now includes:
+
+- a visible **Confidence Interpretation** section that explains the confidence labels and the key thresholds used to read them
+- a collapsible **Legend and metric definitions** section for the remaining reference definitions
+
+The confidence section is intentionally visible by default so readers do not need to expand the legend to understand the primary interpretation.
+
 ### Row 1 cards
 
 1. **P300 Candidate at Pz**
@@ -343,6 +350,16 @@ The report must not equate `not significant` with `no P300-like morphology`.
 4. **Topography**
 
 ## Confidence Semantics
+
+### Visible confidence interpretation in the report
+
+The HTML report includes a dedicated **Confidence Interpretation** block above the collapsible legend. That block explains:
+
+- confidence combines Pz morphology, rare-trial count, signal-to-noise, rare-vs-standard Welch support, and difference-wave support
+- what `Detected`, `Low-confidence detected`, and `No reliable P300 detected` mean
+- that a non-significant Welch test alone does not rule out P300-like morphology
+
+The block also includes a compact **Key thresholds** list so readers can interpret confidence without opening the full legend.
 
 ### Candidate window
 
@@ -377,6 +394,16 @@ Thresholds:
 - `weak`: `0.05 <= p < 0.20`
 - `not_supported`: `p >= 0.20`
 - `unavailable`: missing p-value or insufficient trials for the test
+
+### Key thresholds shown directly in the report
+
+The visible **Confidence Interpretation** section should show these thresholds exactly:
+
+- `P300 candidate window: 300-600 ms`
+- `MMN validity window: 100-250 ms`
+- `Rare-trial count: >=20 good, 10-19 borderline, <10 poor`
+- `Signal-to-noise: >=2.0 good, 1.25-1.99 borderline, <1.25 poor`
+- `Welch support: p<0.05 supportive, 0.05-0.19 weak, >=0.20 not supportive`
 
 ### Confidence labels
 
@@ -498,6 +525,11 @@ Explicit report figure hierarchy:
 
 - **Primary / main plot area**: dedicated `p300` and `mmn` focus plots when available; otherwise the combined ERP overview
 - **Secondary / supporting image area**: topomap and ERP image
+
+The same hierarchy applies to explanatory text:
+
+- the visible **Confidence Interpretation** section is the main explanation for confidence labels
+- the collapsible legend is secondary reference material
 
 ## Scientific Interpretation Notes
 

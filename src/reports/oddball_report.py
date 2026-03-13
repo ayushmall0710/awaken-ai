@@ -66,8 +66,9 @@ class OddballQCReport:
             self._build_p300_electrode_table(),
             self._build_mmn_electrode_table(),
             self._build_clinical_table(),
-            self._build_legend_box(),
             self._build_mapping_table(),
+            self._build_confidence_interpretation_box(),
+            self._build_legend_box(),
         ]
         return "\n".join(parts)
 
@@ -567,7 +568,7 @@ class OddballQCReport:
         ]
         table_html = style_utils.build_metric_table(headers, [cells], title="")
         return (
-            f"<details class='tech-details'>"
+            f"<details class='report-details'>"
             f"<summary>Technical Diagnostics: Mapping Forensics</summary>"
             f"{table_html}</details>"
         )
@@ -581,7 +582,7 @@ class OddballQCReport:
             },
             {
                 "term": "Confidence",
-                "desc": "Combines morphology, trial count, signal/noise, difference-wave support, and Welch support.",
+                "desc": "Summarizes morphology, QC, difference-wave support, and Welch support.",
                 "ranges": [
                     ("legend-excellent", "Detected"),
                     ("legend-ok", "Low-confidence detected"),
@@ -617,7 +618,42 @@ class OddballQCReport:
                 "ranges": None,
             },
         ]
-        return style_utils.build_legend_box("Legend", items)
+        legend_html = style_utils.build_legend_box("Legend", items)
+        return (
+            f"<details class='report-details'><summary>Legend and metric definitions</summary>{legend_html}</details>"
+        )
+
+    def _build_confidence_interpretation_box(self) -> str:
+        return """
+        <section class='confidence-interpretation'>
+            <h3>Confidence Interpretation</h3>
+            <p>
+                Confidence combines Pz morphology, rare-trial count, signal-to-noise, rare-vs-standard Welch support,
+                and difference-wave support.
+            </p>
+            <dl class='confidence-terms'>
+                <dt>Detected</dt>
+                <dd>Positive Pz peak in 300-600 ms with supportive QC and condition contrast.</dd>
+                <dt>Low-confidence detected</dt>
+                <dd>P300-like peak present, but limited by trial count, noise, or weak support metrics.</dd>
+                <dt>No reliable P300 detected</dt>
+                <dd>No usable positive Pz peak in 300-600 ms, or the available evidence is insufficient.</dd>
+            </dl>
+            <p class='confidence-note'>
+                A non-significant Welch test does not by itself mean no P300-like morphology was observed.
+            </p>
+            <div class='confidence-thresholds'>
+                <p class='confidence-thresholds-title'>Key thresholds</p>
+                <ul>
+                    <li>P300 candidate window: 300-600 ms</li>
+                    <li>MMN validity window: 100-250 ms</li>
+                    <li>Rare-trial count: &gt;=20 good, 10-19 borderline, &lt;10 poor</li>
+                    <li>Signal-to-noise: &gt;=2.0 good, 1.25-1.99 borderline, &lt;1.25 poor</li>
+                    <li>Welch support: p&lt;0.05 supportive, 0.05-0.19 weak, &gt;=0.20 not supportive</li>
+                </ul>
+            </div>
+        </section>
+        """
 
     def _build_plots_section(self) -> str:
         paths = self._resolve_plot_paths()
@@ -716,6 +752,7 @@ class OddballQCReport:
         border = style_utils.BORDER_LIGHT
         legend_bg = style_utils.LEGEND_BG
         text_muted = style_utils.TEXT_MUTED
+        purple = style_utils.UW_PURPLE
         return f"""
     .plot-row {{ display: flex; flex-wrap: wrap; gap: 1.5rem; margin: 1rem 0; }}
     .plot-row-full {{ margin-top: 0.5rem; }}
@@ -724,9 +761,20 @@ class OddballQCReport:
     .plot-row > .plot-card {{ display: flex; flex-direction: column; }}
     .plot-row > .plot-card .plot-img {{ width: 100%; height: 520px; object-fit: contain; }}
     .plot-img {{ max-width: 100%; height: auto; border: 1px solid {border}; border-radius: 8px; }}
-    .tech-details {{ margin: 1rem 0; padding: 0.5rem; background: {legend_bg};
-        border: 1px solid {border}; border-radius: 4px; }}
-    .tech-details summary {{ font-weight: 500; cursor: pointer; color: {text_muted}; }}
-    .tech-details summary:hover {{ opacity: 0.8; }}
+    .report-details {{ margin: 1rem 0; padding: 0.6rem 0.85rem; background: {legend_bg};
+        border: 1px solid {border}; border-radius: 6px; }}
+    .report-details summary {{ font-weight: 600; cursor: pointer; color: {text_muted}; }}
+    .report-details summary:hover {{ opacity: 0.8; }}
     .metric-card-desc {{ white-space: normal; }}
+    .confidence-interpretation {{ margin: 1.5rem 0 1rem; padding: 1rem 1.1rem; background: {legend_bg};
+        border-left: 4px solid {purple}; border-radius: 6px; }}
+    .confidence-interpretation h3 {{ margin: 0 0 0.6rem; }}
+    .confidence-interpretation p {{ margin: 0.5rem 0; }}
+    .confidence-terms {{ margin: 0.75rem 0; }}
+    .confidence-terms dt {{ font-weight: 700; color: {purple}; margin-top: 0.45rem; }}
+    .confidence-terms dd {{ margin: 0.15rem 0 0 1rem; }}
+    .confidence-note {{ font-style: italic; }}
+    .confidence-thresholds {{ margin-top: 0.75rem; }}
+    .confidence-thresholds-title {{ font-weight: 700; color: {purple}; margin-bottom: 0.25rem; }}
+    .confidence-thresholds ul {{ margin: 0.25rem 0 0 1.1rem; padding: 0; }}
     """

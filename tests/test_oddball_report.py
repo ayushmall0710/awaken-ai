@@ -4,7 +4,7 @@ import math
 
 import pandas as pd
 
-from src.reports.oddball_qc_report import OddballQCReport
+from src.reports.oddball_report import OddballQCReport
 
 
 def _make_clinical_row(patient_id: str, session_id: str, **overrides) -> pd.Series:
@@ -206,6 +206,15 @@ def test_build_session_html_contains_new_card_titles_and_labels():
     assert "Low-confidence detected" in html
     assert "MMN at Fz" in html
     assert "Topography" in html
+    assert "Confidence Interpretation" in html
+    assert "Confidence combines Pz morphology, rare-trial count, signal-to-noise" in html
+    assert "A non-significant Welch test does not by itself mean no P300-like morphology was observed." in html
+    assert "P300 candidate window: 300-600 ms" in html
+    assert "MMN validity window: 100-250 ms" in html
+    assert "Legend and metric definitions" in html
+    assert html.index("Confidence Interpretation") < html.index("Legend and metric definitions")
+    assert "<details class='report-details'>" in html
+    assert html.index("Technical Diagnostics: Mapping Forensics") < html.index("Confidence Interpretation")
 
 
 def test_generate_writes_html_file(tmp_path):
@@ -231,13 +240,15 @@ def test_generate_writes_html_file(tmp_path):
     assert "P300 Oddball Summary Report" in content
     assert "P300 Candidate at Pz" in content
     assert "Low-confidence detected" in content
+    assert "Confidence Interpretation" in content
+    assert "Legend and metric definitions" in content
     assert patient_id in content
     assert session_id in content
     assert "</html>" in content
 
 
 def test_format_cell_is_valid_icons():
-    from src.reports.oddball_qc_report import ICON_FALSE, ICON_TRUE
+    from src.reports.oddball_report import ICON_FALSE, ICON_TRUE
 
     report = _make_report()
 
