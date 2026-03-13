@@ -149,7 +149,8 @@ class TimestampAligner:
 
         events = []
         for _, trial in trials_df.iterrows():
-            trial_type = trial["trial_type"].lower()
+            # TODO(aaditya): check this out please, the +p suffix
+            trial_type = trial["trial_type"].lower()  # .replace("+p", "")
             method = TRIAL_TYPE_TO_METHOD.get(trial_type, "peak_detection")
 
             try:
@@ -406,7 +407,7 @@ class TimestampAligner:
         """
         Align using peak detection.
         """
-        trial_type = trial["trial_type"].lower()
+        trial_type = trial["trial_type"].lower()  # .replace("+p", "")
         t_start = unix_to_edf(
             trial["start_time"], edf_start_unix=self.edf_start_unix, timezone_offset=self.timezone_offset
         )

@@ -24,44 +24,41 @@ logger = logging.getLogger(__name__)
 def main():
     parser = argparse.ArgumentParser(description="Run ITPC Analysis (Morlet + DFT)")
     parser.add_argument("--patients", nargs="+", required=True, help="Patient IDs (e.g., CON008 CON009)")
-
-    # TODO: Currently defaulting to "LH" purely. We should implement an auto-lateralization
-    # check (comparing LH vs RH) pending review from the Professor.
-    #
-    # TODO: We are strictly using focus="LH" (without adding CLINICAL_20 channels) to prevent
-    # the signal dilution bug we observed when computing global ITPC averages. We will keep it pure
-    # LH until we get clarity from the Professor on whether CLINICAL_20 should be included.
-    parser.add_argument("--focus", type=str, default="LH", choices=["LH", "RH", "Clinical"], help="Channel focus")
     args = parser.parse_args()
 
-    pipeline = LanguageTrackingAnalysis()
     results = []
+    pipeline = LanguageTrackingAnalysis()
 
     for pid in args.patients:
-        res = pipeline.run(patient_id=pid, focus=args.focus)
-        if res:
+        res = pipeline.run(patient_id=pid)
+        if res is not None and not res.empty:
             results.append(res)
 
     if results:
-        df = pd.DataFrame(results)
+        df = pd.concat(results, ignore_index=True)
 
         print("\n=== ITPC Analysis Summary (Morlet vs DFT) ===")
-        print(
-            df[
-                [
-                    "patient_id",
-                    "n_trials",
-                    "sfreq",
-                    "focus",
-                    "morlet_itpc_sentence",
-                    "morlet_itpc_word",
-                    "morlet_ratio_sent_word",
-                    "dft_itpc_sentence",
-                    "dft_itpc_word",
-                    "dft_ratio_sent_word",
-                ]
-            ].to_string(index=False)
-        )
+        # Note: pipeline now returns multiple rows per patient (one per focus)
+        # We display the clinical focus by default for summary.
+        display_df = df[df["focus"] == "clinical"]
+        
+        cols = [
+            "patient_id",
+            "n_trials",
+            "focus",
+            "itpc_sentence",
+            "itpc_phrase",
+            "itpc_word",
+            "itpc_comprehension",
+            "morlet_itpc_sentence",
+            "morlet_itpc_phrase",
+            "morlet_itpc_word",
+            "morlet_itpc_comprehension",
+        ]
+        # Only show columns that exist in the result
+        cols = [c for ch in cols if (c := ch) in display_df.columns]
+        
+        print(display_df[cols].to_string(index=False))
 
         out_path = config.LOCAL_DATA_ROOT / "processed" / "features" / "language_itpc_summary.csv"
         out_path.parent.mkdir(parents=True, exist_ok=True)

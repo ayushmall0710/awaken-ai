@@ -179,7 +179,6 @@ def run_cmd(
     report: Annotated[bool, typer.Option("--report", "-r", help="Generate HTML report with visualizations")] = False,
     n_perms: Annotated[int, typer.Option("--n-perms", help="Number of permutations for SVM command following")] = 1000,
     # language specific
-    focus: Annotated[str, typer.Option("--focus", help="Channel focus for language pipeline: LH or Clinical")] = "LH",
     # oddball specific
     electrodes: Annotated[
         Optional[str],
@@ -221,7 +220,6 @@ def run_cmd(
         alpha,
         report,
         n_perms,
-        focus,
         parsed_electrodes,
         cf_runner,
         cf_svm_runner,
@@ -270,7 +268,6 @@ def _dispatch_pipelines(
     alpha: float,
     report: bool,
     n_perms: int,
-    focus: str,
     electrodes: Optional[list[str]],
     cf_runner: types.ModuleType,
     cf_svm_runner: types.ModuleType,
@@ -283,6 +280,6 @@ def _dispatch_pipelines(
     if Pipeline.command_following_svm in pipelines:
         cf_svm_runner.run(loader, patient_ids, session, alpha, report, n_perms)
     if Pipeline.language in pipelines:
-        lang_runner.run(loader, patient_ids, session, focus)
+        lang_runner.run(loader, patient_ids, session)
     if Pipeline.oddball in pipelines:
         ob_runner.run(loader, patient_ids, session, electrodes, report)
