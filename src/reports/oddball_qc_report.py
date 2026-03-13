@@ -39,9 +39,7 @@ class OddballQCReport:
 
     def build_session_html(self) -> str:
         """Collapsible <details> fragment for the combined report (used by runner)."""
-        panel = style_utils.build_session_panel(self.session_id, collapsible=True)
-        content = self._build_content_html()
-        return f"<details class='session-wrapper' open>{panel}<div class='session-content'>{content}</div></details>"
+        return style_utils.wrap_session_fragment(self.session_id, self._build_content_html())
 
     def generate(self) -> Path:
         """Write a standalone single-session HTML file to disk."""

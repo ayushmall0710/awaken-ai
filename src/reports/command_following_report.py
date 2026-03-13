@@ -563,9 +563,7 @@ class CommandFollowingReport:
         combined multi-session report flow.
         """
         summary, erd_df, img_paths = self._run_and_collect()
-        panel = style_utils.build_session_panel(self.session_id, collapsible=True)
-        content = self._build_content_html(summary, erd_df, img_paths)
-        return f"<details class='session-wrapper' open>{panel}<div class='session-content'>{content}</div></details>"
+        return style_utils.wrap_session_fragment(self.session_id, self._build_content_html(summary, erd_df, img_paths))
 
     def generate(self) -> Path:
         """Write a standalone single-session HTML report to disk."""

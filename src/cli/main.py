@@ -178,7 +178,6 @@ def run_cmd(
     alpha: Annotated[float, typer.Option("--alpha", help="Significance threshold for ERD test")] = 0.05,
     report: Annotated[bool, typer.Option("--report", "-r", help="Generate HTML report with visualizations")] = False,
     n_perms: Annotated[int, typer.Option("--n-perms", help="Number of permutations for SVM command following")] = 1000,
-    # language specific
     # oddball specific
     electrodes: Annotated[
         Optional[str],
@@ -202,7 +201,17 @@ def run_cmd(
         for pid in patient_ids:
             _do_setup(pid, verbose=False, force=False, loader=loader)
 
-    _guard_setup(patient_ids, session, loader)
+    # Identify patients with incomplete setup
+    not_ready = {pid: missing for pid in patient_ids if (missing := _check_setup(pid, session, loader))}
+    ready_patients = [pid for pid in patient_ids if pid not in not_ready]
+
+    # If NO patients are ready, show error panel and exit immediately
+    if not ready_patients:
+        _print_setup_panel(not_ready, is_error=True)
+        raise typer.Exit(1)
+
+    # Proceed with ready patients
+    patient_ids = ready_patients
 
     pipelines_to_run = {pipeline} if pipeline else _detect_pipelines(patient_ids, session, loader)
     if not pipelines_to_run:
@@ -227,29 +236,32 @@ def run_cmd(
         ob_runner,
     )
 
+    # Print warnings for skipped patients at the very end
+    if not_ready:
+        _print_setup_panel(not_ready, is_error=False)
 
-def _guard_setup(patient_ids: list[str], session: Optional[str], loader: UnifiedDataLoader) -> None:
-    """Check all patients have completed setup. Raises Exit(1) with a Rich panel if not."""
-    not_ready = {pid: missing for pid in patient_ids if (missing := _check_setup(pid, session, loader))}
-    if not not_ready:
-        return
 
+def _print_setup_panel(not_ready: dict[str, list[str]], is_error: bool = False) -> None:
+    """Print a Rich panel summarizing incomplete setup for certain patients."""
     from rich.console import Console
     from rich.panel import Panel
 
     console = Console(stderr=True)
     details = "\n".join(f"  {pid}: missing {', '.join(m)}" for pid, m in not_ready.items())
     ids = " ".join(not_ready)
+
+    title = "[red]Cannot run pipeline[/red]" if is_error else "[yellow]Skipped patients (Setup incomplete)[/yellow]"
+    border_style = "red" if is_error else "yellow"
+
     console.print(
         Panel(
             f"[bold]Setup incomplete[/bold]\n\n{details}\n\n"
-            f"Run [cyan bold]awakenai setup {ids}[/cyan bold] to continue.",
-            title="[red]Cannot run pipeline[/red]",
-            border_style="red",
+            f"Run [cyan bold]awakenai setup {ids}[/cyan bold] to prepare them.",
+            title=title,
+            border_style=border_style,
             padding=(1, 2),
         )
     )
-    raise typer.Exit(1)
 
 
 def _detect_pipelines(patient_ids: list[str], session: Optional[str], loader: UnifiedDataLoader) -> set[Pipeline]:
@@ -280,6 +292,6 @@ def _dispatch_pipelines(
     if Pipeline.command_following_svm in pipelines:
         cf_svm_runner.run(loader, patient_ids, session, alpha, report, n_perms)
     if Pipeline.language in pipelines:
-        lang_runner.run(loader, patient_ids, session)
+        lang_runner.run(loader, patient_ids, session, report)
     if Pipeline.oddball in pipelines:
         ob_runner.run(loader, patient_ids, session, electrodes, report)

@@ -1,5 +1,6 @@
 """Utility functions for HTML report styling and generation across AwakenAI pipelines."""
 
+import base64
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -34,6 +35,35 @@ CARD_TEXT_DARK = "#1e293b"  # Dark slate text
 # Semantic boolean icons — use instead of plain True/False in tables
 ICON_TRUE = "<span style='color:#16a34a;font-size:1rem;' title='True'>&#10003;</span>"
 ICON_FALSE = "<span style='color:#dc2626;font-size:1rem;' title='False'>&#10007;</span>"
+
+# Significance icons
+ICON_SIG_1 = "*"  # p < 0.05
+ICON_SIG_2 = "**"  # p < 0.01
+ICON_SIG_3 = "***"  # p < 0.001
+ICON_SIG_NONE = ""  # p >= 0.05
+
+
+def format_with_significance(value: float, p_value: float, precision: int = 4) -> str:
+    """Format a value with its significance indicator based on p-value.
+
+    Args:
+        value: The numerical value to format (e.g., ITPC).
+        p_value: The p-value for significance testing.
+        precision: Decimal places for the value.
+
+    Returns:
+        String with formatted value and significance icon.
+    """
+    if p_value < 0.001:
+        icon = ICON_SIG_3
+    elif p_value < 0.01:
+        icon = ICON_SIG_2
+    elif p_value < 0.05:
+        icon = ICON_SIG_1
+    else:
+        icon = ICON_SIG_NONE
+
+    return f"{value:.{precision}f}{icon}"
 
 
 def render_uw_css() -> str:
@@ -154,7 +184,7 @@ def render_uw_css() -> str:
         cursor: pointer;
         display: flex;
         align-items: center;
-        justify-content: space-between;
+        justify-content: flex-start;
     }}
     details.session-wrapper > summary::-webkit-details-marker {{ display: none; }}
     details.session-wrapper > summary::marker {{ display: none; }}
@@ -163,10 +193,42 @@ def render_uw_css() -> str:
         color: {TEXT_MUTED};
         transition: transform 0.35s ease;
         user-select: none;
-        padding: 0 0.25rem;
+        padding: 0 0.5rem 0 0;
     }}
     details.session-wrapper[open] .session-toggle-arrow {{
         transform: rotate(180deg);
+    }}
+
+    /* Plot styles */
+    .plot-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .topo-grid {{
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1rem;
+        margin-top: 1rem;
+    }}
+    .plot-card {{
+        background: {WHITE};
+        border: 1px solid {BORDER_LIGHT};
+        border-radius: 6px;
+        padding: 0.75rem;
+        text-align: center;
+    }}
+    .plot-card figcaption {{
+        font-size: 0.8rem;
+        color: {CARD_TEXT_MUTED};
+        margin-top: 0.4rem;
+    }}
+    .plot-caption-muted {{
+        font-size: 0.8rem;
+        color: {CARD_TEXT_MUTED};
+        text-align: center;
+        margin-top: 0.5rem;
     }}
 
     /* Universal image download button */
@@ -250,8 +312,54 @@ def build_session_panel(session_id: str, collapsible: bool = False) -> str:
 
     if collapsible:
         arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
-        return f"<summary class='session-header' style='{shared_style}'>{label}{arrow}</summary>"
+        return f"<summary class='session-header' style='{shared_style}'>{arrow}{label}</summary>"
     return f"<div class='session-header' style='{shared_style}'>{label}</div>"
+
+
+def build_collapsible_panel(title: str, content: str, open_default: bool = False) -> str:
+    """Build a collapsible section using <details> and <summary>.
+
+    Args:
+        title: Title for the panel header.
+        content: HTML content inside the panel.
+        open_default: Whether the panel should be open by default.
+    """
+    open_attr = " open" if open_default else ""
+    # Reuse session-wrapper and session-header styles for consistency
+    shared_style = (
+        f"background-color:{ROW_EVEN};padding:0.75rem 1.5rem;"
+        f"border-left:4px solid {UW_PURPLE};border-top:1px solid {BORDER_LIGHT};"
+        f"border-right:1px solid {BORDER_LIGHT};margin-top:1.5rem;"
+        f"border-radius:8px 8px 0 0;cursor:pointer;"
+    )
+    label = f"<h3 style='margin:0;font-size:1.1rem;color:{UW_PURPLE};'>{title}</h3>"
+    arrow = "<span class='session-toggle-arrow'>&#8964;</span>"
+
+    header = f"<summary class='session-header' style='{shared_style}'>{arrow}{label}</summary>"
+    content_div = f"<div class='session-content' style='border-radius:0 0 8px 8px;'>{content}</div>"
+
+    return f"<details class='session-wrapper'{open_attr}>\n{header}\n{content_div}\n</details>"
+
+
+def wrap_session_fragment(session_id: str, content: str, open_default: bool = True) -> str:
+    """Wrap session content in a collapsible <details> panel for combined reports.
+
+    Encapsulates the <details class='session-wrapper'> + build_session_panel +
+    <div class='session-content'> pattern shared by all report classes.
+
+    Args:
+        session_id: Session identifier displayed in the panel header.
+        content: HTML content to place inside the collapsible body.
+        open_default: Whether the panel starts expanded.
+    """
+    open_attr = " open" if open_default else ""
+    panel = build_session_panel(session_id, collapsible=True)
+    return (
+        f"<details class='session-wrapper'{open_attr}>\n"
+        f"{panel}\n"
+        f"<div class='session-content'>{content}</div>\n"
+        "</details>\n"
+    )
 
 
 def stitch_and_save(
@@ -400,3 +508,17 @@ def build_legend_box(title: str, items: List[Dict[str, Any]]) -> str:
     </div>
 """
     return html
+
+
+def embed_image(path: Path, alt: str = "") -> str:
+    """Read a PNG file and return a base64-encoded <img> tag."""
+    try:
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"<img src='data:image/png;base64,{b64}' alt='{alt}' style='width:100%;max-width:100%;' />"
+    except (FileNotFoundError, OSError):
+        return f"<p><em>Plot unavailable: {alt}</em></p>"
+
+
+def build_plot_card(img_html: str, caption: str) -> str:
+    """Wrap an <img> tag in a plot-card with a figcaption."""
+    return f"<div class='plot-card'>{img_html}<figcaption>{caption}</figcaption></div>"
