@@ -13,7 +13,7 @@ from src.cli.cli_utils import print_table
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.p300_oddball import P300OddballPipeline
 from src.reports import style_utils
-from src.reports.oddball_qc_report import OddballQCReport
+from src.reports.oddball_report import OddballQCReport
 
 
 def run(
@@ -99,7 +99,7 @@ def run(
                 out = style_utils.stitch_and_save(
                     html_fragments,
                     output_path=out_path,
-                    title="P300 Oddball QC — Combined Report",
+                    title="P300 Oddball Summary — Combined Report",
                     generator_name="P300 Oddball Pipeline",
                     extra_css=extra_css,
                 )

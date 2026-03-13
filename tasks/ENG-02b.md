@@ -8,566 +8,571 @@
 
 ## Overview
 
-ERP analysis pipeline for oddball trials. Loads ICA-cleaned 35-second oddball epochs produced by ENG-03, maps rare-event (target) and standard-event (frequent) timestamps into those trial windows, extracts short 900ms sub-epochs, computes averaged ERPs, computes the difference wave (target − standard) to isolate the P300 component, quantifies P300 features across midline electrodes, and generates 3-panel plots plus standalone topomaps and single-trial heatmaps. Supports default analysis (Pz/Cz/Fz) with composite scoring, P3a/P3b subtyping, and custom electrode sets.
+ENG-02b is the P300 oddball analysis pipeline for auditory oddball trials. It operates on:
 
-### ENG-03 Epoch Integration
+- ENG-02 aligned events
+- ENG-03 cleaned 35-second oddball trial epochs
+- pre-generated visualization artifacts
+- parquet-based report inputs
 
-The pipeline reads ENG-03's saved oddball trial epochs from disk:
-- Loads `data/processed/epochs/{patient_id}/{date}/oddball-epo.fif` via `UnifiedDataLoader.load_clean_epochs()`
-- Maps each rare-event timestamp from ENG-02 aligned events into the appropriate 35s trial window
-- Extracts 900ms sub-epochs (`-200ms to +700ms` around each rare beep) from within those trials
-- **Dependency**: ENG-03 must be run first (`ArtifactRejector.run_session(save=True)`) to generate the epoch files
-- Fails with clear error if the `.fif` file is missing
+The current CLI-integrated implementation is `P300OddballPipeline` in `src/pipelines/p300_oddball.py`. It is invoked through:
 
-Rare events that fall inside trials dropped by ENG-03's PTP rejection are silently excluded (no fallback to raw EEG).
+```bash
+awakenai run <patient_id> --pipeline oddball
+```
 
-**Standard (Frequent) Events**: The pipeline also extracts standard stimulus events from the aligned events using the label set `STANDARD_EVENT_LABELS = {"standard", "frequent"}`. Standard epochs are averaged in parallel to the rare epochs, allowing computation of the difference wave (rare − standard) which isolates the endogenous P300 component by removing the auditory N1-P2 envelope.
+The oddball report is rendered by `OddballQCReport` in `src/reports/oddball_qc_report.py`.
 
-## Implementation Summary
+`src/data_processing/erp_pipeline.py` is still present as legacy/reference code, but it is not the primary integrated oddball path used by the current CLI runner.
 
-The `OddballERPPipeline` class in `src/data_processing/erp_pipeline.py` provides:
+## Current Architecture
 
-**Trial Window Mapping**: Reads ENG-03 epoch metadata (`start_time_unix`, `end_time_unix`) to build a table of trial time windows. Each rare-event timestamp is matched to its parent 35s trial by checking `trial_start <= event_time < trial_start + 35s`. Events that don't map to any surviving trial, map to multiple trials, or whose sub-epoch window crosses a trial boundary are excluded.
+### Inputs
 
-**Sub-Epoch Extraction**: For each mapped rare event, slices a 900ms window from the parent 35s epoch's data array. The result is an `mne.EpochsArray` with the same channel set and sampling rate as ENG-03's output, with baseline correction applied (`-200ms to 0ms`).
+1. **Aligned events from ENG-02**
+   - `data/processed/aligned_events/{patient_id}_events.parquet`
+   - Contains per-trial metadata plus aligned per-stimulus timestamps inside the `sentences` field
 
-**ERP Computation**: Averages sub-epochs to produce clean ERP waveforms.
+2. **Cleaned ENG-03 oddball epochs**
+   - `data/processed/epochs/{patient_id}/{session_id}/oddball-epo.fif`
+   - Each epoch is a cleaned 35-second oddball trial window with metadata including `start_time_unix` and `end_time_unix`
 
-**P300 Quantification**: Detects and measures P300 peaks (amplitude, latency). By default, the pipeline analyzes Pz/Cz/Fz, validates each electrode (positive amplitude, latency 250-600ms), and computes composite metrics from valid electrodes. Also supports custom electrode analysis.
+3. **Report assets**
+   - oddball feature parquets in `data/processed/features/`
+   - plot files in `data/processed/plots/erp/`
 
-**Batch Processing**: Processes multiple patients with progress tracking. All features go into a single `p300_features.parquet` master table with deduplication on `(patient_id, date)`.
+### Pipeline ownership
 
-**Visualization**: Generates 4-panel plots (when standard ERPs available): (1) butterfly plot of rare ERP, (2) rare vs standard ERP overlay with ±1 SEM bands, (3) difference wave with ±1 SEM. Also generates standalone topomap series (100ms snapshots from -200 to +700ms) of the difference ERP, and single-trial heatmap (ERP image) at Pz for quality control (only if ≥3 epochs). Creates individual and grand average ERPs, with automatic exclusion of aggregate files to prevent contamination.
+The current operational flow is:
 
-**QC Reporting**: Produces QC reports with summary statistics and concise notes on electrode validation issues.
+```text
+awakenai run --pipeline oddball
+    -> src/cli/runners/oddball.py
+    -> src/pipelines/p300_oddball.py
+    -> src/reports/oddball_qc_report.py
+```
 
-**Additional Capabilities**:
-- Multi-session patient support (different recording dates)
-- Custom electrode selection via `--electrodes` flag
-- Electrode discovery via `--list-electrodes` command
-- Case-insensitive electrode matching
-- Graceful handling of missing data, low epoch counts, and electrode variations
+### ENG-03 dependency
 
-## Technical Details
+ENG-03 must run first. The oddball pipeline does not reprocess raw EEG from scratch. It loads ENG-03-cleaned trial epochs and slices shorter event-locked sub-epochs from them.
 
-### Epoch Parameters
+If ENG-03 outputs are missing, oddball processing fails with a clear error.
+
+## Data Flow
+
+```text
+Aligned Events (ENG-02)                Clean Oddball Epochs (ENG-03)
+data/processed/aligned_events/         data/processed/epochs/{patient}/{session}/oddball-epo.fif
+        |                                              |
+        | extract rare + standard event timestamps     | read metadata start/end times
+        |                                              |
+        +---------------- map events into 35s trial windows ----------------+
+                                      |
+                                      | extract 900 ms sub-epochs
+                                      v
+                       Rare sub-epochs + Standard sub-epochs
+                                      |
+                       average -> rare ERP / standard ERP
+                                      |
+                       difference ERP = rare - standard
+                                      |
+                 P300 quantification + MMN extraction + Welch support test
+                                      |
+             save ERPs + plots + three feature tables + HTML oddball report
+```
+
+## Core Analysis
+
+### Event extraction
+
+The pipeline reads aligned oddball trials and extracts:
+
+- **rare events** from `sentences` where `event == "rare"`
+- **standard events** from `sentences` where `event in {"standard", "frequent"}`
+
+Each event is expected to include an aligned `event_start` timestamp in Unix time.
+
+### Trial-window mapping
+
+Each rare or standard event is mapped into one surviving ENG-03 35-second trial window using:
+
+- `start_time_unix`
+- `end_time_unix`
+
+Rules:
+
+- event must map to exactly one surviving ENG-03 trial
+- sub-epoch boundaries must remain inside the 35-second trial
+- unmapped, duplicate, or boundary-clipped events are excluded
+
+### Sub-epoch extraction
+
+For each mapped event, the pipeline extracts a short event-locked epoch using:
+
+- `tmin = -0.2`
+- `tmax = 0.7`
+- baseline correction `(None, 0)`
+
+These 900 ms epochs are not saved independently. They are re-sliced from the 35-second ENG-03 trials when needed.
+
+### ERP computation
+
+The pipeline computes:
+
+- rare ERP
+- standard ERP
+- difference ERP (`rare - standard`)
+
+### P300 quantification
+
+By default, oddball quantification focuses on:
+
+- `Pz`
+- `Cz`
+- `Fz`
+
+For each electrode, the pipeline measures:
+
+- rare ERP P300 peak amplitude
+- rare ERP P300 peak latency
+- difference-wave P300 peak amplitude
+- difference-wave P300 peak latency
+
+It also computes:
+
+- composite P300 metrics across valid midline electrodes
+- best electrode
+- subtype classification (`P3b`, `P3a`, `mixed`, `absent`)
+
+### Welch t-test support
+
+The report includes a Welch t-test for rare vs standard support. This test:
+
+- is computed at `Pz`
+- uses the `300-600 ms` window
+- compares **single-trial mean amplitudes** from rare vs standard epochs
+
+Stored fields:
+
+- `p300_p_value`
+- `p300_t_stat`
+- `p300_n_rare`
+- `p300_n_standard`
+
+Important: this Welch test is a **supporting measure of rare-standard separation**. It is **not** the sole rule for whether a P300-like morphology is present.
+
+### MMN implementation
+
+Mismatch negativity (MMN) is computed from the **difference ERP** (`rare - standard`).
+
+MMN rules:
+
+- peak search window: `100-250 ms`
+- peak type: most negative value in the window
+- extracted per electrode
+- report highlights `MMN at Fz`
+
+In the report, MMN at Fz is considered reliable only if:
+
+- amplitude is negative
+- latency is within `100-250 ms`
+
+MMN is a supporting descriptor, not the primary P300 decision metric.
+
+## Configuration
+
+Key analysis windows used by the current integrated path:
 
 ```python
 ERP_CONFIG = {
-    "tmin": -0.2,              # Start 200ms before stimulus
-    "tmax": 0.7,               # End 700ms after stimulus
-    "baseline": (None, 0),     # Baseline correction: -200ms to 0ms
-    "p300_window": (0.3, 0.6), # P300 search window: 300-600ms
-    "min_epochs": 2,           # Minimum rare events needed
-    "midline_electrodes": ["Pz", "Cz", "Fz"]
+    "tmin": -0.2,
+    "tmax": 0.7,
+    "baseline": (None, 0),
+    "p300_window": (0.3, 0.6),
+    "mmn_window": (0.100, 0.250),
+    "min_epochs": 2,
+    "midline_electrodes": ["Pz", "Cz", "Fz"],
 }
 ```
 
-### Data Flow
+## Output Artifacts
 
+### ERP files
+
+Saved under `data/processed/erps/`:
+
+- `{patient_id}_{session_id}_oddball-ave.fif`
+- `{patient_id}_{session_id}_oddball_standard-ave.fif`
+- `{patient_id}_{session_id}_oddball_diff-ave.fif`
+
+### Feature tables
+
+Saved under `data/processed/features/`:
+
+- `p300_oddball_clinical.parquet`
+- `p300_oddball_electrode_detail.parquet`
+- `p300_oddball_mapping_qc.parquet`
+
+### Plot files
+
+Saved under `data/processed/plots/erp/`:
+
+- `{patient_id}_{session_id}_oddball_erp.png`
+- `{patient_id}_{session_id}_oddball_erp_image.png`
+- `{patient_id}_{session_id}_oddball_topomap.png`
+- `{patient_id}_{session_id}_oddball_topomap.gif`
+
+### HTML report
+
+Saved under:
+
+- `data/reports/{patient_id}/{session_id}/oddball/{timestamp}/oddball_qc.html`
+
+The oddball CLI runner writes one timestamped HTML report per patient-session.
+
+Inside the HTML report, figures are intentionally split into:
+
+- **main plots**: waveform-centric figures used for primary temporal interpretation
+- **secondary supporting images**: figures used to add spatial or trial-consistency context
+
+Report hierarchy:
+
+- if dedicated `p300` and/or `mmn` plots are present, they are the **main plots**
+- otherwise the combined ERP overview figure (`..._oddball_erp.png`) is the **main plot**
+- topomap and ERP-image assets are always treated as **secondary supporting images**
+
+## Feature Table Semantics
+
+### Clinical table
+
+One row per patient-session. Key fields include:
+
+- `patient_id`
+- `session_id`
+- `session_date`
+- `n_rare_epochs`
+- `n_standard_epochs`
+- `baseline_std_uV`
+- `p300_rare_amplitude_Pz_uV`
+- `p300_rare_latency_Pz_ms`
+- `p300_diff_amplitude_Pz_uV`
+- `p300_diff_latency_Pz_ms`
+- `diff_mmn_amplitude_Fz_uV`
+- `diff_mmn_latency_Fz_ms`
+- `p300_best_electrode`
+- `p300_subtype`
+- `p300_amplitude_uV`
+- `p300_latency_ms`
+- `p300_n_valid_electrodes`
+- `qc_notes`
+- `qc_pass`
+- `p300_p_value`
+- `p300_t_stat`
+- `p300_n_rare`
+- `p300_n_standard`
+
+### Electrode detail table
+
+Three rows per session by default: `Fz`, `Cz`, `Pz`.
+
+Key fields:
+
+- `electrode`
+- `p300_amplitude_uV`
+- `p300_latency_ms`
+- `is_valid`
+- `flagged_reason`
+- `diff_amplitude_uV`
+- `diff_latency_ms`
+- `diff_mmn_amplitude_uV`
+- `diff_mmn_latency_ms`
+
+### Mapping/QC table
+
+One row per session containing trial mapping diagnostics:
+
+- `n_rare_events_candidate`
+- `n_rare_mapped`
+- `n_rare_unmapped`
+- `n_rare_boundary_clipped`
+- `rare_mapping_rate`
+- `n_standard_events_candidate`
+- `n_standard_mapped`
+- `processing_timestamp`
+- `pipeline_version`
+
+## Report Interpretation
+
+The oddball report is now **morphology-first** and **p-value-second**. The first row of cards is meant to answer:
+
+1. Did we observe a plausible P300-like candidate at Pz?
+2. How confident are we in that interpretation?
+3. Did rare and standard trials separate statistically?
+4. Was the underlying data quality good enough to trust the summary?
+
+The report must not equate `not significant` with `no P300-like morphology`.
+
+The report now includes:
+
+- a visible **Confidence Interpretation** section that explains the confidence labels and the key thresholds used to read them
+- a collapsible **Legend and metric definitions** section for the remaining reference definitions
+
+The confidence section is intentionally visible by default so readers do not need to expand the legend to understand the primary interpretation.
+
+### Row 1 cards
+
+1. **P300 Candidate at Pz**
+   - reports the rare-only Pz peak if it is positive and in the `300-600 ms` window
+   - otherwise reports that there is no reliable candidate
+
+2. **Confidence**
+   - summarizes morphology, rare-count sufficiency, SNR, difference-wave support, and Welch support
+   - uses the labels:
+     - `Detected`
+     - `Low-confidence detected`
+     - `No reliable P300 detected`
+
+3. **Rare vs Standard Support**
+   - reports the Welch t-test support label:
+     - `Separated`
+     - `Trend only`
+     - `Not separated`
+     - `Unavailable`
+
+4. **Data Quality**
+   - summarizes rare-trial count and P300 signal/noise
+
+### Row 2 cards
+
+1. **Rare Epochs**
+2. **Standard Epochs**
+3. **MMN at Fz**
+4. **Topography**
+
+## Confidence Semantics
+
+### Visible confidence interpretation in the report
+
+The HTML report includes a dedicated **Confidence Interpretation** block above the collapsible legend. That block explains:
+
+- confidence combines Pz morphology, rare-trial count, signal-to-noise, rare-vs-standard Welch support, and difference-wave support
+- what `Detected`, `Low-confidence detected`, and `No reliable P300 detected` mean
+- that a non-significant Welch test alone does not rule out P300-like morphology
+
+The block also includes a compact **Key thresholds** list so readers can interpret confidence without opening the full legend.
+
+### Candidate window
+
+P300 candidate at Pz:
+
+- amplitude must be positive
+- latency must be inside `300-600 ms`
+
+### Rare-count tiers
+
+- `good`: `>= 20`
+- `borderline`: `10-19`
+- `poor`: `< 10`
+
+### SNR tiers
+
+Signal/noise is computed as:
+
+```text
+rare P300 amplitude at Pz / baseline sigma
 ```
-Aligned Events (ENG-02)          ENG-03 Oddball Epochs (35s .fif)
-    ↓                                 ↓
-Extract Rare Timestamps          Build Trial Windows (metadata)
-Extract Standard Timestamps      (start_time_unix, end_time_unix)
-    ↓                                 ↓
-    ├── Map Rare Events ─────────────┤
-    │                                 │
-    ├── Map Standard Events ─────────┤
-    │                                 │
-    └─ Extract Rare/Standard 900ms Sub-Epochs
-                   ↓
-    Average Rare Epochs → Rare ERP
-    Average Standard Epochs → Standard ERP
-                   ↓
-    Compute Difference Wave (Rare − Standard) → Diff ERP
-                   ↓
-    Quantify P300 from Rare ERP (p300_* columns)
-    Quantify P300 from Diff ERP (diff_* columns)
-    Compute P3a/P3b Subtype
-                   ↓
-    Save ERPs (.fif) + Generate 4-Panel Plots + Topomaps + ERP Image
-    Save Features (p300_features.parquet)
-```
 
-### Output Structure
+Thresholds:
 
-```
-data/processed/
-├── erps/
-│   ├── {patient_id}_{date}_oddball-ave.fif              ← rare ERP
-│   ├── {patient_id}_{date}_oddball_standard-ave.fif     ← standard ERP (if computed)
-│   ├── {patient_id}_{date}_oddball_diff-ave.fif         ← difference ERP (if computed)
-│   └── grand_average_oddball-ave.fif
-├── features/
-│   ├── p300_oddball_clinical.parquet          ← Table 1: Main analysis (one row per session)
-│   ├── p300_oddball_electrode_detail.parquet  ← Table 2: Per-electrode detail (3 rows per session)
-│   └── p300_oddball_mapping_qc.parquet        ← Table 3: Mapping & QC diagnostics (one row per session)
-├── plots/erp/
-│   ├── {patient_id}_{date}_oddball_erp.png              ← 3-panel (butterfly, rare+std, diff)
-│   ├── {patient_id}_{date}_oddball_topomap.png          ← standalone topomap series (diff ERP)
-│   ├── {patient_id}_{date}_oddball_erp_image.png        ← ERP image (single-trial heatmap at Pz, if ≥3 epochs)
-│   └── grand_average_oddball_erp.png
-└── qc/
-    └── erp_qc_report.json
-```
+- `good`: `>= 2.0`
+- `borderline`: `1.25-1.99`
+- `poor`: `< 1.25`
 
-> 900ms epochs are not saved — they're re-sliced from ENG-03's 35s `.fif` on demand.
+### Welch support tiers
 
-### Oddball QC HTML Report
+- `supportive`: `p < 0.05`
+- `weak`: `0.05 <= p < 0.20`
+- `not_supported`: `p >= 0.20`
+- `unavailable`: missing p-value or insufficient trials for the test
 
-A combined HTML QC report for the P300 oddball paradigm can be generated via:
+### Key thresholds shown directly in the report
 
-```bash
-awakenai run <patient_id> --pipeline oddball -r
-```
+The visible **Confidence Interpretation** section should show these thresholds exactly:
 
-It reads the three feature parquets (`p300_oddball_clinical`, `p300_oddball_electrode_detail`, `p300_oddball_mapping_qc`) and embeds the pre-generated plot PNGs from `plots/erp/`, producing `data/processed/reports/combined_oddball_qc.html`. The report includes metric cards (QC status, subtype, best electrode, epoch counts, mapping rate), clinical and electrode tables, a legend, and the ERP, topomap, and ERP-image figures. This is separate from the general ENG-06 QC report (`awakenai qc`), which covers multiple pipelines; the oddball QC report is P300-specific and parquet-driven.
+- `P300 candidate window: 300-600 ms`
+- `MMN validity window: 100-250 ms`
+- `Rare-trial count: >=20 good, 10-19 borderline, <10 poor`
+- `Signal-to-noise: >=2.0 good, 1.25-1.99 borderline, <1.25 poor`
+- `Welch support: p<0.05 supportive, 0.05-0.19 weak, >=0.20 not supportive`
 
-### Metric Semantics
+### Confidence labels
 
-**Primary P300 Metric**: The `diff_*` columns (difference wave amplitude/latency) are the **primary scientific metric** for P300, as they isolate the endogenous cognitive component by subtracting the standard (frequent) ERP from the rare (target) ERP. This eliminates the auditory N1-P2 envelope and exogenous noise that would otherwise contaminate peak measurements from the rare ERP alone.
+#### `Detected`
 
-**Secondary Metrics**: The `p300_*` columns (rare ERP amplitude/latency) are retained for backward compatibility and as a reference for data quality assessment. These columns show the raw rare ERP measurements but should not be used as the primary P300 measure.
+Used when:
 
-**Subtype Classification**: The `p300_subtype` column ("P3a", "P3b", "mixed", "absent") is determined from the rare ERP composite QC logic (which electrode is valid and maximal) and indicates the likely functional class of the detected potential:
-- **P3b** (Pz-max): Working memory update, context closure (parietal-dominant)
-- **P3a** (Fz-max): Novelty orienting, stimulus-driven (frontal-dominant)
-- **mixed** (Cz-max): Intermediate or transitional
-- **absent** (n_valid_electrodes == 0): No valid P300 detected
+- valid P300 candidate exists at Pz
+- difference-wave support is present
+- rare-count tier is `good`
+- SNR is not poor
+- Welch support is at least weak
+- overall quality is not poor
 
-### Feature Schema
+#### `Low-confidence detected`
 
-The pipeline outputs **three structured tables** for different analytical purposes:
+Used when:
 
-#### Metadata
-| Column | Type | Description |
-|--------|------|-------------|
-| patient_id | str | Patient ID |
-| date | str | Session date (YYYY-MM-DD) |
-| n_epochs | int | Rare beeps averaged |
-| processing_timestamp | datetime | Extraction timestamp |
+- a valid P300 candidate exists at Pz
+- overall quality is not poor
+- but one or more support signals are borderline, unavailable, or unsupportive
 
-#### Baseline Quality
-| Column | Type | Description |
-|--------|------|-------------|
-| baseline_std_uV | float | Baseline noise (-200 to 0ms) |
+Typical reasons:
 
-#### Individual Electrode Measurements
-| Column | Type | Description |
-|--------|------|-------------|
-| p300_amplitude_pz_uV | float | Peak amplitude at Pz (300-600ms) |
-| p300_latency_pz_ms | float | Time of peak at Pz |
-| p300_amplitude_cz_uV | float | Peak amplitude at Cz |
-| p300_latency_cz_ms | float | Time of peak at Cz |
-| p300_amplitude_fz_uV | float | Peak amplitude at Fz |
-| p300_latency_fz_ms | float | Time of peak at Fz |
+- low rare-trial count
+- borderline signal/noise
+- non-significant rare-standard contrast
+- missing or weak difference-wave support
 
-#### Composite P300 (multi-electrode)
-| Column | Type | Description |
-|--------|------|-------------|
-| p300_composite_amplitude_uV | float | Mean amplitude across valid electrodes |
-| p300_composite_latency_ms | float | Mean latency across valid electrodes |
-| p300_best_electrode | str | Electrode with max valid amplitude |
-| p300_n_valid_electrodes | int | Valid electrode count (1-3) |
-| p300_n_flagged_electrodes | int | Flagged electrode count |
+#### `No reliable P300 detected`
 
-#### Backward Compatibility
-| Column | Type | Description |
-|--------|------|-------------|
-| p300_amplitude_uV | float | Alias for composite amplitude |
-| p300_latency_ms | float | Alias for composite latency |
+Used when:
 
-#### Quality Control
-| Column | Type | Description |
-|--------|------|-------------|
-| qc_notes | str | QC summary with subtype separator (e.g., "Pz inverted, used Fz only; P3a pattern (Fz-max) — P3b may be absent") |
+- no usable P300 candidate exists at Pz
+- Pz metrics are missing
+- latency falls outside `300-600 ms`
+- or data quality is poor enough that the candidate should not be trusted
 
-#### Difference Wave P300 (Primary Metric)
-|| Column | Type | Description |
-||--------|------|-------------|
-|| diff_amplitude_Pz_uV | float | Peak amplitude in diff ERP at Pz (300-600ms) |
-|| diff_latency_Pz_ms | float | Time of peak in diff ERP at Pz |
-|| diff_amplitude_Cz_uV | float | Peak amplitude in diff ERP at Cz |
-|| diff_latency_Cz_ms | float | Time of peak in diff ERP at Cz |
-|| diff_amplitude_Fz_uV | float | Peak amplitude in diff ERP at Fz |
-|| diff_latency_Fz_ms | float | Time of peak in diff ERP at Fz |
+## Visualization
 
-#### Standard Event Diagnostics
-|| Column | Type | Description |
-||--------|------|-------------|
-|| n_standard_events | int | Total standard events found in aligned data |
-|| n_standard_epochs | int | Standard epochs successfully extracted (≥ min_epochs for diff wave) |
+### ERP figure
 
-#### Subtype Classification
-|| Column | Type | Description |
-||--------|------|-------------|
-|| p300_subtype | str | "P3a" (Fz-max), "P3b" (Pz-max), "mixed" (Cz-max), or "absent" |
+The current integrated visualizer produces a **4-panel** ERP figure when rare, standard, and difference ERPs are all available:
 
-**Mapping diagnostics**: The parquet also includes `n_rare_events`, `n_mapped`, `n_unmapped`, `n_duplicate`, `n_boundary_clipped`, `mapping_rate` from the trial-mapping step.
+1. rare-only butterfly plot
+2. rare vs standard midline overlay
+3. rare-only midline P300 panel
+4. difference-wave panel
 
-### Validation Criteria
+If standard ERP or difference ERP is unavailable, the visualizer falls back to a smaller legacy layout instead of the full 4-panel figure.
 
-An electrode passes QC if:
-1. Amplitude > 0 µV (must be positive)
-2. Latency in 250-600ms (healthy controls usually 300-500ms)
-3. No NaN values
+This ERP figure is the **default main plot** for the current integrated pipeline. It is the primary waveform visualization used by the report whenever dedicated `p300` / `mmn` focus plots are not available.
 
-### Electrode Selection Modes
+### ERP image
 
-The pipeline operates in two mutually exclusive modes:
+The pipeline can generate a single-trial ERP image at `Pz`:
 
-**Default Mode** (Composite P300):
-- Analyzes Pz, Cz, Fz
-- Validates each electrode (amplitude > 0, latency 250-600ms)
-- Computes composite amplitude/latency from valid electrodes only
-- Identifies best electrode (highest valid amplitude)
-- Outputs individual electrode metrics and composite metrics
-- QC notes describe which electrodes were flagged and why
+- saved as `{patient_id}_{session_id}_oddball_erp_image.png`
+- only produced when at least 3 rare epochs are available
+- each row represents one rare trial
+- the image emphasizes trial-to-trial consistency versus variability at `Pz`
+- the bottom summary trace provides the average response used to visually cross-check the ERP
 
-**Custom Mode**:
-- Analyzes only the electrodes you specify with `--electrodes`
-- No composite scoring, just individual measurements
-- Useful for targeted checks in specific brain regions
-- Outputs only individual electrode metrics + QC note indicating custom mode
+This is a **secondary supporting image** in the report. It is used to assess single-trial consistency, not to replace the main waveform plot.
 
-```bash
-# See what electrodes are available in your data
-python scripts/run_erp_pipeline.py --list-electrodes
+### Topomap PNG
 
-# Default mode (composite scoring with Pz/Cz/Fz)
-python scripts/run_erp_pipeline.py --patient CON008
+The pipeline generates a topomap PNG from the **difference ERP**:
 
-# Custom mode (analyze specific electrodes)
-python scripts/run_erp_pipeline.py --patient CON008 --electrodes "T5,T6"
-```
+- saved as `{patient_id}_{session_id}_oddball_topomap.png`
+- uses a static series of scalp snapshots at 100 ms intervals
+- is intended to summarize spatial evolution of the difference wave across the epoch
 
-Use `--list-electrodes` before custom runs to confirm channel names. Missing electrodes produce NaN values and warnings.
+This is a **secondary supporting image** in the report. It adds spatial context to the waveform interpretation.
 
-### Visualization
+### Topomap GIF
 
-#### 3-Panel ERP Plot
+The pipeline also generates an animated topomap GIF when a difference ERP is available:
 
-Each patient output includes a three-panel plot (when standard/difference ERPs available):
+- saved as `{patient_id}_{session_id}_oddball_topomap.gif`
+- generated from successive difference-wave scalp maps
+- uses 50 ms frame spacing from roughly `-100 ms` to `650 ms`
+- is intended to show the temporal progression of spatial activity more smoothly than the static PNG
 
-**Panel 1 (Top)**: Butterfly plot with all EEG channels overlaid, showing the rare (target) ERP.
+This is also a **secondary supporting image** in the report. It provides dynamic spatial context and does not replace the main waveform plot.
 
-**Panel 2 (Middle)**: Rare vs. standard ERP overlay with ±1 SEM bands:
-- **Red**: Fz (frontal) - usually smaller P300
-- **Green**: Cz (central) - intermediate
-- **Blue**: Pz (parietal) - usually largest in healthy controls
-- **Shaded bands**: Standard error of the mean (SEM) around each condition
-- **Gray band**: P300 search window (300-600ms)
+### Dedicated P300 / MMN focus plots
 
-**Panel 3 (Bottom)**: Difference wave (rare − standard) with ±1 SEM shading. This isolates the endogenous P300 component by removing the auditory N1-P2 envelope common to both conditions.
+The report plot resolver can also consume optional dedicated focus plots:
 
-With `--electrodes`, the midline panels show the requested channels instead of Fz/Cz/Pz.
+- `p300` plot: a focused view of the P300 portion of the waveform, typically centered on parietal interpretation at `Pz`
+- `mmn` plot: a focused view of the MMN portion of the difference waveform, typically centered on frontal interpretation at `Fz`
 
-Grand-average plots use the same layout and average across all included sessions. Use `--grand-average` with `--all`.
+These are **optional / legacy-compatible** assets. The current integrated oddball pipeline does **not** generate dedicated `p300` and `mmn` PNGs by default; it generates the combined ERP figure plus topomap and ERP-image artifacts. If dedicated `p300` or `mmn` files exist from earlier workflows, the report will display them.
 
-#### Topomap Series (Standalone File)
+If these dedicated focus plots are present, they become the **main report plots** because they provide the most task-specific waveform views for P300 and MMN interpretation.
 
-A separate PNG file (`{patient_id}_{date}_oddball_topomap.png`) contains a series of 10 topographic maps of the difference ERP, plotted at 100ms intervals from −200ms to +700ms post-stimulus. Each topographic map shows:
+### Report plot fallback behavior
 
-- **Circular view** of the scalp from above
-- **Electrode positions** as small dots overlaid on the circular scalp (implicit in each map)
-- **Color scale** from blue (negative/baseline) to red (positive/P300 activity)
-- **Time label** above each map (e.g., "−0.2s", "0.0s", "0.3s", etc.)
-- **Colorbar** on the right showing the voltage scale (microvolts)
+The report can resolve these plot keys:
 
-**Reading the topomaps**:
-- **Time 0 marks stimulus onset** (rare beep presentation)
-- **Pre-stimulus (−0.2 to 0s)**: Baseline activity; should be minimal and symmetric
-- **Early post-stimulus (0 to 0.1s)**: Auditory N1 component (removed by difference wave)
-- **P300 window (0.3 to 0.6s)**: The characteristic P300 peak; **color intensifies** if P300 is present
-- **Post-P300 (0.6 to 0.7s)**: Return toward baseline
+- `p300`
+- `mmn`
+- `erp`
+- `topomap`
+- `erp_image`
 
-**Electrode positions** (on the scalp maps):
-- **Fz** (top-front): Frontal cortex — maximal in P3a (novelty orienting)
-- **Cz** (top-center): Central midline — intermediate activity
-- **Pz** (top-back, vertex): Parietal cortex — maximal in P3b (working memory)
-- Other standard 10–20 positions are also shown for reference
+Behavior:
 
-**Interpreting P3a vs. P3b patterns**:
-- **P3a (frontal-max)**: If red/intense activity is strongest at Fz around 300–400ms, indicates a novelty-orienting response
-- **P3b (parietal-max)**: If red/intense activity is strongest at Pz around 300–500ms, indicates context closure and working memory updating (typical in healthy controls)
-- **Mixed or absent**: If activity is distributed or minimal, may indicate attention deficits or stimulus insensitivity
+- if dedicated `p300` / `mmn` assets are present, the report shows them directly
+- otherwise it falls back to the combined ERP figure
+- if a topomap GIF exists, the report can embed that GIF
+- otherwise it uses the topomap PNG
+- ERP image is shown only when the file exists
 
-**Standard conventions**:
-- **Red** = positive voltage (depolarization, active neural firing)
-- **Blue** = negative/baseline voltage (no P300 activity)
-- **White/light** = near-zero voltage
-- This diverging colormap is standard across the neuroscience literature and allows quick visual identification of spatial patterns.
+This allows the report to work with both legacy plot artifacts and the current integrated plot set.
 
-#### ERP Image (Single-Trial Heatmap)
+Explicit report figure hierarchy:
 
-A single-trial heatmap PNG file (`{patient_id}_{date}_oddball_erp_image.png`) shows individual trial responses over time at electrode Pz (parietal). Each horizontal line represents one trial, with color indicating voltage amplitude. This visualization:
+- **Primary / main plot area**: dedicated `p300` and `mmn` focus plots when available; otherwise the combined ERP overview
+- **Secondary / supporting image area**: topomap and ERP image
 
-- **Detects outlier trials**: Single trials that deviate strongly from the mean (very red or blue)
-- **Shows trial-to-trial variability**: Consistent vertical patterns indicate stable P300; noisy patterns suggest attention lapses or artifacts
-- **Only generated if ≥3 rare epochs** are available (skipped for low-count sessions)
-- **Complements the averaged ERP**: Averaging can hide high variability or split responses
+The same hierarchy applies to explanatory text:
+
+- the visible **Confidence Interpretation** section is the main explanation for confidence labels
+- the collapsible legend is secondary reference material
+
+## Scientific Interpretation Notes
+
+### Primary user-facing interpretation
+
+The report centers on:
+
+- `P300 Candidate at Pz`
+- `Confidence`
+
+Difference-wave metrics, MMN, and Welch support remain scientifically useful, but the report no longer treats any single numeric field as the whole decision rule.
+
+### What the Welch test does not mean
+
+A non-significant Welch t-test does **not** automatically imply:
+
+- no P300-like morphology
+- no visible candidate peak
+- no potentially meaningful difference-wave structure
+
+It means that, within the current single-trial window-mean comparison at Pz, the rare and standard conditions were not reliably separated.
 
 ## Usage
 
 ### Prerequisites
 
-1. **ENG-02** must be run first so aligned events exist: `data/processed/aligned_events/{patient_id}_events.parquet`.
-2. **ENG-03** must be run first to generate cleaned oddball epoch files:
-   ```python
-   from src.data_processing.artifact_rejection import ArtifactRejector
-   ar = ArtifactRejector(verbose=True)
-   ar.run_session(patient_id="CON008", date="2025-08-14", save=True)
-   ```
-   This creates `data/processed/epochs/CON008/2025-08-14/oddball-epo.fif`.
+1. Run ENG-02 so aligned oddball events exist.
+2. Run ENG-03 so cleaned 35-second oddball epochs exist.
 
-### Command Line Interface
+### Primary command
 
 ```bash
-# Process single patient
-python scripts/run_erp_pipeline.py --patient CON008
-
-# Process all patients
-python scripts/run_erp_pipeline.py --all
-
-# Process all patients and compute grand average
-python scripts/run_erp_pipeline.py --all --grand-average
-
-# Process specific session
-python scripts/run_erp_pipeline.py --patient CON008 --date 2025-08-14
-
-# List patients with oddball data
-python scripts/run_erp_pipeline.py --list
-
-# List available electrodes (check montage)
-python scripts/run_erp_pipeline.py --list-electrodes
-
-# Custom electrode analysis
-python scripts/run_erp_pipeline.py --patient CON008 --electrodes "T5,T6"
-
-# Custom output directory
-python scripts/run_erp_pipeline.py --all --output-dir /path/to/output
-
-# Verbose output
-python scripts/run_erp_pipeline.py --patient CON008 --verbose
+awakenai run CON008 --pipeline oddball -r
 ```
 
-### Testing with real data locally
+This:
 
-1. Run ENG-02 for your patient, then ENG-03 (`ArtifactRejector.run_session(save=True)`).
-2. Run the ERP pipeline:
-   ```bash
-   cd awaken-ai
-   python scripts/run_erp_pipeline.py --patient CON008 --verbose
-   ```
-3. Logs should show: `Loading ENG-03 oddball epochs for CON008 - 2025-08-14` then mapping, sub-epoch extraction, and P300 quantification.
-4. Outputs under `data/processed/`: `features/p300_features.parquet`, `plots/erp/*.png`, `erps/*-ave.fif`.
-5. If you see `ENG-03 oddball epochs not found`, run ENG-03 for that patient/date first.
+- runs the oddball pipeline for the selected patient/session(s)
+- updates the oddball feature parquets
+- saves ERP and plot artifacts
+- generates timestamped HTML oddball report(s)
 
-### Python API
+### Notes
 
-```python
-from pathlib import Path
-from src.data_processing.erp_pipeline import OddballERPPipeline
-
-pipeline = OddballERPPipeline(
-    data_root=Path("data"),
-    output_dir=Path("data/processed"),
-    verbose=True
-)
-
-result = pipeline.process_patient("CON008")
-print(result["features"])
-
-features_df = pipeline.process_all_patients()
-
-grand_avg = pipeline.compute_grand_average()
-
-qc_report = pipeline.generate_qc_report()
-```
-
-## Testing
-
-Unit tests in `tests/test_erp_pipeline.py` cover:
-
-- Pipeline initialization, directory creation
-- Rare event extraction from aligned trials
-- Trial window building from ENG-03 epoch metadata
-- Rare-event-to-trial mapping (all mapped, unmapped, boundary clipped)
-- Sub-epoch extraction (shape, timing, empty case)
-- ERP computation (averaging)
-- P300 peak detection
-- Feature quantification (default and custom electrode modes)
-- Output saving (ERPs, features)
-- Plotting (individual, grand average)
-- QC report generation
-- Batch processing
-- Grand-average exclusion of aggregate files
-- Master feature table upsert
-- ENG-03 integration (missing epochs error, successful load)
-- Full pipeline integration with mocked ENG-03 epochs
-
-Run: `pytest tests/test_erp_pipeline.py -v`
-
-## Configuration
-
-The pipeline uses standardized output directories defined in `src/data_loading/config.py`:
-
-```python
-EPOCHS_DIR = PROCESSED_DATA_DIR / "epochs"
-ERPS_DIR = PROCESSED_DATA_DIR / "erps"
-FEATURES_DIR = PROCESSED_DATA_DIR / "features"
-ERP_PLOTS_DIR = PROCESSED_DATA_DIR / "plots" / "erp"
-QC_REPORTS_DIR = PROCESSED_DATA_DIR / "qc"
-```
-
-## Design Decisions
-
-**1. Difference Wave as Primary P300 Metric**
-- Computes difference ERP (target − standard) to isolate the endogenous P300 component (Sutton et al., 1965)
-- Removes auditory N1-P2 envelope and baseline drift that contaminates raw rare-ERP peak measurements
-- `diff_*` columns are the canonical P300 metrics; `p300_*` columns are backward-compatible but secondary
-- Requires sufficient standard epochs (logs warning if n_standard_epochs < 10)
-- Falls back to rare-ERP measurement (legacy) if standard ERPs cannot be computed
-
-**2. ENG-03 Epoch Reuse**
-- Loads pre-computed artifact-cleaned 35s epochs from disk rather than re-running ICA each time
-- Maps rare events into those epochs via Unix timestamps and extracts 900ms sub-epochs
-- Also maps standard (frequent) events in parallel to enable difference-wave computation
-- Events from ENG-03-dropped trials are silently excluded — no fallback to raw EEG
-- Trade-off: some rare events may be lost due to trial-level PTP rejection, but all data used is artifact-cleaned
-
-**3. Multi-Electrode P300 with Subtype Classification**
-- Pz (parietal) is primary - usually strongest P300 (P3b: working memory update)
-- Fz (frontal) indicates P3a pattern (novelty orienting, may lack P3b)
-- Cz (central) as intermediate for mixed patterns
-- Composite averaging across valid electrodes reduces sensitivity to single-electrode failures
-- Case-insensitive electrode matching (`Pz` = `PZ` = `pz`)
-
-**4. Session-Level Processing**
-- Each date processed separately
-- Handles multi-session patients naturally
-- Each session → separate epoch/ERP files (rare, standard, diff)
-- Features aggregated in master table with deduplication on (patient_id, date)
-
-## Understanding Topomaps: Electrode Positions and P3a/P3b Discrimination
-
-The topomap series is central to P300 analysis because it reveals the **spatial distribution of brain activity** — a key diagnostic feature. The electrode positions on the scalp topomaps are standard 10–20 positions, with **Fz, Cz, and Pz** being the three primary midline sites:
-
-### Scalp Electrode Layout
-
-The scalp is viewed from above in each topomap circular plot:
-- **Top-front of circle** = Frontal cortex (Fz, F3, F4, etc.)
-- **Top-center/back of circle** = Central and parietal cortex (Cz, Pz, P3, P4, etc.)
-- **Sides of circle** = Temporal areas (T7, T8, etc.)
-
-Electrode dots are overlaid on the circular scalp, with Fz, Cz, and Pz labeled or prominently positioned at top-front, top-center, and top-back respectively.
-
-### P3a vs. P3b: Reading from Topomaps
-
-**P3b (Parietal-Maximum, Typical Response)**
-- Strongest red (positive) activity at **Pz** during 300–500ms window
-- Reflects context closure and stimulus classification
-- Associated with: working memory updating, stimulus relevance processing
-- Expected in healthy controls attending to task
-
-**P3a (Frontal-Maximum, Novelty Orienting)**
-- Strongest red activity at **Fz** during 300–400ms window
-- Reflects stimulus-driven attention shift (often before voluntary response)
-- Associated with: novelty detection, stimulus-triggered reorienting
-- Expected when a truly novel stimulus breaks attention
-- May occur *without* a P3b if the stimulus is not task-relevant
-
-**Mixed (Cz-Maximum)**
-- Activity centered at **Cz** (frontal-parietal intermediate)
-- Suggests transitional or competing processes
-- Can indicate attention difficulties or bimodal response patterns
-
-**Absent**
-- Minimal or no red activity in 300–600ms window
-- No clear P300 at any electrode
-- May indicate inattention, drowsiness, or neurological dysfunction
-
-### Clinical Interpretation Tips
-
-1. **Always look at the pre-stimulus topomaps (−0.2 to 0s)**: Should be symmetric and low-amplitude. Asymmetry here suggests electrode contact or noise issues, not P300.
-
-2. **Compare rare vs. standard conditions** (if plotting both): The rare condition should show stronger P300 activity, with the difference wave isolating the component by subtraction.
-
-3. **Check consistency across time**: A robust P300 will show a clear peak around 300–500ms, then decline by 700ms. Noisy or multi-peaked patterns suggest poor trial quality or attention lapses.
-
-4. **Combine with amplitude/latency measurements**: The topomap shows *where*; the `diff_amplitude_*` and `diff_latency_*` columns in `p300_features.parquet` show *how much* and *when*. Use both for complete assessment.
-
-## Limitations
-
-1. Fixed 300-600ms P300 window (could make adaptive later)
-2. Default analysis limited to Fz/Cz/Pz (use `--electrodes` for others)
-3. Rare events in ENG-03-dropped trials are lost (depends on ENG-03 rejection settings)
-4. Event count per session is small (typically 9-15 rare events), making ERP averages sensitive to dropped trials
-
-## Integration Points
-
-### Upstream Dependencies
-
-- **ENG-02**: Provides aligned events with `event_start` timestamps
-- **ENG-03**: Provides ICA-cleaned 35s oddball epochs (`.fif` files)
-- **ENG-01**: Provides `UnifiedDataLoader` for epoch loading
-- **DAT-03**: Provides unified stimulus data schema
-
-### Downstream Consumers
-
-- **SCI-01 (P300 Features)**: Uses P300 feature table for statistical analysis
-- **VIS-01 (Validation Plots)**: Uses ERP plots for validation figures
-- **MOD-01 (Feature Assembly)**: Integrates P300 features into master feature table
-
-## Validation
-
-Expected for healthy controls:
-- P300 detection: >80%
-- Amplitude: 3-10 µV at Pz
-- Latency: 300-500ms (varies with age/attention)
-- Topography: Maximal at parietal sites
-
-Checklist:
-- Epochs time-locked to rare beeps ✓
-- Baseline correction applied (mean ≈ 0 from -200 to 0ms) ✓
-- P300 visible in control patients ✓
-- Feature table has all patients ✓
-- Grand average shows clear P300 ✓
-- Tests pass ✓
-- ruff compliant ✓
-
-## Performance
-
-- **Single Patient**: ~5-15 seconds (no ICA re-run, loads pre-computed ENG-03 epochs)
-- **Batch Processing**: ~2-5 minutes for 10 patients
-- **Memory Usage**: ~200MB per patient (peak during epoch loading)
-- **Output Size**: ~5-10MB per patient (ERP `.fif` + plot; 900ms epochs are not saved)
-
-## Future Work
-
-1. Adaptive P300 window (adjust per patient)
-2. Group statistics (compare patient groups)
-3. N200-P300 peak-to-peak measurement (N200 detection in standard ERP, P300 in diff ERP)
-4. Parallel processing for batch mode
-5. CSV/Excel export
-6. Topographic maps with confidence intervals (currently static)
-7. Correlation analysis between P3a/P3b patterns and clinical outcomes
-
-## References
-
-### Scientific Background
-
-- Polich, J. (2007). "Updating P300: An integrative theory of P3a and P3b." *Clinical Neurophysiology*, 118(10), 2128-2148.
-- Luck, S. J. (2014). *An Introduction to the Event-Related Potential Technique* (2nd ed.). MIT Press.
-
-### MNE-Python Documentation
-
-- Epoching Guide: https://mne.tools/stable/auto_tutorials/epochs/10_epochs_overview.html
-- ERP Tutorial: https://mne.tools/stable/auto_tutorials/evoked/10_evoked_overview.html
-
-### Internal Documentation
-
-- `docs/Oddball_pipeline.md`: Detailed pipeline specification
-- `tasks/ENG-02.md`: Timestamp alignment implementation
-- `PROJECT_SCHEDULE.md`: Project timeline and milestones
+- Custom electrode analysis remains available through the oddball pipeline, but the report interpretation described here is designed around the default midline P300 path.
+- Missing channels or low epoch counts may still produce partial outputs; the report should degrade gracefully rather than fail.

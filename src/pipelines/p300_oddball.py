@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
+from scipy import stats
 
 from src.data_loading import UnifiedDataLoader, config
 from src.pipelines.base import BasePipeline
@@ -40,6 +41,8 @@ ERP_CONFIG = {
     "p300_min_amplitude": 0.0,  # µV — must be positive
     "p300_expected_latency_range": (300, 500),  # typical range for controls (ms)
     "p300_max_latency_range": (250, 600),  # hard rejection cutoff (ms)
+    "mmn_window": (0.100, 0.250),  # MMN search window: 100-250ms
+    "mmn_expected_electrodes": ["Fz", "Cz"],
 }
 
 # Event labels used for standard (frequent) stimuli in the oddball paradigm.
@@ -57,7 +60,10 @@ class SessionData:
     rare_events: Optional[List[Dict[str, Any]]] = None
     standard_events: Optional[List[Dict[str, Any]]] = None
     rare_mapped_df: Optional[pd.DataFrame] = None
+    # Rare sub-epochs (time-locked to rare events; main analysis epochs)
     epochs: Optional[mne.Epochs] = None
+    # Standard sub-epochs mapped into the same 900 ms windows (may be None)
+    standard_epochs: Optional[mne.Epochs] = None
     rare_erp: Optional[mne.Evoked] = None
     rare_sem: Optional[mne.Evoked] = None
     standard_erp: Optional[mne.Evoked] = None
@@ -272,6 +278,7 @@ class P300OddballPipeline(BasePipeline):
                 sess.standard_events = standard_events
                 sess.rare_mapped_df = rare_mapped_df
                 sess.epochs = epochs
+                sess.standard_epochs = standard_epochs if n_standard_epochs >= ERP_CONFIG["min_epochs"] else None
                 sess.rare_erp = rare_erp
                 sess.rare_sem = rare_sem
                 sess.standard_erp = standard_erp
@@ -303,6 +310,12 @@ class P300OddballPipeline(BasePipeline):
                 if sess.mapping_diag:
                     self._last_epoch_diagnostics = sess.mapping_diag
 
+                # Compute per-session P300 significance (Welch t-test) using single-trial data
+                p300_sig = self._compute_p300_significance(
+                    rare_epochs=sess.epochs,
+                    standard_epochs=sess.standard_epochs,
+                )
+
                 features = self._quantify_p300(
                     erp=sess.rare_erp,
                     patient_id=self.patient_id or "",
@@ -314,6 +327,9 @@ class P300OddballPipeline(BasePipeline):
                     n_standard_epochs=sess.n_standard_epochs,
                     n_standard_events_candidate=sess.n_standard_events_candidate,
                 )
+
+                # Merge significance statistics into feature dict
+                features.update(p300_sig)
 
                 rows.append(features)
 
@@ -356,6 +372,18 @@ class P300OddballPipeline(BasePipeline):
                         fig_topo,
                         self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.png",
                     )
+
+                    anim_topo = self.viz.animate_topomap(sess.diff_erp, label)
+                    if anim_topo:
+                        gif_path = self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.gif"
+                        # anim_topo is a list of PIL frames
+                        anim_topo[0].save(
+                            gif_path,
+                            save_all=True,
+                            append_images=anim_topo[1:],
+                            duration=500,
+                            loop=0,
+                        )
             except Exception as e:  # pragma: no cover - defensive
                 logger.error(f"Analysis failed for {self.patient_id} - {session_id}: {e}", exc_info=True)
                 continue
@@ -607,6 +635,66 @@ class P300OddballPipeline(BasePipeline):
         logger.info(f"Computed ERP from {len(epochs)} epochs")
         return erp, erp_sem
 
+    def _compute_p300_significance(
+        self,
+        rare_epochs: Optional[mne.Epochs],
+        standard_epochs: Optional[mne.Epochs],
+    ) -> Dict[str, Any]:
+        """Compute per-session P300 significance (Welch t-test) at Pz, 300–600 ms.
+
+        Returns a dict with p300_p_value, p300_t_stat, p300_n_rare, p300_n_standard.
+        If inputs are insufficient, values are set to NaN or 0.
+        """
+        out: Dict[str, Any] = {
+            "p300_p_value": float("nan"),
+            "p300_t_stat": float("nan"),
+            "p300_n_rare": 0,
+            "p300_n_standard": 0,
+        }
+
+        if rare_epochs is None or standard_epochs is None:
+            return out
+
+        if len(rare_epochs) < ERP_CONFIG["min_epochs"] or len(standard_epochs) < ERP_CONFIG["min_epochs"]:
+            return out
+
+        # Find Pz channel
+        ch_names = [ch.upper() for ch in rare_epochs.ch_names]
+        if "PZ" not in ch_names:
+            logger.warning("P300 significance: Pz not found in channels; skipping test.")
+            return out
+        ch_idx = ch_names.index("PZ")
+
+        times = rare_epochs.times
+        t_start, t_end = ERP_CONFIG["p300_window"]
+        mask = (times >= t_start) & (times <= t_end)
+        if not mask.any():
+            logger.warning("P300 significance: 300–600 ms window outside epoch range; skipping test.")
+            return out
+
+        # rare_epochs.get_data() shape: (n_epochs, n_channels, n_times)
+        data_rare = rare_epochs.get_data()[:, ch_idx, :][:, mask]
+        data_std = standard_epochs.get_data()[:, ch_idx, :][:, mask]
+
+        rare_means = data_rare.mean(axis=1)
+        std_means = data_std.mean(axis=1)
+
+        out["p300_n_rare"] = int(len(rare_means))
+        out["p300_n_standard"] = int(len(std_means))
+
+        if len(rare_means) < 2 or len(std_means) < 2:
+            return out
+
+        try:
+            t_stat, p_val = stats.ttest_ind(rare_means, std_means, equal_var=False, nan_policy="omit")
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"P300 significance: t-test failed: {e}")
+            return out
+
+        out["p300_t_stat"] = float(t_stat)
+        out["p300_p_value"] = float(p_val)
+        return out
+
     def _compute_difference_erp(self, rare_erp: mne.Evoked, standard_erp: mne.Evoked) -> mne.Evoked:
         """Compute difference ERP (rare - standard)."""
         if rare_erp.data.shape != standard_erp.data.shape:
@@ -717,6 +805,11 @@ class P300OddballPipeline(BasePipeline):
                     features[f"diff_amplitude_{electrode}_uV"] = diff_features["amplitude"]
                     features[f"diff_latency_{electrode}_ms"] = diff_features["latency"]
 
+                    # Also calculate the MMN (negative peak 100-250ms)
+                    mmn_features = self._detect_mmn_peak(diff_erp, electrode)
+                    features[f"diff_mmn_amplitude_{electrode}_uV"] = mmn_features["amplitude"]
+                    features[f"diff_mmn_latency_{electrode}_ms"] = mmn_features["latency"]
+
             composite = self._compute_composite_p300(erp, patient_id)
 
             features.update(
@@ -784,6 +877,34 @@ class P300OddballPipeline(BasePipeline):
         window_times = times[window_mask]
 
         peak_idx = np.argmax(window_data)
+        amplitude = float(window_data[peak_idx] * 1e6)
+        latency = float(window_times[peak_idx] * 1000)
+
+        return {"amplitude": amplitude, "latency": latency}
+
+    def _detect_mmn_peak(self, diff_erp: mne.Evoked, electrode: str) -> Dict[str, float]:
+        """Detect Mismatch Negativity (MMN) negative peak (100-250ms) on the difference wave."""
+        electrode_names = [ch.upper() for ch in diff_erp.ch_names]
+        electrode_upper = electrode.upper()
+
+        if electrode_upper not in electrode_names:
+            return {"amplitude": float("nan"), "latency": float("nan")}
+
+        ch_idx = electrode_names.index(electrode_upper)
+        data = diff_erp.data[ch_idx, :]
+        times = diff_erp.times
+
+        window_start, window_end = ERP_CONFIG["mmn_window"]
+        window_mask = (times >= window_start) & (times <= window_end)
+
+        if not window_mask.any():
+            return {"amplitude": float("nan"), "latency": float("nan")}
+
+        window_data = data[window_mask]
+        window_times = times[window_mask]
+
+        # MMN is the most NEGATIVE peak in the window (diff wave: Rare - Standard)
+        peak_idx = np.argmin(window_data)
         amplitude = float(window_data[peak_idx] * 1e6)
         latency = float(window_times[peak_idx] * 1000)
 
@@ -999,12 +1120,20 @@ class P300OddballPipeline(BasePipeline):
                     "n_rare_epochs": features.get("n_epochs"),
                     "n_standard_epochs": features.get("n_standard_epochs"),
                     "baseline_std_uV": features.get("baseline_std_uV"),
+                    "p300_rare_amplitude_Pz_uV": features.get("p300_amplitude_Pz_uV"),
+                    "p300_rare_latency_Pz_ms": features.get("p300_latency_Pz_ms"),
                     "p300_diff_amplitude_Pz_uV": features.get("diff_amplitude_Pz_uV"),
                     "p300_diff_latency_Pz_ms": features.get("diff_latency_Pz_ms"),
+                    "diff_mmn_amplitude_Pz_uV": features.get("diff_mmn_amplitude_Pz_uV"),
+                    "diff_mmn_latency_Pz_ms": features.get("diff_mmn_latency_Pz_ms"),
                     "p300_diff_amplitude_Cz_uV": features.get("diff_amplitude_Cz_uV"),
                     "p300_diff_latency_Cz_ms": features.get("diff_latency_Cz_ms"),
+                    "diff_mmn_amplitude_Cz_uV": features.get("diff_mmn_amplitude_Cz_uV"),
+                    "diff_mmn_latency_Cz_ms": features.get("diff_mmn_latency_Cz_ms"),
                     "p300_diff_amplitude_Fz_uV": features.get("diff_amplitude_Fz_uV"),
                     "p300_diff_latency_Fz_ms": features.get("diff_latency_Fz_ms"),
+                    "diff_mmn_amplitude_Fz_uV": features.get("diff_mmn_amplitude_Fz_uV"),
+                    "diff_mmn_latency_Fz_ms": features.get("diff_mmn_latency_Fz_ms"),
                     "p300_best_electrode": features.get("p300_best_electrode"),
                     "p300_subtype": features.get("p300_subtype"),
                     "p300_amplitude_uV": features.get("p300_amplitude_uV"),
@@ -1012,6 +1141,11 @@ class P300OddballPipeline(BasePipeline):
                     "p300_n_valid_electrodes": features.get("p300_n_valid_electrodes"),
                     "qc_notes": features.get("qc_notes", ""),
                     "qc_pass": qc_pass,
+                    # Per-session P300 significance (Welch t-test at Pz, 300–600 ms)
+                    "p300_p_value": features.get("p300_p_value"),
+                    "p300_t_stat": features.get("p300_t_stat"),
+                    "p300_n_rare": features.get("p300_n_rare"),
+                    "p300_n_standard": features.get("p300_n_standard"),
                 }
             ]
         )
@@ -1024,6 +1158,8 @@ class P300OddballPipeline(BasePipeline):
             lat_key = f"p300_latency_{electrode}_ms"
             diff_amp_key = f"diff_amplitude_{electrode}_uV"
             diff_lat_key = f"diff_latency_{electrode}_ms"
+            diff_mmn_amp_key = f"diff_mmn_amplitude_{electrode}_uV"
+            diff_mmn_lat_key = f"diff_mmn_latency_{electrode}_ms"
 
             amp = features.get(amp_key)
             lat = features.get(lat_key)
@@ -1051,6 +1187,8 @@ class P300OddballPipeline(BasePipeline):
                     "flagged_reason": flagged_reason,
                     "diff_amplitude_uV": features.get(diff_amp_key),
                     "diff_latency_ms": features.get(diff_lat_key),
+                    "diff_mmn_amplitude_uV": features.get(diff_mmn_amp_key),
+                    "diff_mmn_latency_ms": features.get(diff_mmn_lat_key),
                 }
             )
 

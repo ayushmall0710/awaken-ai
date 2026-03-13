@@ -5,8 +5,10 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
 import mne
 import numpy as np
+from PIL import Image
 
 
 class OddballVisualizer:
@@ -17,6 +19,28 @@ class OddballVisualizer:
     responsibility of the caller (the pipeline or report), which also chooses
     filenames and directories.
     """
+
+    @staticmethod
+    def _fix_colorbar_ticks(fig_obj: plt.Figure, v_limit: float) -> None:
+        """Fix colorbar ticks to show meaningful values instead of 0.00.
+
+        MNE's cbar_fmt parameter doesn't reliably format very small values.
+        This post-processes the colorbar axis (always the last axis in MNE topomaps)
+        to apply proper formatting.
+        """
+        # Determine appropriate formatter
+        if v_limit >= 1.0:
+            fmt_str = "%.2f"
+        elif v_limit >= 0.01:
+            fmt_str = "%.3f"
+        elif v_limit >= 0.0001:
+            fmt_str = "%.4f"
+        else:
+            fmt_str = "%.1e"
+
+        # H-B fix: colorbar is always the LAST axis in MNE topomaps (width=0.1162 vs 0.0525)
+        cbar_ax = fig_obj.axes[-1]
+        cbar_ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: fmt_str % x))
 
     def plot_erp_figure(
         self,
@@ -126,7 +150,39 @@ class OddballVisualizer:
         ax3.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
         ax3.set_xlabel("Time (ms)")
         ax3.set_ylabel("Amplitude (µV)")
-        ax3.set_title("P300: Rare-Stimulus Evoked Response at Midline")
+        ax3.set_title("Rare-Only ERP — Midline Electrodes")
+
+        # Mark detected Pz peak
+        pz_rare_lat = features.get("p300_latency_Pz_ms")
+        pz_rare_amp = features.get("p300_amplitude_Pz_uV")
+        if pz_rare_lat is not None and pz_rare_amp is not None:
+            ax3.axvline(
+                pz_rare_lat,
+                color="blue",
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.7,
+            )
+            ax3.scatter(
+                [pz_rare_lat],
+                [pz_rare_amp],
+                color="blue",
+                s=100,
+                zorder=5,
+                marker="v",
+            )
+            ax3.annotate(
+                f"Pz: {pz_rare_amp:.1f}µV\n@ {pz_rare_lat:.0f}ms",
+                xy=(pz_rare_lat, pz_rare_amp),
+                xytext=(15, 10),
+                textcoords="offset points",
+                fontsize=8,
+                fontweight="bold",
+                color="blue",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="blue"),
+                arrowprops=dict(arrowstyle="->", color="blue"),
+            )
+
         ax3.legend(loc="upper right")
         ax3.grid(True, alpha=0.3)
 
@@ -146,7 +202,39 @@ class OddballVisualizer:
         ax4.axhline(y=0, color="gray", linestyle=":", linewidth=0.5)
         ax4.set_xlabel("Time (ms)")
         ax4.set_ylabel("Amplitude (µV)")
-        ax4.set_title("MNN: Difference Wave (Rare − Standard)")
+        ax4.set_title("Difference Wave (Rare − Standard) — P300 Detection")
+
+        # Mark detected Pz peak on difference wave
+        pz_diff_lat = features.get("diff_latency_Pz_ms")
+        pz_diff_amp = features.get("diff_amplitude_Pz_uV")
+        if pz_diff_lat is not None and pz_diff_amp is not None:
+            ax4.axvline(
+                pz_diff_lat,
+                color="blue",
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.7,
+            )
+            ax4.scatter(
+                [pz_diff_lat],
+                [pz_diff_amp],
+                color="blue",
+                s=100,
+                zorder=5,
+                marker="v",
+            )
+            ax4.annotate(
+                f"Pz: {pz_diff_amp:.1f}µV\n@ {pz_diff_lat:.0f}ms",
+                xy=(pz_diff_lat, pz_diff_amp),
+                xytext=(15, 10),
+                textcoords="offset points",
+                fontsize=8,
+                fontweight="bold",
+                color="blue",
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8, edgecolor="blue"),
+                arrowprops=dict(arrowstyle="->", color="blue"),
+            )
+
         ax4.legend(loc="upper right")
         ax4.grid(True, alpha=0.3)
 
@@ -202,6 +290,14 @@ class OddballVisualizer:
     def plot_topomap(self, diff_erp: mne.Evoked, label: str) -> plt.Figure:
         """Topomap series for the difference ERP."""
         times_to_plot = np.arange(-0.2, 0.75, 0.1)
+        # Use µV scaling for a readable colorbar, and a robust fixed scale across timepoints.
+        data_uV = diff_erp.data * 1e6
+        if data_uV.size:
+            v_limit_uV = float(np.percentile(np.abs(data_uV), 99))
+        else:
+            v_limit_uV = 1.0
+        if v_limit_uV == 0.0:
+            v_limit_uV = float(np.max(np.abs(data_uV))) if data_uV.size else 1.0
 
         fig = diff_erp.plot_topomap(
             times=times_to_plot,
@@ -209,6 +305,17 @@ class OddballVisualizer:
             colorbar=True,
             size=5,
             show_names=True,
+            # Smoother look (less blocky)
+            image_interp="linear",
+            res=128,
+            # Softer diverging palette than default
+            cmap="coolwarm",
+            contours=3,
+            # Show meaningful units/ticks
+            scalings=1e6,
+            units="µV",
+            # Fixed scale (in µV because scalings=1e6)
+            vlim=(-v_limit_uV, v_limit_uV),
         )
 
         # mne.Evoked.plot_topomap sometimes returns a list of figures
@@ -217,8 +324,59 @@ class OddballVisualizer:
         else:
             fig_obj = fig
 
-        fig_obj.suptitle(f"Difference Topomaps — {label}")
+        # Post-process to fix colorbar formatting
+        self._fix_colorbar_ticks(fig_obj, v_limit_uV)
+
+        fig_obj.suptitle("Difference Topomaps")
         return fig_obj
+
+    def animate_topomap(self, diff_erp: mne.Evoked, label: str):
+        """Generate animated topomap frames for the difference ERP.
+
+        Note: MNE 1.11.0's Evoked.animate_topomap does not accept cmap/contours,
+        so we generate frames ourselves via plot_topomap to keep a mellow palette
+        and a fixed scale across frames.
+        """
+        times_to_plot = np.arange(-0.1, 0.70, 0.05)  # -100 to 700ms in 50ms steps
+        if diff_erp.data.size:
+            v_limit = float(np.percentile(np.abs(diff_erp.data), 99))
+        else:
+            v_limit = 1e-6
+        if v_limit == 0.0:
+            v_limit = float(np.max(np.abs(diff_erp.data))) if diff_erp.data.size else 1e-6
+
+        # Match colorbar formatting to scale
+        v_limit_uV = v_limit * 1e6
+
+        frames: List[Image.Image] = []
+        for t in times_to_plot:
+            fig = diff_erp.plot_topomap(
+                times=[float(t)],
+                show=False,
+                colorbar=True,
+                size=5,
+                show_names=True,
+                image_interp="linear",
+                res=128,
+                cmap="coolwarm",
+                contours=3,
+                scalings=1e6,
+                units="µV",
+                vlim=(-v_limit_uV, v_limit_uV),  # H-G fix: pass µV not V
+                time_unit="s",
+            )
+            fig_obj = fig[0] if isinstance(fig, (list, tuple)) else fig
+            # Post-process to fix colorbar formatting
+            self._fix_colorbar_ticks(fig_obj, v_limit_uV)
+            fig_obj.suptitle(f"Difference Topomap ({t:.3f} s)")
+            fig_obj.canvas.draw()
+            # Backend-safe pixel extraction (works on macOS FigureCanvasMac)
+            rgba = np.asarray(fig_obj.canvas.buffer_rgba())
+            rgb = rgba[..., :3].copy()
+            frames.append(Image.fromarray(rgb))
+            plt.close(fig_obj)
+
+        return frames
 
     # ------------------------------------------------------------------
     # Legacy helper
