@@ -380,9 +380,9 @@ class CommandFollowingClaassenReport:
         details_df = self.pipeline.svm_results.get("details") if self.pipeline.svm_results else None
         side_results = self._collect_side_results()
         img_paths = self._generate_plots(side_results)
-        panel = style_utils.build_session_panel(self.session_id, collapsible=True)
-        content = self._build_content_html(summary, details_df, img_paths)
-        return f"<details class='session-wrapper' open>{panel}<div class='session-content'>{content}</div></details>"
+        return style_utils.wrap_session_fragment(
+            self.session_id, self._build_content_html(summary, details_df, img_paths)
+        )
 
     def generate(self) -> Path:
         """Write a standalone single-session HTML report to disk."""
