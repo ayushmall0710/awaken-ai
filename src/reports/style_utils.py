@@ -341,6 +341,27 @@ def build_collapsible_panel(title: str, content: str, open_default: bool = False
     return f"<details class='session-wrapper'{open_attr}>\n{header}\n{content_div}\n</details>"
 
 
+def wrap_session_fragment(session_id: str, content: str, open_default: bool = True) -> str:
+    """Wrap session content in a collapsible <details> panel for combined reports.
+
+    Encapsulates the <details class='session-wrapper'> + build_session_panel +
+    <div class='session-content'> pattern shared by all report classes.
+
+    Args:
+        session_id: Session identifier displayed in the panel header.
+        content: HTML content to place inside the collapsible body.
+        open_default: Whether the panel starts expanded.
+    """
+    open_attr = " open" if open_default else ""
+    panel = build_session_panel(session_id, collapsible=True)
+    return (
+        f"<details class='session-wrapper'{open_attr}>\n"
+        f"{panel}\n"
+        f"<div class='session-content'>{content}</div>\n"
+        "</details>\n"
+    )
+
+
 def stitch_and_save(
     fragments: List[str],
     output_path: Path,

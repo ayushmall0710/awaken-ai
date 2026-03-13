@@ -622,24 +622,24 @@ class LanguageTrackingReport:
         ]
         return style_utils.build_legend_box("Metrics Lexicon &amp; Interpretation", items)
 
+    def _build_content_html(self, plot_paths: dict) -> str:
+        """Return the bare body content for the report, with no HTML doc wrapper."""
+        return "\n".join(
+            [
+                self._build_overview_cards(),
+                self._build_entrainment_table(),
+                self._build_optimal_focus_section(plot_paths),
+                self._build_morlet_section(),
+                self._build_lateralization_section(),
+                self._build_plots_section(plot_paths),
+                self._build_legend_box(),
+            ]
+        )
+
     def build_session_html(self) -> str:
         """Return a collapsible <details> HTML fragment for combined multi-session reports."""
         plot_paths = self._save_plots()
-        content = (
-            self._build_overview_cards()
-            + self._build_entrainment_table()
-            + self._build_optimal_focus_section(plot_paths)
-            + self._build_morlet_section()
-            + self._build_lateralization_section()
-            + self._build_plots_section(plot_paths)
-            + self._build_legend_box()
-        )
-        return (
-            "<details class='session-wrapper' open>\n"
-            f"{style_utils.build_session_panel(self.session_id, collapsible=True)}\n"
-            f"<div class='session-content'>{content}</div>\n"
-            "</details>\n"
-        )
+        return style_utils.wrap_session_fragment(self.session_id, self._build_content_html(plot_paths))
 
     def generate(self) -> Path:
         """Generate a standalone single-session HTML report and write to disk."""
@@ -651,13 +651,7 @@ class LanguageTrackingReport:
             patient_id=pid,
             session_id=self.session_id,
         )
-        html += self._build_overview_cards()
-        html += self._build_entrainment_table()
-        html += self._build_optimal_focus_section(plot_paths)
-        html += self._build_morlet_section()
-        html += self._build_lateralization_section()
-        html += self._build_plots_section(plot_paths)
-        html += self._build_legend_box()
+        html += self._build_content_html(plot_paths)
         html += style_utils.build_html_footer("Language Tracking Pipeline")
 
         self.report_file.write_text(html, encoding="utf-8")
