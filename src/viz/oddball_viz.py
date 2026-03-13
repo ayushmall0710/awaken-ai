@@ -23,7 +23,7 @@ class OddballVisualizer:
     @staticmethod
     def _fix_colorbar_ticks(fig_obj: plt.Figure, v_limit: float) -> None:
         """Fix colorbar ticks to show meaningful values instead of 0.00.
-        
+
         MNE's cbar_fmt parameter doesn't reliably format very small values.
         This post-processes the colorbar axis (always the last axis in MNE topomaps)
         to apply proper formatting.
@@ -40,9 +40,7 @@ class OddballVisualizer:
 
         # H-B fix: colorbar is always the LAST axis in MNE topomaps (width=0.1162 vs 0.0525)
         cbar_ax = fig_obj.axes[-1]
-        cbar_ax.yaxis.set_major_formatter(
-            ticker.FuncFormatter(lambda x, pos: fmt_str % x)
-        )
+        cbar_ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, pos: fmt_str % x))
 
     def plot_erp_figure(
         self,
@@ -159,10 +157,19 @@ class OddballVisualizer:
         pz_rare_amp = features.get("p300_amplitude_Pz_uV")
         if pz_rare_lat is not None and pz_rare_amp is not None:
             ax3.axvline(
-                pz_rare_lat, color="blue", linestyle="--", linewidth=1.5, alpha=0.7,
+                pz_rare_lat,
+                color="blue",
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.7,
             )
             ax3.scatter(
-                [pz_rare_lat], [pz_rare_amp], color="blue", s=100, zorder=5, marker="v",
+                [pz_rare_lat],
+                [pz_rare_amp],
+                color="blue",
+                s=100,
+                zorder=5,
+                marker="v",
             )
             ax3.annotate(
                 f"Pz: {pz_rare_amp:.1f}µV\n@ {pz_rare_lat:.0f}ms",
@@ -202,10 +209,19 @@ class OddballVisualizer:
         pz_diff_amp = features.get("diff_amplitude_Pz_uV")
         if pz_diff_lat is not None and pz_diff_amp is not None:
             ax4.axvline(
-                pz_diff_lat, color="blue", linestyle="--", linewidth=1.5, alpha=0.7,
+                pz_diff_lat,
+                color="blue",
+                linestyle="--",
+                linewidth=1.5,
+                alpha=0.7,
             )
             ax4.scatter(
-                [pz_diff_lat], [pz_diff_amp], color="blue", s=100, zorder=5, marker="v",
+                [pz_diff_lat],
+                [pz_diff_amp],
+                color="blue",
+                s=100,
+                zorder=5,
+                marker="v",
             )
             ax4.annotate(
                 f"Pz: {pz_diff_amp:.1f}µV\n@ {pz_diff_lat:.0f}ms",

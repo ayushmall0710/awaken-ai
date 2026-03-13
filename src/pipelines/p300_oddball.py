@@ -372,7 +372,7 @@ class P300OddballPipeline(BasePipeline):
                         fig_topo,
                         self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.png",
                     )
-                    
+
                     anim_topo = self.viz.animate_topomap(sess.diff_erp, label)
                     if anim_topo:
                         gif_path = self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.gif"
