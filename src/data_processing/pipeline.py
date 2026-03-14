@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.data_processing.normalization import normalize_sentences, normalize_trial_type
+from src.data_processing.normalization import (
+    convert_new_format_to_canonical,
+    is_new_format,
+    normalize_sentences,
+    normalize_trial_type,
+)
 
 # Trial type -> short prefix for trial_id generation
 TRIAL_TYPE_PREFIX = {
@@ -80,6 +85,10 @@ def process_stimulus_df(df: pd.DataFrame, source_name: str) -> pd.DataFrame:
         Processed DataFrame with normalized columns
     """
     df = df.copy()
+
+    # Detect and convert new CON010 (Mar 2026) format before any other processing
+    if is_new_format(df):
+        df = convert_new_format_to_canonical(df)
 
     # Lang_XX rescue logic - extract event ID from trial_type when sentences is empty
     if "trial_type" in df.columns and "sentences" in df.columns:

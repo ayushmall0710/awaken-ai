@@ -34,19 +34,33 @@ def _run_unify_data(verbose: bool) -> bool:
     return True
 
 
-def _run_timestamp_alignment(patient_id: str, verbose: bool) -> bool:
+def _run_timestamp_alignment(patient_id: str, verbose: bool, session: str | None = None) -> bool:
     from src.data_processing.timestamp_aligner import TimestampAligner
 
     aligner = TimestampAligner(patient_id=patient_id, verbose=verbose)
     aligner.align(save=True)
+    if session:
+        typer.echo(f"      Aligned session: {session}")
     return True
 
 
-def _run_artifact_rejection(patient_id: str, verbose: bool, loader: UnifiedDataLoader) -> bool:
+def _run_artifact_rejection(
+    patient_id: str, verbose: bool, loader: UnifiedDataLoader, session: str | None = None
+) -> bool:
     from src.data_processing.artifact_rejection import ArtifactRejector
 
     rejector = ArtifactRejector(loader=loader, verbose=verbose)
-    rejector.run([patient_id], save=True)
+    if session:
+        # Resolve session_id from date
+        patient = loader.get_patient(patient_id)
+        session_ids = [sid for sid in patient.list_session_ids() if session.replace("-", "") in sid]
+        if not session_ids:
+            typer.echo(f"      No session_id found matching date '{session}'. Skipping artifact rejection.", err=True)
+            return False
+        for sid in session_ids:
+            rejector.run_session(patient_id, sid, save=True)
+    else:
+        rejector.run([patient_id], save=True)
     return True
 
 
@@ -86,12 +100,14 @@ def _print_patient_summary(patient_id: str, loader: UnifiedDataLoader) -> None:
     typer.echo(f"  Available pipelines: {', '.join(pipelines) or 'none'}")
 
 
-def _do_setup(patient_id: str, verbose: bool, force: bool, loader: UnifiedDataLoader) -> None:
-    """Run all setup steps for a single patient."""
+def _do_setup(
+    patient_id: str, verbose: bool, force: bool, loader: UnifiedDataLoader, session: str | None = None
+) -> None:
+    """Run all setup steps for a single patient, optionally scoped to a session date."""
     if not verbose:
         logging.disable(logging.WARNING)
 
-    typer.echo(f"\nSetting up {patient_id}")
+    typer.echo(f"\nSetting up {patient_id}" + (f" (session: {session})" if session else ""))
     typer.echo("─" * 40)
     _print_patient_summary(patient_id, loader)
 
@@ -107,14 +123,14 @@ def _do_setup(patient_id: str, verbose: bool, force: bool, loader: UnifiedDataLo
             "Matches EEG signal timestamps to exact audio trigger events.\n"
             "      Without this, pipelines cannot locate trials within the EEG recording.",
             _events_done(patient_id),
-            lambda: _run_timestamp_alignment(patient_id, verbose),
+            lambda: _run_timestamp_alignment(patient_id, verbose, session),
         ),
         (
             "Artifact rejection",
             "Runs ICA to remove eye/muscle noise, detects bad channels, rejects\n"
             "      high-amplitude epochs, and saves clean epoch files for analysis.",
             _epochs_done(patient_id, loader),
-            lambda: _run_artifact_rejection(patient_id, verbose, loader),
+            lambda: _run_artifact_rejection(patient_id, verbose, loader, session),
         ),
     ]
 
@@ -146,6 +162,10 @@ def setup_cmd(
     all_patients: Annotated[bool, typer.Option("--all", "-a", help="Do setup for all available patients")] = False,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Show detailed output for each step")] = True,
     force: Annotated[bool, typer.Option("--force", "-f", help="Skip Y/n prompts and run all steps")] = False,
+    session: Annotated[
+        Optional[str],
+        typer.Option("--session", "-s", help="Restrict alignment/rejection to a session date (YYYY-MM-DD)"),
+    ] = None,
 ) -> None:
     """Set up prerequisites (patient records, alignment, artifact rejection) for one or more patients."""
 
@@ -158,6 +178,6 @@ def setup_cmd(
         typer.confirm(f"Run setup for all {len(patient_ids)} patients?", default=True, abort=True)
 
     for pid in patient_ids:
-        _do_setup(pid, verbose, force, loader)
+        _do_setup(pid, verbose, force, loader, session)
 
     typer.echo("\nAll done.")
