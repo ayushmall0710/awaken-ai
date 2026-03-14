@@ -51,11 +51,12 @@ Closes `</body></html>` with a credit footer line.
 
 ```python
 stitch_and_save(fragments, output_path, title="AwakenAI Report",
-                generator_name="AwakenAI", extra_css="") -> Path
+                generator_name="AwakenAI", extra_css="", pdf_path=None) -> Path
 ```
 Wraps an ordered list of HTML fragment strings in a full document and writes
-it to disk. Parent directories are created automatically. Returns the resolved
-`Path` of the written file.
+it to disk. Parent directories are created automatically.
+
+If `pdf_path` is passed, the document embeds a "Download PDF" button at the top right with Javascript logic that `fetch()`es the expected PDF filename. If the PDF does not exist alongside the HTML, the button gracefully falls back to `window.print()`. Returns the resolved `Path` of the written HTML file.
 
 ---
 
@@ -105,6 +106,30 @@ Bare `<table>` element — use when you need full control over the wrapper.
 
 ---
 
+#### PDF Export & CLI Utilities (`src/cli/cli_utils.py`)
+
+HTML-to-PDF export is managed outside of `style_utils` to keep the UI layer clean and avoid circular dependencies:
+
+```python
+generate_pdf_from_html(html_path: Path, pdf_path: Path) -> bool
+```
+
+Uses headless Chromium via Playwright to render the HTML document and dump it as an A4 PDF (`print_background=True`). It ignores problematic OS-level C-dependencies by automatically downloading its own browser binary on first run. Returns `True` if generation succeeded.
+
+```python
+print_report_paths(pid: str, sess: str, html_path: Path, pdf_path: Path | None) -> None
+```
+
+Formats output paths using a terminal tree visual:
+
+```
+  CON001 / sess_01:
+    └─ HTML: reports/command-following/CON001...html
+    └─ PDF:  reports/command-following/CON001...pdf
+```
+
+---
+
 ## Usage patterns
 
 ### Standalone single-session report
@@ -146,6 +171,20 @@ style_utils.stitch_and_save(
     title="My Pipeline — Combined Report",
     generator_name="My Pipeline",
     extra_css=extra_css,
+    pdf_path=output_dir / "combined_report.pdf",
+)
+
+# 2. Separately render the generated HTML to PDF
+status = cli_utils.generate_pdf_from_html(
+    output_dir / "combined_report.html",
+    output_dir / "combined_report.pdf"
+)
+
+# 3. Print tree-formatted output
+cli_utils.print_report_paths(
+    "P001", "Combined",
+    html_path=output_dir / "combined_report.html",
+    pdf_path=output_dir / "combined_report.pdf" if status else None
 )
 ```
 
@@ -154,8 +193,8 @@ implement. It returns one self-contained fragment:
 
 ```html
 <details class="session-wrapper" open>
-  <summary class="session-header">Session: sess_01  ⌄</summary>
-  <div class="session-content"> … tables, plots, legend … </div>
+  <summary class="session-header">Session: sess_01 ⌄</summary>
+  <div class="session-content">… tables, plots, legend …</div>
 </details>
 ```
 
@@ -166,16 +205,19 @@ pure CSS `<details>` behaviour.
 
 ## CSS classes provided by `render_uw_css()`
 
-| Class | Element | Purpose |
-|-------|---------|---------|
-| `.table-wrapper` | `<div>` | Horizontal scroll container for wide tables |
-| `.metric-cards` | `<div>` | Flex row of stat cards |
-| `.metric-card` | `<div>` | Individual stat card |
-| `.metric-card-title/value/desc` | `<div>` | Card sub-elements |
-| `.legend-box` | `<div>` | Bordered definition list |
-| `.legend-range` | `<span>` | Color-coded badge inside legend |
-| `.legend-excellent/good/ok/bad` | modifier | Semantic color variants |
-| `.session-card` | `<div>` | Standalone session card (single-report use) |
-| `.session-wrapper` | `<div>` or `<details>` | Spacing wrapper for combined report |
-| `.session-content` | `<div>` | Card body inside a session wrapper |
-| `.session-toggle-arrow` | `<span>` | Rotating chevron inside collapsible panel |
+| Class                           | Element                | Purpose                                                    |
+| ------------------------------- | ---------------------- | ---------------------------------------------------------- |
+| `.table-wrapper`                | `<div>`                | Horizontal scroll container for wide tables                |
+| `.metric-cards`                 | `<div>`                | Flex row of stat cards                                     |
+| `.metric-card`                  | `<div>`                | Individual stat card                                       |
+| `.metric-card-title/value/desc` | `<div>`                | Card sub-elements                                          |
+| `.legend-box`                   | `<div>`                | Bordered definition list                                   |
+| `.legend-range`                 | `<span>`               | Color-coded badge inside legend                            |
+| `.legend-excellent/good/ok/bad` | modifier               | Semantic color variants                                    |
+| `.session-card`                 | `<div>`                | Standalone session card (single-report use)                |
+| `.session-wrapper`              | `<div>` or `<details>` | Spacing wrapper for combined report                        |
+| `.session-content`              | `<div>`                | Card body inside a session wrapper                         |
+| `.session-toggle-arrow`         | `<span>`               | Rotating chevron inside collapsible panel                  |
+| `.html-btn`                     | `<button>`             | Base button styling for the report UI                      |
+| `.html-btn-primary`             | modifier               | Purple-stroked primary button styling                      |
+| `.html-btn-download`            | modifier               | Absolute positioning for the top-right PDF download button |

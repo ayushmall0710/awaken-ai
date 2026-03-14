@@ -2,7 +2,7 @@
 
 import base64
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 UW_PURPLE = "#4b2e83"
 TEXT_MAIN = "#1a1a1a"  # Dark Gray for main text
@@ -83,14 +83,15 @@ def render_uw_css() -> str:
     
     .table-wrapper {{
         width: 100%;
+        max-width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
         margin: 1rem 0;
     }}
     table {{
         border-collapse: collapse;
-        min-width: 600px;
         width: 100%;
+        table-layout: auto;
         background: {WHITE};
         box-shadow: 0 1px 3px {SHADOW_LIGHT};
         font-size: 0.875rem;
@@ -195,8 +196,78 @@ def render_uw_css() -> str:
         user-select: none;
         padding: 0 0.5rem 0 0;
     }}
-    details.session-wrapper[open] .session-toggle-arrow {{
-        transform: rotate(180deg);
+    
+    /* Common Button Styling */
+    .html-btn {{
+        padding: 0.6rem 1.25rem;
+        border-radius: 8px;
+        cursor: pointer;
+        font-family: inherit;
+        font-weight: 600;
+        font-size: 0.95rem;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        outline: none;
+    }}
+    
+    .html-btn-primary {{
+        background-color: {WHITE};
+        color: {UW_PURPLE};
+        border: 2px solid {UW_PURPLE};
+    }}
+    
+    .html-btn-primary:hover {{
+        background-color: {UW_PURPLE};
+        color: {WHITE};
+        box-shadow: 0 4px 6px rgba(75, 46, 131, 0.2);
+        transform: translateY(-1px);
+    }}
+    
+    .html-btn-primary:active {{
+        transform: translateY(0);
+        box-shadow: 0 1px 2px rgba(75, 46, 131, 0.2);
+    }}
+    
+    /* Specific positioning for download button */
+    .html-btn-download {{
+        position: absolute;
+        top: 2rem;
+        right: 1.5rem;
+    }}
+
+    @media print {{
+        .no-print {{
+            display: none !important;
+        }}
+        @page {{
+            size: A4;
+            margin: 0.5in;
+        }}
+        body {{
+            max-width: 100%;
+            margin: 0;
+            padding: 0;
+        }}
+        /* Allow tables to wrap text in print to perfectly fit 100% width of A4 */
+        table {{
+            table-layout: fixed !important;
+            width: 100% !important;
+        }}
+        th, td {{
+            white-space: normal !important;
+            word-wrap: break-word !important;
+            padding: 0.25rem 0.35rem !important;
+            font-size: 0.70rem !important;
+        }}
+        /* Prevent elements from being cut in half across pages */
+        .metric-card, .plot-card, .table-wrapper, tr {{
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }}
     }}
 
     /* Plot styles */
@@ -368,23 +439,28 @@ def stitch_and_save(
     title: str = "AwakenAI Report",
     generator_name: str = "AwakenAI",
     extra_css: str = "",
+    pdf_path: Optional[Path] = None,
 ) -> Path:
     """Wrap a list of HTML fragment strings in a full document and write to disk.
 
     Intended for the multi-patient / multi-session combined report flow:
     the CLI runner accumulates patient panels and session fragments into a list,
     then calls this once to produce a single HTML file.
+    Optionally, if pdf_path is provided, it embeds JavaScript in the HTML so that
+    the "Download PDF" button can trigger a download of the subsequently generated PDF.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    html = build_html_header(title, extra_css=extra_css)
+    html = build_html_header(title, extra_css=extra_css, pdf_path=pdf_path)
     html += "\n".join(fragments)
     html += build_html_footer(generator_name)
     output_path.write_text(html, encoding="utf-8")
     return output_path
 
 
-def build_html_header(title: str, patient_id: str = None, session_id: str = None, extra_css: str = "") -> str:
+def build_html_header(
+    title: str, patient_id: str = None, session_id: str = None, extra_css: str = "", pdf_path: Optional[Path] = None
+) -> str:
     """Builds the common HTML head and page header with consistent styling."""
 
     patient_session_html = ""
@@ -392,6 +468,40 @@ def build_html_header(title: str, patient_id: str = None, session_id: str = None
         patient_html = build_patient_panel(patient_id) if patient_id else ""
         session_html = build_session_panel(session_id) if session_id else ""
         patient_session_html = patient_html + session_html
+
+    download_icon = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" '
+        'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+        'stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>'
+        '<polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3">'
+        "</line></svg>"
+    )
+
+    if pdf_path:
+        pdf_filename = pdf_path.name
+        js_logic = f"""
+        <script>
+        function downloadOrPrint() {{
+            fetch('{pdf_filename}', {{ method: 'HEAD' }})
+            .then(response => {{
+                if (response.ok) {{
+                    window.location.href = '{pdf_filename}';
+                }} else {{
+                    console.warn("PDF not found on server, falling back to browser print.");
+                    window.print();
+                }}
+            }})
+            .catch(error => {{
+                console.warn("Fetch failed, falling back to browser print.", error);
+                window.print();
+            }});
+        }}
+        </script>
+        """
+        btn_action = 'onclick="downloadOrPrint()"'
+    else:
+        js_logic = ""
+        btn_action = 'onclick="window.print()"'
 
     return f"""<!DOCTYPE html>
 <html>
@@ -403,8 +513,12 @@ def build_html_header(title: str, patient_id: str = None, session_id: str = None
         {render_uw_css()}
         {extra_css}
     </style>
+    {js_logic}
 </head>
 <body>
+    <button class="html-btn html-btn-primary html-btn-download no-print" {btn_action}>
+        {download_icon} Download PDF
+    </button>
     <div class="header">
         <h1>{title}</h1>{patient_session_html}
     </div>
