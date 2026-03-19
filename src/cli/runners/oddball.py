@@ -88,6 +88,8 @@ def run(
                         timestamp=timestamp,
                     )
                 )
+                if "{timestamp}" not in config.REPORT_DIR_TEMPLATE:
+                    out_dir = out_dir / timestamp
                 out_path = out_dir / "oddball_qc.html"
 
                 html_fragments: list[str] = []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,9 +38,16 @@ class OddballQCReport:
         self.clinical_row = clinical_row
         self.detail_df = detail_df
         self.mapping_row = mapping_row
-        self.output_dir = output_dir or (config.REPORTS_DIR / patient_id / session_id / "oddball")
-        self.output_dir = Path(self.output_dir)
-        self.report_file = self.output_dir / f"{session_id}_oddball_qc.html"
+        self._setup_output_dir(output_dir)
+
+    def _setup_output_dir(self, output_dir: Optional[Path]) -> None:
+        """Setup a timestamped session report directory unless one is provided explicitly."""
+        if output_dir is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir = config.REPORTS_DIR / self.patient_id / self.session_id / "oddball" / timestamp
+
+        self.output_dir = Path(output_dir)
+        self.report_file = self.output_dir / "oddball_qc.html"
 
     def build_session_html(self) -> str:
         """Collapsible <details> fragment for the combined report (used by runner)."""
@@ -660,7 +668,6 @@ class OddballQCReport:
         labels = {
             "p300": "P300 Focus (Pz)",
             "mmn": "MMN Focus (Fz)",
-            "erp": "ERP Waveforms",
             "topomap": "Scalp Topography (Difference Wave)",
             "erp_image": "Single-Trial ERP Image (Pz)",
         }
@@ -688,11 +695,10 @@ class OddballQCReport:
 
         row_p300 = card_full("p300")
         row_mmn = card_full("mmn")
-        row_erp = card_full("erp") if not row_p300 and not row_mmn else ""
         row3_parts = [card(k) for k in ("topomap", "erp_image") if card(k)]
         row3 = f"<div class='plot-row'>\n{''.join(row3_parts)}\n</div>" if row3_parts else ""
 
-        return f"{row_p300}\n{row_mmn}\n{row_erp}\n{row3}"
+        return f"{row_p300}\n{row_mmn}\n{row3}"
 
     def _resolve_plot_paths(self) -> Dict[str, Optional[str]]:
         """Return base64-encoded data URIs for plot PNGs/GIFs so images are embedded inline."""

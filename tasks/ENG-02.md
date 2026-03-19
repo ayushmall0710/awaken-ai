@@ -56,3 +56,9 @@ Implemented timestamp alignment to synchronize experimental event logs (stimuli)
    - It compares the EDF start timestamp (converted to unix) with the first trial's start timestamp.
    - If the difference is greater than 1 hour, it rounds to the nearest hour and applies it as a correction.
    - **Note**: This logic is simplistic but sufficient for our current data. Corner cases (DST changes, etc.) would result in **failed alignment** (0 correlation) rather than incorrect data, so they are easily detectable if they occur.
+
+## Downstream Oddball Note
+
+- During oddball ERP smoothing checks on `2026-03-13`, a `60 Hz` notch filter was compared against a `30 Hz` low-pass-only path.
+- Result: the notch produced little to no visible change in the final oddball plots once the `30 Hz` low-pass was already applied.
+- Current oddball branch decision: keep the `60 Hz` notch disabled and use the `30 Hz` low-pass for the official oddball output path.
