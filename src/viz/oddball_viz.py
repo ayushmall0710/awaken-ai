@@ -307,10 +307,12 @@ class OddballVisualizer:
         if annotation_latency_ms is not None:
             time_midpoint_ms = 0.5 * (times_ms[0] + times_ms[-1])
             if annotation_latency_ms >= time_midpoint_ms:
-                annotation_kwargs.update({
-                    "xytext": (-12, 14),
-                    "ha": "right",
-                })
+                annotation_kwargs.update(
+                    {
+                        "xytext": (-12, 14),
+                        "ha": "right",
+                    }
+                )
 
         if annotation_latency_ms is not None and annotation_amplitude_uv is not None:
             ax.axvline(

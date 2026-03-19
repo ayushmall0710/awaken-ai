@@ -1,7 +1,7 @@
 """Tests for OddballQCReport (parquet-based oddball QC HTML)."""
 
-from datetime import datetime as real_datetime
 import math
+from datetime import datetime as real_datetime
 
 import pandas as pd
 

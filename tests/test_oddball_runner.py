@@ -137,4 +137,6 @@ def test_report_output_path_uses_timestamped_session_folder(tmp_path, monkeypatc
     )
 
     assert captured["title"] == "P300 Oddball Summary — Combined Report"
-    assert captured["output_path"] == tmp_path / patient_id / session_id / "oddball" / "20260313_180300" / "oddball_qc.html"
+    assert captured["output_path"] == (
+        tmp_path / patient_id / session_id / "oddball" / "20260313_180300" / "oddball_qc.html"
+    )

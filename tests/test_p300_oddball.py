@@ -328,9 +328,7 @@ class TestPreprocess:
         assert sess.epochs is not None
         assert len(sess.epochs) >= ERP_CONFIG["min_epochs"]
 
-    def test_apply_official_filters_uses_notch_and_baseline_when_lowpass_disabled(
-        self, pipeline, mock_eng03_epochs, monkeypatch
-    ):
+    def test_apply_official_filters_uses_lowpass_and_baseline(self, pipeline, mock_eng03_epochs, monkeypatch):
         tw = pipeline._build_trial_windows(mock_eng03_epochs)
         trial_start = tw["start_time_unix"].iloc[0]
         events = [{"timestamp_unix": trial_start + 10.0, "date": "2024-01-01", "trial_idx": 0}]
@@ -358,9 +356,9 @@ class TestPreprocess:
 
         filtered = pipeline._apply_official_filters(sub)
 
-        assert calls["notch"]["freqs"] == (60.0,)
-        assert calls["notch"]["method"] == "iir"
-        assert "lowpass" not in calls
+        assert "notch" not in calls
+        assert calls["lowpass"]["h_freq"] == 30.0
+        assert calls["lowpass"]["method"] == "iir"
         baseline_mask = (filtered.times >= ERP_CONFIG["tmin"]) & (filtered.times <= 0.0)
         baseline_means = filtered.get_data()[:, :, baseline_mask].mean(axis=-1)
         assert np.allclose(baseline_means, 0.0, atol=1e-12)
@@ -730,7 +728,11 @@ class TestAnalyzeAndRun:
         )
         monkeypatch.setattr(pipeline, "_save_outputs", lambda **kwargs: None)
         monkeypatch.setattr(pipeline.viz, "plot_p300_focus", lambda *args, **kwargs: plt.figure())
-        monkeypatch.setattr(pipeline.viz, "plot_mmn_focus", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("plot failed")))
+        monkeypatch.setattr(
+            pipeline.viz,
+            "plot_mmn_focus",
+            lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("plot failed")),
+        )
 
         with pytest.raises(RuntimeError, match="plot failed"):
             pipeline.analyze()

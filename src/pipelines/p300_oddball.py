@@ -46,9 +46,8 @@ ERP_CONFIG = {
 }
 
 ODDBALL_FILTER_CONFIG = {
-    # Temporarily using 60 Hz notch only so we can judge its isolated effect on oddball outputs.
-    "notch_freq_hz": 60.0,
-    "lowpass_freq_hz": None,
+    # Official oddball smoothing path: 30 Hz low-pass only.
+    "lowpass_freq_hz": 30.0,
     "filter_method": "iir",
 }
 
@@ -605,16 +604,6 @@ class P300OddballPipeline(BasePipeline):
         sfreq = float(epochs.info["sfreq"])
         eeg_picks = mne.pick_types(epochs.info, eeg=True, meg=False, exclude=[])
         filtered_data = np.array(epochs.get_data(), copy=True)
-
-        notch_freq_hz = ODDBALL_FILTER_CONFIG["notch_freq_hz"]
-        if notch_freq_hz is not None and len(eeg_picks) > 0 and notch_freq_hz < (sfreq / 2.0):
-            filtered_data[:, eeg_picks, :] = mne.filter.notch_filter(
-                filtered_data[:, eeg_picks, :],
-                Fs=sfreq,
-                freqs=[notch_freq_hz],
-                method=ODDBALL_FILTER_CONFIG["filter_method"],
-                verbose=False,
-            )
 
         lowpass_freq_hz = ODDBALL_FILTER_CONFIG["lowpass_freq_hz"]
         if lowpass_freq_hz is not None and len(eeg_picks) > 0 and lowpass_freq_hz < (sfreq / 2.0):
