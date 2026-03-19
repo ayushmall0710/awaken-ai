@@ -5,10 +5,12 @@ from unittest.mock import MagicMock
 import matplotlib
 
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
 import pytest
+from PIL import Image
 
 from src.data_loading import config
 from src.pipelines.p300_oddball import (
@@ -130,6 +132,60 @@ def pipeline(mock_loader, temp_output_dir):
         output_dir=temp_output_dir,
         verbose=False,
     )
+
+
+def _make_small_epochs(n_epochs: int = 2, rare_scale: float = 1.0) -> mne.Epochs:
+    """Create a small oddball-like epochs object for analyze-path tests."""
+    info = mne.create_info(["Fz", "Cz", "Pz"], 512.0, "eeg")
+    data = np.zeros((n_epochs, 3, 461))
+    p300_idx = 320
+    mmn_idx = 180
+    data[:, 0, mmn_idx] = -1.5e-6 * rare_scale
+    data[:, 1, p300_idx] = 2.0e-6 * rare_scale
+    data[:, 2, p300_idx] = 3.0e-6 * rare_scale
+    return mne.EpochsArray(data, info=info, tmin=-0.2, verbose=False)
+
+
+def _make_success_session(session_id: str = "s1") -> SessionData:
+    """Create a fully populated success session for analyze-path tests."""
+    rare_epochs = _make_small_epochs(n_epochs=2, rare_scale=1.0)
+    standard_epochs = _make_small_epochs(n_epochs=2, rare_scale=0.5)
+    rare_erp = rare_epochs.average()
+    rare_sem = rare_epochs.standard_error()
+    standard_erp = standard_epochs.average()
+    standard_sem = standard_epochs.standard_error()
+    diff_erp = mne.EvokedArray(
+        rare_erp.data - standard_erp.data,
+        info=rare_erp.info.copy(),
+        tmin=rare_erp.tmin,
+        verbose=False,
+    )
+    return SessionData(
+        session_id=session_id,
+        date="2024-01-01",
+        epochs35=MagicMock(),
+        status="success",
+        epochs=rare_epochs,
+        standard_epochs=standard_epochs,
+        rare_erp=rare_erp,
+        rare_sem=rare_sem,
+        standard_erp=standard_erp,
+        standard_sem=standard_sem,
+        diff_erp=diff_erp,
+        n_standard_epochs=len(standard_epochs),
+        n_standard_events_candidate=len(standard_epochs),
+        mapping_diag={"n_mapped": 2},
+    )
+
+
+def _patch_required_plotters(monkeypatch, pipeline):
+    """Replace expensive plot generation with lightweight figures and a tiny GIF frame."""
+    monkeypatch.setattr(pipeline.viz, "plot_p300_focus", lambda *args, **kwargs: plt.figure())
+    monkeypatch.setattr(pipeline.viz, "plot_mmn_focus", lambda *args, **kwargs: plt.figure())
+    monkeypatch.setattr(pipeline.viz, "plot_erp_figure", lambda *args, **kwargs: plt.figure())
+    monkeypatch.setattr(pipeline.viz, "plot_erp_image", lambda *args, **kwargs: plt.figure())
+    monkeypatch.setattr(pipeline.viz, "plot_topomap", lambda *args, **kwargs: plt.figure())
+    monkeypatch.setattr(pipeline.viz, "animate_topomap", lambda *args, **kwargs: [Image.new("RGB", (8, 8), "white")])
 
 
 # ── Load ─────────────────────────────────────────────────────────────────────
@@ -271,6 +327,43 @@ class TestPreprocess:
         assert sess.rare_erp is not None
         assert sess.epochs is not None
         assert len(sess.epochs) >= ERP_CONFIG["min_epochs"]
+
+    def test_apply_official_filters_uses_notch_and_baseline_when_lowpass_disabled(
+        self, pipeline, mock_eng03_epochs, monkeypatch
+    ):
+        tw = pipeline._build_trial_windows(mock_eng03_epochs)
+        trial_start = tw["start_time_unix"].iloc[0]
+        events = [{"timestamp_unix": trial_start + 10.0, "date": "2024-01-01", "trial_idx": 0}]
+        mapped_df, _ = pipeline._map_events_to_trials(events, tw, sfreq=float(mock_eng03_epochs.info["sfreq"]))
+        sub = pipeline._extract_subepochs(mock_eng03_epochs, mapped_df)
+
+        calls = {}
+
+        def fake_notch(data, Fs, freqs, method, verbose):
+            calls["notch"] = {"Fs": Fs, "freqs": tuple(freqs), "method": method, "shape": data.shape}
+            return data + 1.0
+
+        def fake_lowpass(data, sfreq, l_freq, h_freq, method, verbose):
+            calls["lowpass"] = {
+                "sfreq": sfreq,
+                "l_freq": l_freq,
+                "h_freq": h_freq,
+                "method": method,
+                "shape": data.shape,
+            }
+            return data * 2.0
+
+        monkeypatch.setattr(mne.filter, "notch_filter", fake_notch)
+        monkeypatch.setattr(mne.filter, "filter_data", fake_lowpass)
+
+        filtered = pipeline._apply_official_filters(sub)
+
+        assert calls["notch"]["freqs"] == (60.0,)
+        assert calls["notch"]["method"] == "iir"
+        assert "lowpass" not in calls
+        baseline_mask = (filtered.times >= ERP_CONFIG["tmin"]) & (filtered.times <= 0.0)
+        baseline_means = filtered.get_data()[:, :, baseline_mask].mean(axis=-1)
+        assert np.allclose(baseline_means, 0.0, atol=1e-12)
 
 
 # ── Event extraction and mapping ─────────────────────────────────────────────
@@ -447,23 +540,10 @@ class TestP300QuantificationAndValidation:
 
 
 class TestAnalyzeAndRun:
-    def test_analyze_skips_non_success_sessions(self, pipeline, mock_loader, temp_output_dir, mock_evoked):
+    def test_analyze_skips_non_success_sessions(self, pipeline, monkeypatch):
         pipeline.patient_id = "P01"
         pipeline._oddball_trials = pd.DataFrame([{"session_id": "s1", "date": "2024-01-01"}])
-        sess_success = SessionData(
-            session_id="s1",
-            date="2024-01-01",
-            epochs35=MagicMock(),
-            status="success",
-            rare_erp=mock_evoked,
-            epochs=mne.EpochsArray(
-                np.zeros((2, 3, 461)),
-                mne.create_info(["Fz", "Cz", "Pz"], 512, "eeg"),
-                tmin=-0.2,
-                verbose=False,
-            ),
-            mapping_diag={"n_mapped": 2},
-        )
+        sess_success = _make_success_session("s1")
         sess_fail = SessionData(
             session_id="s2",
             date="2024-01-02",
@@ -471,15 +551,196 @@ class TestAnalyzeAndRun:
             status="insufficient_epochs",
         )
         pipeline._session_data = {"s1": sess_success, "s2": sess_fail}
+        _patch_required_plotters(monkeypatch, pipeline)
+        monkeypatch.setattr(pipeline, "_save_outputs", lambda **kwargs: None)
 
         df = pipeline.analyze()
 
         assert len(df) == 1
         assert df.iloc[0]["session_id"] == "s1"
 
-    def test_run_returns_dataframe(self, pipeline, mock_loader, aligned_oddball_df, mock_eng03_epochs):
+    def test_analyze_uses_session_objects_for_stats_features_and_saved_outputs(self, pipeline, monkeypatch):
+        pipeline.patient_id = "P01"
+        session = _make_success_session("s1")
+        pipeline._session_data = {"s1": session}
+
+        expected_features = {
+            "patient_id": "P01",
+            "session_id": "s1",
+            "date": "2024-01-01",
+            "n_epochs": len(session.epochs),
+            "p300_amplitude_uV": 3.0,
+            "p300_latency_ms": 400.0,
+            "p300_amplitude_Pz_uV": 3.0,
+            "p300_latency_Pz_ms": 400.0,
+            "diff_amplitude_Pz_uV": 2.5,
+            "diff_latency_Pz_ms": 450.0,
+            "diff_mmn_amplitude_Fz_uV": -1.0,
+            "diff_mmn_latency_Fz_ms": 150.0,
+            "p300_n_valid_electrodes": 3,
+            "p300_subtype": "P3b",
+            "qc_notes": "ok",
+        }
+
+        def fake_sig(rare_epochs, standard_epochs):
+            assert rare_epochs is session.epochs
+            assert standard_epochs is session.standard_epochs
+            return {
+                "p300_p_value": 0.04,
+                "p300_t_stat": 2.1,
+                "p300_n_rare": len(rare_epochs),
+                "p300_n_standard": len(standard_epochs),
+            }
+
+        def fake_quantify(
+            erp,
+            patient_id,
+            session_id,
+            date,
+            n_epochs,
+            custom_electrodes=None,
+            diff_erp=None,
+            n_standard_epochs=None,
+            n_standard_events_candidate=None,
+        ):
+            assert erp is session.rare_erp
+            assert diff_erp is session.diff_erp
+            assert patient_id == "P01"
+            assert session_id == "s1"
+            assert date == "2024-01-01"
+            assert n_epochs == len(session.epochs)
+            assert n_standard_epochs == len(session.standard_epochs)
+            assert n_standard_events_candidate == len(session.standard_epochs)
+            return expected_features.copy()
+
+        def fake_save_outputs(patient_id, session_id, epochs, erp, features, standard_erp=None, diff_erp=None):
+            assert patient_id == "P01"
+            assert session_id == "s1"
+            assert epochs is session.epochs
+            assert erp is session.rare_erp
+            assert standard_erp is session.standard_erp
+            assert diff_erp is session.diff_erp
+            assert features["p300_p_value"] == 0.04
+
+        monkeypatch.setattr(pipeline, "_compute_p300_significance", fake_sig)
+        monkeypatch.setattr(pipeline, "_quantify_p300", fake_quantify)
+        monkeypatch.setattr(pipeline, "_save_outputs", fake_save_outputs)
+        _patch_required_plotters(monkeypatch, pipeline)
+
+        df = pipeline.analyze()
+
+        assert len(df) == 1
+        assert df.iloc[0]["session_id"] == "s1"
+        assert df.iloc[0]["p300_p_value"] == 0.04
+
+    def test_analyze_writes_required_plots_including_erp_image(self, pipeline, monkeypatch):
+        pipeline.patient_id = "P01"
+        session = _make_success_session("s1")
+        pipeline._session_data = {"s1": session}
+
+        stale_paths = pipeline._session_plot_paths("P01", "s1")
+        for path in stale_paths.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"stale")
+
+        monkeypatch.setattr(
+            pipeline,
+            "_compute_p300_significance",
+            lambda rare_epochs, standard_epochs: {
+                "p300_p_value": 0.04,
+                "p300_t_stat": 2.0,
+                "p300_n_rare": len(rare_epochs),
+                "p300_n_standard": len(standard_epochs),
+            },
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_quantify_p300",
+            lambda *args, **kwargs: {
+                "patient_id": "P01",
+                "session_id": "s1",
+                "date": "2024-01-01",
+                "n_epochs": len(session.epochs),
+                "p300_amplitude_uV": 3.0,
+                "p300_latency_ms": 400.0,
+                "p300_amplitude_Pz_uV": 3.0,
+                "p300_latency_Pz_ms": 400.0,
+                "diff_amplitude_Pz_uV": 2.5,
+                "diff_latency_Pz_ms": 450.0,
+                "diff_mmn_amplitude_Fz_uV": -1.0,
+                "diff_mmn_latency_Fz_ms": 150.0,
+                "p300_n_valid_electrodes": 3,
+                "p300_subtype": "P3b",
+                "qc_notes": "ok",
+                "n_standard_epochs": len(session.standard_epochs),
+            },
+        )
+        monkeypatch.setattr(pipeline, "_save_outputs", lambda **kwargs: None)
+        _patch_required_plotters(monkeypatch, pipeline)
+
+        pipeline.analyze()
+
+        assert stale_paths["p300"].exists()
+        assert stale_paths["mmn"].exists()
+        assert stale_paths["erp"].exists()
+        assert stale_paths["erp_image"].exists()
+        assert stale_paths["topomap"].exists()
+        assert stale_paths["topomap_gif"].exists()
+
+    def test_analyze_deletes_stale_plots_and_fails_hard_on_plot_error(self, pipeline, monkeypatch):
+        pipeline.patient_id = "P01"
+        session = _make_success_session("s1")
+        pipeline._session_data = {"s1": session}
+
+        stale_paths = pipeline._session_plot_paths("P01", "s1")
+        for path in stale_paths.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"stale")
+
+        monkeypatch.setattr(
+            pipeline,
+            "_compute_p300_significance",
+            lambda rare_epochs, standard_epochs: {
+                "p300_p_value": 0.04,
+                "p300_t_stat": 2.0,
+                "p300_n_rare": len(rare_epochs),
+                "p300_n_standard": len(standard_epochs),
+            },
+        )
+        monkeypatch.setattr(
+            pipeline,
+            "_quantify_p300",
+            lambda *args, **kwargs: {
+                "patient_id": "P01",
+                "session_id": "s1",
+                "date": "2024-01-01",
+                "n_epochs": len(session.epochs),
+                "p300_amplitude_uV": 3.0,
+                "p300_latency_ms": 400.0,
+                "p300_amplitude_Pz_uV": 3.0,
+                "p300_latency_Pz_ms": 400.0,
+                "diff_amplitude_Pz_uV": 2.5,
+                "diff_latency_Pz_ms": 450.0,
+                "diff_mmn_amplitude_Fz_uV": -1.0,
+                "diff_mmn_latency_Fz_ms": 150.0,
+                "p300_n_valid_electrodes": 3,
+                "p300_subtype": "P3b",
+                "qc_notes": "ok",
+            },
+        )
+        monkeypatch.setattr(pipeline, "_save_outputs", lambda **kwargs: None)
+        monkeypatch.setattr(pipeline.viz, "plot_p300_focus", lambda *args, **kwargs: plt.figure())
+        monkeypatch.setattr(pipeline.viz, "plot_mmn_focus", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("plot failed")))
+
+        with pytest.raises(RuntimeError, match="plot failed"):
+            pipeline.analyze()
+
+        assert all(not path.exists() for path in stale_paths.values())
+
+    def test_run_returns_dataframe(self, pipeline, mock_loader, aligned_oddball_df, mock_eng03_epochs, monkeypatch):
         mock_loader.load_aligned_events.return_value = aligned_oddball_df
         mock_loader.load_clean_epochs.return_value = mock_eng03_epochs
+        _patch_required_plotters(monkeypatch, pipeline)
 
         result = pipeline.run("P01")
 
@@ -488,9 +749,10 @@ class TestAnalyzeAndRun:
         assert "session_id" in result.columns
         assert "p300_amplitude_uV" in result.columns or "p300_amplitude_Pz_uV" in result.columns
 
-    def test_run_custom_electrodes(self, pipeline, mock_loader, aligned_oddball_df, mock_eng03_epochs):
+    def test_run_custom_electrodes(self, pipeline, mock_loader, aligned_oddball_df, mock_eng03_epochs, monkeypatch):
         mock_loader.load_aligned_events.return_value = aligned_oddball_df
         mock_loader.load_clean_epochs.return_value = mock_eng03_epochs
+        _patch_required_plotters(monkeypatch, pipeline)
 
         result = pipeline.run("P01", custom_electrodes=["Pz", "Cz"])
 
@@ -762,6 +1024,51 @@ class TestPlotting:
         pipeline._save_fig(fig, plot_path)
         assert plot_path.exists()
         assert plot_path.stat().st_size > 0
+
+    def test_plot_p300_focus(self, pipeline, mock_evoked):
+        features = {
+            "p300_amplitude_Pz_uV": 2.49,
+            "p300_latency_Pz_ms": 471.0,
+        }
+        label = "P01 | s1 (2024-01-01)"
+        fig = pipeline.viz.plot_p300_focus(
+            rare_erp=mock_evoked,
+            standard_erp=mock_evoked,
+            diff_erp=mock_evoked,
+            features=features,
+            label=label,
+        )
+        axis_texts = [text.get_text() for text in fig.axes[0].texts]
+        plot_text = " ".join(axis_texts)
+        annotation = next(text for text in fig.axes[0].texts if "P300 Candidate" in text.get_text())
+        plot_path = pipeline._output_paths.plots_erp / "P01_s1_oddball_p300.png"
+        pipeline._save_fig(fig, plot_path)
+        assert plot_path.exists()
+        assert plot_path.stat().st_size > 0
+        assert "P300 Candidate" in plot_text
+        assert "2.49uV" in plot_text
+        assert "300-600 ms" in plot_text
+        assert annotation.get_ha() == "right"
+
+    def test_plot_mmn_focus(self, pipeline, mock_evoked):
+        features = {
+            "diff_mmn_amplitude_Fz_uV": -2.5,
+            "diff_mmn_latency_Fz_ms": 150.0,
+        }
+        label = "P01 | s1 (2024-01-01)"
+        fig = pipeline.viz.plot_mmn_focus(
+            rare_erp=mock_evoked,
+            standard_erp=mock_evoked,
+            diff_erp=mock_evoked,
+            features=features,
+            label=label,
+        )
+        plot_text = " ".join(text.get_text() for text in fig.axes[0].texts)
+        plot_path = pipeline._output_paths.plots_erp / "P01_s1_oddball_mmn.png"
+        pipeline._save_fig(fig, plot_path)
+        assert plot_path.exists()
+        assert plot_path.stat().st_size > 0
+        assert "100-250 ms" in plot_text
 
     def test_plot_erp_image(self, pipeline, temp_output_dir, mock_evoked):
         # Need >= 3 epochs or plot_erp_image returns None

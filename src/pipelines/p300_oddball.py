@@ -45,6 +45,13 @@ ERP_CONFIG = {
     "mmn_expected_electrodes": ["Fz", "Cz"],
 }
 
+ODDBALL_FILTER_CONFIG = {
+    # Temporarily using 60 Hz notch only so we can judge its isolated effect on oddball outputs.
+    "notch_freq_hz": 60.0,
+    "lowpass_freq_hz": None,
+    "filter_method": "iir",
+}
+
 # Event labels used for standard (frequent) stimuli in the oddball paradigm.
 STANDARD_EVENT_LABELS = {"standard", "frequent"}
 
@@ -243,7 +250,7 @@ class P300OddballPipeline(BasePipeline):
                 )
                 self._last_epoch_diagnostics = mapping_diag
 
-                epochs = self._extract_subepochs(epochs35, rare_mapped_df)
+                epochs = self._apply_official_filters(self._extract_subepochs(epochs35, rare_mapped_df))
 
                 if len(epochs) < ERP_CONFIG["min_epochs"]:
                     logger.warning(
@@ -257,6 +264,7 @@ class P300OddballPipeline(BasePipeline):
                 standard_erp = None
                 standard_sem = None
                 diff_erp = None
+                standard_epochs = None
                 n_standard_epochs = 0
                 n_standard_events_candidate = len(standard_events)
 
@@ -266,7 +274,7 @@ class P300OddballPipeline(BasePipeline):
                         trial_windows,
                         sfreq=float(epochs35.info["sfreq"]),
                     )
-                    standard_epochs = self._extract_subepochs(epochs35, std_mapped_df)
+                    standard_epochs = self._apply_official_filters(self._extract_subepochs(epochs35, std_mapped_df))
                     n_standard_epochs = len(standard_epochs)
 
                     if n_standard_epochs >= ERP_CONFIG["min_epochs"]:
@@ -331,9 +339,13 @@ class P300OddballPipeline(BasePipeline):
                 # Merge significance statistics into feature dict
                 features.update(p300_sig)
 
-                rows.append(features)
+                self._generate_session_plots(
+                    patient_id=self.patient_id or "",
+                    session_id=session_id,
+                    session=sess,
+                    features=features,
+                )
 
-                # Persist ERPs and features
                 self._save_outputs(
                     patient_id=self.patient_id or "",
                     session_id=session_id,
@@ -344,49 +356,10 @@ class P300OddballPipeline(BasePipeline):
                     diff_erp=sess.diff_erp,
                 )
 
-                # Generate and save plots via OddballVisualizer
-                sid = self._sanitize_session_id(session_id)
-                label = f"{self.patient_id or ''} | {session_id}" + (f" ({sess.date})" if sess.date else "")
-
-                fig_erp = self.viz.plot_erp_figure(
-                    sess.rare_erp,
-                    sess.rare_sem,
-                    sess.standard_erp,
-                    sess.standard_sem,
-                    sess.diff_erp,
-                    features,
-                    label,
-                )
-                self._save_fig(fig_erp, self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_erp.png")
-
-                fig_img = self.viz.plot_erp_image(sess.epochs, label)
-                if fig_img is not None:
-                    self._save_fig(
-                        fig_img,
-                        self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_erp_image.png",
-                    )
-
-                if sess.diff_erp is not None:
-                    fig_topo = self.viz.plot_topomap(sess.diff_erp, label)
-                    self._save_fig(
-                        fig_topo,
-                        self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.png",
-                    )
-
-                    anim_topo = self.viz.animate_topomap(sess.diff_erp, label)
-                    if anim_topo:
-                        gif_path = self._output_paths.plots_erp / f"{self.patient_id}_{sid}_oddball_topomap.gif"
-                        # anim_topo is a list of PIL frames
-                        anim_topo[0].save(
-                            gif_path,
-                            save_all=True,
-                            append_images=anim_topo[1:],
-                            duration=500,
-                            loop=0,
-                        )
+                rows.append(features)
             except Exception as e:  # pragma: no cover - defensive
                 logger.error(f"Analysis failed for {self.patient_id} - {session_id}: {e}", exc_info=True)
-                continue
+                raise
 
         df = pd.DataFrame(rows) if rows else pd.DataFrame()
         self.results = df
@@ -607,7 +580,7 @@ class P300OddballPipeline(BasePipeline):
                 data_1,
                 info=epochs35.info.copy(),
                 tmin=tmin,
-                baseline=ERP_CONFIG["baseline"],
+                baseline=None,
                 verbose=False,
             )
             placeholder.drop([0], reason="PLACEHOLDER")
@@ -618,11 +591,53 @@ class P300OddballPipeline(BasePipeline):
             data,
             info=epochs35.info.copy(),
             tmin=tmin,
-            baseline=ERP_CONFIG["baseline"],
+            baseline=None,
             verbose=False,
         )
         logger.info(f"Extracted {len(sub_epochs)} sub-epochs from ENG-03 35s trials")
         return sub_epochs
+
+    def _apply_official_filters(self, epochs: mne.Epochs) -> mne.Epochs:
+        """Apply the oddball-official filter stack and then baseline-correct."""
+        if len(epochs) == 0:
+            return epochs.copy()
+
+        sfreq = float(epochs.info["sfreq"])
+        eeg_picks = mne.pick_types(epochs.info, eeg=True, meg=False, exclude=[])
+        filtered_data = np.array(epochs.get_data(), copy=True)
+
+        notch_freq_hz = ODDBALL_FILTER_CONFIG["notch_freq_hz"]
+        if notch_freq_hz is not None and len(eeg_picks) > 0 and notch_freq_hz < (sfreq / 2.0):
+            filtered_data[:, eeg_picks, :] = mne.filter.notch_filter(
+                filtered_data[:, eeg_picks, :],
+                Fs=sfreq,
+                freqs=[notch_freq_hz],
+                method=ODDBALL_FILTER_CONFIG["filter_method"],
+                verbose=False,
+            )
+
+        lowpass_freq_hz = ODDBALL_FILTER_CONFIG["lowpass_freq_hz"]
+        if lowpass_freq_hz is not None and len(eeg_picks) > 0 and lowpass_freq_hz < (sfreq / 2.0):
+            filtered_data[:, eeg_picks, :] = mne.filter.filter_data(
+                filtered_data[:, eeg_picks, :],
+                sfreq=sfreq,
+                l_freq=None,
+                h_freq=lowpass_freq_hz,
+                method=ODDBALL_FILTER_CONFIG["filter_method"],
+                verbose=False,
+            )
+
+        filtered_epochs = mne.EpochsArray(
+            filtered_data,
+            info=epochs.info.copy(),
+            tmin=epochs.tmin,
+            baseline=None,
+            verbose=False,
+        )
+        if epochs.metadata is not None:
+            filtered_epochs.metadata = epochs.metadata.copy()
+        filtered_epochs.apply_baseline(ERP_CONFIG["baseline"])
+        return filtered_epochs
 
     # ------------------------------------------------------------------
     # ERP computation and P300 quantification
@@ -1099,6 +1114,102 @@ class P300OddballPipeline(BasePipeline):
         qc_df = self._build_mapping_qc_table(patient_id, session_id, features)
 
         self._update_master_feature_tables(clinical_df, detail_df, qc_df)
+
+    def _session_plot_paths(self, patient_id: str, session_id: str) -> Dict[str, Path]:
+        """Return the oddball plot artifact paths for one session."""
+        sid = self._sanitize_session_id(session_id)
+        base = f"{patient_id}_{sid}_oddball"
+        return {
+            "p300": self._output_paths.plots_erp / f"{base}_p300.png",
+            "mmn": self._output_paths.plots_erp / f"{base}_mmn.png",
+            "erp": self._output_paths.plots_erp / f"{base}_erp.png",
+            "erp_image": self._output_paths.plots_erp / f"{base}_erp_image.png",
+            "topomap": self._output_paths.plots_erp / f"{base}_topomap.png",
+            "topomap_gif": self._output_paths.plots_erp / f"{base}_topomap.gif",
+        }
+
+    @staticmethod
+    def _delete_plot_artifacts(paths: Dict[str, Path]) -> None:
+        """Delete any existing plot artifacts for a session."""
+        for path in paths.values():
+            if path.exists():
+                path.unlink()
+
+    def _generate_session_plots(
+        self,
+        patient_id: str,
+        session_id: str,
+        session: SessionData,
+        features: Dict[str, Any],
+    ) -> None:
+        """Generate the oddball plot set, failing the run if required artifacts cannot be written."""
+        if (
+            session.epochs is None
+            or session.rare_erp is None
+            or session.rare_sem is None
+            or session.standard_erp is None
+            or session.standard_sem is None
+            or session.diff_erp is None
+        ):
+            raise RuntimeError(
+                f"Missing ERP inputs required for oddball plot export: {patient_id} {session_id}",
+            )
+
+        plot_paths = self._session_plot_paths(patient_id, session_id)
+        self._delete_plot_artifacts(plot_paths)
+
+        label = f"{patient_id} | {session_id}" + (f" ({session.date})" if session.date else "")
+
+        try:
+            fig_p300 = self.viz.plot_p300_focus(
+                rare_erp=session.rare_erp,
+                standard_erp=session.standard_erp,
+                diff_erp=session.diff_erp,
+                features=features,
+                label=label,
+            )
+            self._save_fig(fig_p300, plot_paths["p300"])
+
+            fig_mmn = self.viz.plot_mmn_focus(
+                rare_erp=session.rare_erp,
+                standard_erp=session.standard_erp,
+                diff_erp=session.diff_erp,
+                features=features,
+                label=label,
+            )
+            self._save_fig(fig_mmn, plot_paths["mmn"])
+
+            fig_erp = self.viz.plot_erp_figure(
+                session.rare_erp,
+                session.rare_sem,
+                session.standard_erp,
+                session.standard_sem,
+                session.diff_erp,
+                features,
+                label,
+            )
+            self._save_fig(fig_erp, plot_paths["erp"])
+
+            fig_img = self.viz.plot_erp_image(session.epochs, label)
+            if fig_img is not None:
+                self._save_fig(fig_img, plot_paths["erp_image"])
+
+            fig_topo = self.viz.plot_topomap(session.diff_erp, label)
+            self._save_fig(fig_topo, plot_paths["topomap"])
+
+            anim_topo = self.viz.animate_topomap(session.diff_erp, label)
+            if not anim_topo:
+                raise RuntimeError(f"Topomap animation produced no frames for {patient_id} {session_id}")
+            anim_topo[0].save(
+                plot_paths["topomap_gif"],
+                save_all=True,
+                append_images=anim_topo[1:],
+                duration=500,
+                loop=0,
+            )
+        except Exception:
+            self._delete_plot_artifacts(plot_paths)
+            raise
 
     @staticmethod
     def _save_fig(fig: plt.Figure, path: Path) -> Path:

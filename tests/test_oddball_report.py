@@ -1,9 +1,11 @@
 """Tests for OddballQCReport (parquet-based oddball QC HTML)."""
 
+from datetime import datetime as real_datetime
 import math
 
 import pandas as pd
 
+from src.data_loading import config
 from src.reports.oddball_report import OddballQCReport
 
 
@@ -235,7 +237,7 @@ def test_generate_writes_html_file(tmp_path):
     out = report.generate()
 
     assert out.exists()
-    assert out == tmp_path / f"{session_id}_oddball_qc.html"
+    assert out == tmp_path / "oddball_qc.html"
     content = out.read_text(encoding="utf-8")
     assert "P300 Oddball Summary Report" in content
     assert "P300 Candidate at Pz" in content
@@ -245,6 +247,41 @@ def test_generate_writes_html_file(tmp_path):
     assert patient_id in content
     assert session_id in content
     assert "</html>" in content
+
+
+def test_build_plots_section_renders_focus_topomap_and_single_trial_plots(tmp_path, monkeypatch):
+    report = _make_report()
+    monkeypatch.setattr(config, "ERP_PLOTS_DIR", tmp_path)
+
+    base = f"{report.patient_id}_{report.session_id}_oddball"
+    (tmp_path / f"{base}_p300.png").write_bytes(b"p300")
+    (tmp_path / f"{base}_mmn.png").write_bytes(b"mmn")
+    (tmp_path / f"{base}_erp.png").write_bytes(b"erp")
+    (tmp_path / f"{base}_topomap.gif").write_bytes(b"GIF89a")
+    (tmp_path / f"{base}_erp_image.png").write_bytes(b"erp-image")
+
+    html = report._build_plots_section()
+
+    assert "P300 Focus (Pz)" in html
+    assert "MMN Focus (Fz)" in html
+    assert "ERP Waveforms" not in html
+    assert "Scalp Topography (Difference Wave)" in html
+    assert "Single-Trial ERP Image (Pz)" in html
+
+
+def test_default_output_dir_uses_timestamped_session_folder(tmp_path, monkeypatch):
+    class FixedDateTime:
+        @staticmethod
+        def now():
+            return real_datetime(2026, 3, 13, 18, 3, 0)
+
+    monkeypatch.setattr(config, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr("src.reports.oddball_report.datetime", FixedDateTime)
+
+    report = _make_report()
+
+    assert report.output_dir == tmp_path / "CON008" / "s_CON008_202508140000" / "oddball" / "20260313_180300"
+    assert report.report_file == report.output_dir / "oddball_qc.html"
 
 
 def test_format_cell_is_valid_icons():

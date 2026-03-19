@@ -241,6 +241,160 @@ class OddballVisualizer:
         fig.tight_layout(pad=1.5, h_pad=2.0)
         return fig
 
+    @staticmethod
+    def _get_channel_trace(evoked: mne.Evoked, electrode: str) -> tuple[np.ndarray, np.ndarray]:
+        """Return time (ms) and amplitude (uV) for one electrode."""
+        electrode_upper = electrode.upper()
+        ch_names_upper = [ch.upper() for ch in evoked.ch_names]
+        if electrode_upper not in ch_names_upper:
+            raise ValueError(f"Electrode {electrode} not found in evoked channels")
+        ch_idx = ch_names_upper.index(electrode_upper)
+        return evoked.times * 1000.0, evoked.data[ch_idx, :] * 1e6
+
+    def _plot_focus_figure(
+        self,
+        rare_erp: mne.Evoked,
+        standard_erp: mne.Evoked,
+        diff_erp: mne.Evoked,
+        label: str,
+        *,
+        electrode: str,
+        title: str,
+        window_ms: tuple[float, float],
+        window_label: str,
+        annotation_latency_ms: Optional[float],
+        annotation_amplitude_uv: Optional[float],
+        annotation_color: str,
+        annotation_prefix: str,
+    ) -> plt.Figure:
+        """Render a single-electrode focus plot for the official oddball outputs."""
+        times_ms, rare_trace = self._get_channel_trace(rare_erp, electrode)
+        _, standard_trace = self._get_channel_trace(standard_erp, electrode)
+        _, diff_trace = self._get_channel_trace(diff_erp, electrode)
+
+        fig, ax = plt.subplots(figsize=(12, 5))
+        ax.plot(times_ms, rare_trace, color="blue", linewidth=2.0, label="Rare")
+        ax.plot(times_ms, standard_trace, color="gray", linewidth=1.8, linestyle="--", label="Standard")
+        ax.plot(times_ms, diff_trace, color="green", linewidth=2.2, label="Difference (Rare - Std)")
+
+        ax.axvline(x=0.0, color="black", linestyle="--", linewidth=1.2)
+        ax.axhline(y=0.0, color="gray", linestyle=":", linewidth=1.0)
+        ax.axvspan(window_ms[0], window_ms[1], alpha=0.18, color="green", label=title.split()[0] + " Window")
+        ax.set_xlabel("Time (ms)")
+        ax.set_ylabel("Amplitude (uV)")
+        ax.set_title(title)
+        ax.grid(True, alpha=0.25)
+
+        y_min, y_max = ax.get_ylim()
+        window_center_ms = 0.5 * (window_ms[0] + window_ms[1])
+        ax.text(
+            window_center_ms,
+            y_max - 0.06 * (y_max - y_min),
+            window_label,
+            ha="center",
+            va="top",
+            fontsize=9,
+            color="darkgreen",
+            fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="white", alpha=0.85, edgecolor="green"),
+        )
+
+        annotation_kwargs = {
+            "xytext": (12, 14),
+            "ha": "left",
+            "va": "bottom",
+        }
+        if annotation_latency_ms is not None:
+            time_midpoint_ms = 0.5 * (times_ms[0] + times_ms[-1])
+            if annotation_latency_ms >= time_midpoint_ms:
+                annotation_kwargs.update({
+                    "xytext": (-12, 14),
+                    "ha": "right",
+                })
+
+        if annotation_latency_ms is not None and annotation_amplitude_uv is not None:
+            ax.axvline(
+                x=annotation_latency_ms,
+                color=annotation_color,
+                linestyle="--",
+                linewidth=1.6,
+                alpha=0.75,
+            )
+            ax.scatter(
+                [annotation_latency_ms],
+                [annotation_amplitude_uv],
+                color=annotation_color,
+                s=120,
+                zorder=5,
+                marker="^" if annotation_amplitude_uv >= 0 else "v",
+            )
+            ax.annotate(
+                f"{annotation_prefix}: {annotation_amplitude_uv:.2f}uV\n@ {annotation_latency_ms:.0f}ms",
+                xy=(annotation_latency_ms, annotation_amplitude_uv),
+                xytext=annotation_kwargs["xytext"],
+                textcoords="offset points",
+                fontsize=10,
+                fontweight="bold",
+                ha=annotation_kwargs["ha"],
+                va=annotation_kwargs["va"],
+                color=annotation_color,
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.9, edgecolor=annotation_color),
+                arrowprops=dict(arrowstyle="->", color=annotation_color),
+            )
+
+        ax.legend(loc="upper right")
+        fig.suptitle(label, fontsize=10, y=0.98)
+        fig.tight_layout()
+        return fig
+
+    def plot_p300_focus(
+        self,
+        rare_erp: mne.Evoked,
+        standard_erp: mne.Evoked,
+        diff_erp: mne.Evoked,
+        features: Dict[str, Any],
+        label: str,
+    ) -> plt.Figure:
+        """Pz-focused P300 waveform view used by the main oddball report."""
+        return self._plot_focus_figure(
+            rare_erp=rare_erp,
+            standard_erp=standard_erp,
+            diff_erp=diff_erp,
+            label=label,
+            electrode="Pz",
+            title="P300 Focus (Pz)",
+            window_ms=(300.0, 600.0),
+            window_label="P300 Window\n300-600 ms",
+            annotation_latency_ms=features.get("p300_latency_Pz_ms"),
+            annotation_amplitude_uv=features.get("p300_amplitude_Pz_uV"),
+            annotation_color="blue",
+            annotation_prefix="P300 Candidate",
+        )
+
+    def plot_mmn_focus(
+        self,
+        rare_erp: mne.Evoked,
+        standard_erp: mne.Evoked,
+        diff_erp: mne.Evoked,
+        features: Dict[str, Any],
+        label: str,
+    ) -> plt.Figure:
+        """Fz-focused MMN waveform view used by the main oddball report."""
+        return self._plot_focus_figure(
+            rare_erp=rare_erp,
+            standard_erp=standard_erp,
+            diff_erp=diff_erp,
+            label=label,
+            electrode="Fz",
+            title="MMN Focus (Fz)",
+            window_ms=(100.0, 250.0),
+            window_label="MMN Window\n100-250 ms",
+            annotation_latency_ms=features.get("diff_mmn_latency_Fz_ms"),
+            annotation_amplitude_uv=features.get("diff_mmn_amplitude_Fz_uV"),
+            annotation_color="purple",
+            annotation_prefix="MMN Diff",
+        )
+
     def plot_erp_image(self, epochs: mne.Epochs, label: str) -> Optional[plt.Figure]:
         """Single-trial ERP image at Pz.
 
