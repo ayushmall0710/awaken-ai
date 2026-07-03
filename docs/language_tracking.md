@@ -1,28 +1,29 @@
-# Language Tracking Optimization: Speech Comprehension Paradigm
+# Language Tracking Pipeline: Speech Comprehension Paradigm
 
-**Project:** EEG Prognostic Data Pipeline - AwakenAI Capstone  
-**Priority:** 2 (Building on Prior Work)  
-**Timeline:** Jan 25 - Mar 15, 2026  
-**Lead:** Member B (Data Engineer) + Member D (QC & Vis)
+**Project:** EEG Prognostic Data Pipeline — AwakenAI Capstone
+**Status:** Implemented — `src/pipelines/language_tracking.py` (`LanguageTrackingAnalysis`), wired into the CLI as `awakenai run --pipeline language`.
+**Code:** `src/pipelines/language_tracking.py`, `src/cli/runners/language.py`, `src/viz/language_plots.py`, `src/reports/language_tracking_report.py`
+
+> This document describes the *implemented* pipeline. For the original
+> design brief this was built from, see `tasks/ENG-05.md` and
+> `tasks/ENG-05-analysis.md`.
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 1. [Background & Clinical Context](#background--clinical-context)
 2. [The Language Tracking Paradigm](#the-language-tracking-paradigm)
 3. [Neural Entrainment & ITPC](#neural-entrainment--itpc)
-4. [Data Structures & Inputs](#data-structures--inputs)
-5. [Technical Implementation](#technical-implementation)
-6. [Optimization Strategies](#optimization-strategies)
-7. [Expected Outputs](#expected-outputs)
-8. [Quality Control & Validation](#quality-control--validation)
-9. [Building on Tricia's Work](#building-on-tricias-work)
-10. [Usage Examples](#usage-examples)
-11. [References](#references)
+4. [Pipeline Inputs](#pipeline-inputs)
+5. [Implementation](#implementation)
+6. [Outputs](#outputs)
+7. [Quality Control & Validation](#quality-control--validation)
+8. [Usage](#usage)
+9. [References](#references)
 
 ---
 
-## 🧠 Background & Clinical Context
+## Background & Clinical Context
 
 ### Covert Speech Comprehension
 
@@ -35,590 +36,182 @@ However, the brain may still be **processing language** at the cortical level, e
 
 ### Why Language Tracking Matters
 
-**Key Clinical Insight:**
-> Patients who show evidence of neural speech tracking have significantly better recovery outcomes than those who do not, even when behavioral exams are equivalent.
-
-**Sokoliuk et al. (2021)** demonstrated that EEG signatures of language processing in the acute phase predict recovery from disorders of consciousness.
+**Sokoliuk et al. (2021)** demonstrated that EEG signatures of language processing in the acute phase predict recovery from disorders of consciousness — patients who show evidence of neural speech tracking have significantly better recovery outcomes than those who do not, even when behavioral exams are equivalent.
 
 ### The Challenge: Limited Electrodes
 
-Traditional language tracking studies use **high-density EEG arrays** (128-256 electrodes) to capture fine-grained neural responses. However:
-- **Clinical Reality:** Most ICUs use only **16-20 electrodes** (standard 10-20 system).
-- **Our Goal:** Develop a robust language tracking pipeline that works with **sparse electrode setups**, making it clinically viable.
+Traditional language tracking studies use **high-density EEG arrays** (128–256 electrodes). Our clinical setup uses **16–20 electrodes** (standard 10-20 system), so the pipeline is built around sparse-array focus selection rather than assuming dense coverage.
 
 ---
 
-## 🎯 The Language Tracking Paradigm
+## The Language Tracking Paradigm
 
 ### Experimental Design
 
-**Stimulus Structure:**
 - **Monosyllabic Words:** Short, one-syllable words (e.g., "cat", "dog", "red", "ball").
-- **Sentences:** Words are organized into 12-word sentences with semantic structure.
+- **Sentences:** Words organized into 12-word sentences with semantic structure.
 - **Presentation Rate:** ~1.3 seconds per word (rapid serial presentation).
-- **Trial Duration:** 15-16 seconds (12 words/trial).
-
-**Audio Generation:**
-- Originally generated with **Apple Text-to-Speech** (or similar).
-- All audio files **normalized** to consistent duration and amplitude.
-- Stored as `lang0.wav` through `lang34.wav` (35 files total, `lang28.wav` missing).
+- **Trial Duration:** ~15–16 seconds (12 words/trial).
+- **Audio:** Stored as `lang0.wav` through `lang34.wav` under `data/Audio/sentences/` (35 files; `lang28.wav` is missing from the set).
 
 ### Hierarchical Structure
 
-**Key Concept:** The stimulus has **multiple temporal frequencies** following the methodology of Sokoliuk et al. (2021):
-1. **Sentence Rate:** 0.78 Hz (12 sentences presented over ~15.36 seconds; 1.28s per sentence).
-2. **Phrase Rate:** 1.56 Hz (One phrase every 0.64 seconds; 2 words per phrase).
-3. **Word Rate:** 3.125 Hz (One word every 0.32 seconds; 4 words per sentence).
+Following Sokoliuk et al. (2021), the stimulus has multiple temporal frequencies:
 
-**Hypothesis:** If the brain is **comprehending** the speech (not just hearing sounds), neural activity should **entrain** (synchronize) to the **sentence-level structure** (0.78 Hz) and **phrase-level structure** (1.56 Hz), in addition to the acoustic word rate.
+| Level    | Target frequency | Cycle length            |
+|----------|-------------------|--------------------------|
+| Sentence | 0.78 Hz           | 12 sentences / ~15.36s (1.28s/sentence) |
+| Phrase   | 1.56 Hz           | One phrase every 0.64s (2 words/phrase) |
+| Word     | 3.125 Hz          | One word every 0.32s |
 
----
-
-### Data from Our Dataset
-
-**CON008 Session (Aug 14, 2025):**
-- **72 language trials** recorded.
-- Each trial: 12 sentences presented over ~15.5 seconds.
-- Total language stimulation time: **~18.6 minutes**.
-
-**CON009 Session (Aug 26, 2025):**
-- **72 language trials** recorded.
-- Mixed with control and emotional voice trials (more varied protocol).
-
-**Example Trial Structure (CON008, Trial 1):**
-```python
-Sentence IDs: [10, 29, 19, 25, 15, 24, 12, 22, 16, 1, 8, 5]
-Start: 1755207296.46 (Unix timestamp)
-Duration: 15.62 seconds
-```
-
-**Randomization:** The order of sentences is pseudo-randomized across trials to prevent predictability.
+**Hypothesis:** If the brain is *comprehending* the speech (not just hearing sounds), neural activity should entrain to the sentence-level (0.78 Hz) and phrase-level (1.56 Hz) structure, in addition to the acoustic word rate.
 
 ---
 
-## 🧬 Neural Entrainment & ITPC
+## Neural Entrainment & ITPC
 
-### What is Neural Entrainment?
+**Neural entrainment** (phase locking) occurs when brain oscillations synchronize to the temporal structure of a stimulus. **Inter-Trial Phase Coherence (ITPC)** measures the consistency of phase across trials at a given frequency:
 
-**Neural entrainment** (or phase locking) occurs when brain oscillations **synchronize** to the temporal structure of an external stimulus. For speech:
-- The brain's neural activity "locks" to the rhythm of sentences.
-- This reflects **hierarchical processing** of linguistic information.
-
-### Inter-Trial Phase Coherence (ITPC)
-
-**ITPC** measures the **consistency of phase** across multiple trials at a specific frequency.
-
-**Mathematical Definition:**
 ```
 ITPC(f, t) = |1/N * Σ exp(i * φ_n(f, t))|
 ```
 
-Where:
-- `φ_n(f, t)` = phase of trial `n` at frequency `f` and time `t`.
-- `N` = total number of trials.
-- ITPC ranges from 0 (random phase) to 1 (perfect phase coherence).
+ITPC ranges from 0 (random phase) to 1 (perfect phase coherence). Unlike power spectral density, ITPC specifically captures **stimulus-locked** activity — the signature of active processing rather than spontaneous rhythms.
 
-**Interpretation:**
-- **High ITPC at Sentence Frequency (0.78 Hz):** The brain is consistently tracking sentence-level structure across trials.
-- **Low ITPC:** Neural responses are variable or absent.
-
-### Why ITPC (Not Just Power)?
-
-**Power Spectral Density (PSD)** measures the strength of oscillations, but **not** whether they are time-locked to the stimulus.
-
-**ITPC** specifically measures **stimulus-locked activity**, which is the signature of **active processing** rather than spontaneous brain rhythms.
+The pipeline computes ITPC two ways (see [Implementation](#implementation) below): a **DFT** method (matching Sokoliuk et al. 2021's approach) and a **Morlet wavelet** method, and reports both.
 
 ---
 
-## 📂 Data Structures & Inputs
+## Pipeline Inputs
 
-### Input 1: CSV Stimulus Log
+Unlike the earlier raw-CSV/EDF design, `LanguageTrackingAnalysis` does **not** read raw stimulus logs or EDFs directly. It consumes the outputs of the setup prerequisites (`awakenai setup <patient>`):
 
-**Location:** `EEG Project Data/EEG/*_stimulus_results.csv`
+1. **Aligned events** — `data/processed/aligned_events/{patient_id}_events.parquet`, produced by `TimestampAligner` (ENG-02). Used by `BasePipeline.run()` to resolve session IDs.
+2. **Clean language epochs** — `data/processed/epochs/{patient_id}/{session_id}/language-epo.fif`, produced by `ArtifactRejector` (ENG-03): ICA-cleaned, per-session, per-trial-type epochs.
 
-**Schema:**
-```csv
-patient_id,date,trial_type,sentences,start_time,end_time,duration
-CON008,2025-08-14,language,"[10, 29, 19, 25, 15, 24, 12, 22, 16, 1, 8, 5]",1755207296.46,1755207312.08,15.62
-```
-
-**Relevant Fields:**
-- `trial_type`: Must equal `"language"`.
-- `sentences`: Array of 12 integers (IDs mapping to `langX.wav` files).
-- `start_time` / `end_time`: Unix timestamps marking trial boundaries.
-
-### Input 2: EDF File (EEG Recording)
-
-**Location:** `EEG Project Data/EEG/edf/CON008_clipped.EDF`
-
-**Key Channels for Language:**
-- **Frontal:** `Fp1`, `Fp2`, `F3`, `F4`, `F7`, `F8` (early auditory processing).
-- **Temporal:** `T7`, `T8` (auditory cortex, language processing).
-- **Central:** `C3`, `C4` (motor/language interface).
-- **Parietal:** `P3`, `P4`, `Pz` (higher-order integration).
-
-**Left Hemisphere Focus:** For right-handed patients, language processing is typically **left-lateralized** (e.g., `T7`, `F7`, `P3` more relevant).
-
-### Input 3: Audio Stimulus Files
-
-**Location:** `EEG Project Data/Audio/sentences/`
-
-**Files:**
-- `lang0.wav`, `lang1.wav`, ..., `lang34.wav` (35 files total).
-- **Missing:** `lang28.wav` (gap in sequence).
-
-**Metadata Needed:**
-- Word-level transcripts (e.g., "The cat sat on the mat").
-- Audio duration per phrase file (~1.28s) containing 4 words.
-- Onset times of each word within the trial.
-
-**Action Item:** Create `stimulus_manifest.csv` mapping IDs to text content.
+If these don't exist for a patient/session, `awakenai run` reports the pipeline as blocked and tells you to run `awakenai setup` first.
 
 ---
 
-## 🔧 Technical Implementation
+## Implementation
 
-### Phase 1: Data Segmentation & Alignment
+### Configuration — `LanguageConfig`
 
-#### Step 1.1: Load and Filter Language Trials
+A dataclass (`src/pipelines/language_tracking.py`) holds all tunable constants:
 
-```python
-import pandas as pd
-import mne
+- **Filtering:** highpass 0.02 Hz, lowpass 25 Hz, resample to 256 Hz.
+- **Epoch cropping:** `2.28s`–`16.36s` (removes filter edge artifacts, per Sokoliuk et al. 2021).
+- **Target frequencies:** sentence 0.78 Hz, phrase 1.56 Hz, word 3.125 Hz, each with a ±10% bandwidth for the Morlet band-averaged metrics.
+- **DFT frequency resolution:** 0.01 Hz.
+- **Morlet frequency axis:** 60 log-spaced points from 0.5–5.0 Hz (used for the TFR/topomap visualization, not the target-frequency phase extraction).
 
-# Load CSV
-csv_path = 'EEG Project Data/EEG/CON008_2025-08-14_stimulus_results.csv'
-stim_df = pd.read_csv(csv_path)
+### Pipeline stages (`BasePipeline` template: `load → preprocess → analyze`)
 
-# Filter for language trials
-lang_trials = stim_df[stim_df['trial_type'] == 'language'].copy()
+1. **`load()`** — loads and concatenates clean language epochs across sessions (or a single session if `session_id` is given).
+2. **`preprocess()`** — applies the bandpass filter + resample + crop (`_preprocess_signal`) and sets a standard 10-20 montage for topomap plotting.
+3. **`analyze()`** — a two-phase computation:
+   - **Phase 1 (per-channel, computed once):**
+     - Pick the `CLINICAL_20` channel subset.
+     - **DFT ITPC** (`ITPCProcessor.compute_dft_itpc`): FFT the epoch data, take the phase, average unit vectors across trials, per channel per frequency bin.
+     - **Morlet ITPC**: compute per-trial phase at the three target frequencies (`_compute_morlet_target_phases`, 5-cycle wavelets) and derive per-channel ITPC (`_compute_per_channel_itpc_morlet`).
+     - **Null distributions** for both methods via trial-level random phase scrambling (`PermutationEngine.generate_null_distribution`, n=1000 by default) — adds an identical random phase offset per trial across all channels, preserving 1/f noise and spatial covariance while destroying stimulus-locking.
+   - **Phase 2 (per-focus aggregation):**
+     - **Optimal channel selection** (`_select_optimal_channels`) via spatial cluster permutation (`src/utils/signal_processing.select_optimal_channels`) on comprehension-frequency (avg of sentence + phrase) ITPC: vet clusters at α<0.05, exclude `Fp1`/`Fp2` (eye-artifact-prone), then take the top 3 electrodes by comprehension ITPC. Returns an empty list if no cluster survives.
+     - Four **focuses** are resolved (`_resolve_focuses`): `clinical` (all 19 available `CLINICAL_20` channels), `lh`/`rh` (fixed hemisphere channel sets), `optimal` (data-driven).
+     - For each focus, `_build_focus_row` averages the per-channel metrics over that focus's channels and computes permutation p-values by subsetting the per-channel null distributions — so the p-value for a channel subset is drawn from the correctly-scoped null, not recomputed from scratch.
 
-print(f"Total language trials: {len(lang_trials)}")
-# Output: Total language trials: 72
-```
+The result is one row per focus per patient/session, held in `self.results` (a `pandas.DataFrame`).
 
-#### Step 1.2: Load EDF and Extract Language Epochs
+### Derived summary metrics (`generate_summary()`)
 
-```python
-# Load EDF
-edf_path = 'EEG Project Data/EEG/edf/CON008_clipped.EDF'
-raw = mne.io.read_raw_edf(edf_path, preload=True)
-
-# Select channels (focus on language-relevant areas)
-picks = mne.pick_types(raw.info, eeg=True, exclude=['DC1', 'EOG'])
-
-# For each trial, extract the corresponding EEG segment
-sfreq = raw.info['sfreq']
-edf_start_time = raw.info['meas_date'].timestamp()
-
-epochs_list = []
-
-for idx, trial in lang_trials.iterrows():
-    # Calculate segment in EDF
-    trial_start = trial['start_time'] - edf_start_time
-    trial_end = trial['end_time'] - edf_start_time
-    
-    # Crop the raw data for this trial
-    trial_segment = raw.copy().crop(tmin=trial_start, tmax=trial_end)
-    
-    epochs_list.append(trial_segment)
-```
+From the per-focus rows, computes:
+- **Lateralization index** per band: `LI = (LH − RH) / (LH + RH)`, for word/phrase/sentence/comprehension. Positive = left-lateralized (expected in right-handed patients for language).
+- **`ratio_cognitive_acoustic`**: comprehension ITPC / word ITPC (clinical focus) — how much stronger the sentence/phrase-level tracking is relative to the acoustic word-rate response.
+- **`morlet_ratio`**: Morlet sentence ITPC / Morlet word ITPC (clinical focus).
 
 ---
 
-### Phase 2: Time-Frequency Analysis & ITPC
+## Outputs
 
-#### Step 2.1: Compute Time-Frequency Representation (TFR)
+Per session, `awakenai run --pipeline language --report` writes to
+`data/reports/{patient_id}/{session_id}/language_tracking/`:
 
-Use **Morlet wavelets** to decompose the EEG signal into time-frequency components:
+- **`features.csv`** — one row per focus (`clinical`/`lh`/`rh`/`optimal`), appended across runs. Columns include `itpc_word`, `itpc_phrase`, `itpc_sentence`, `itpc_comprehension` (DFT), `morlet_itpc_*` (Morlet), `dft_p_*`/`morlet_p_*` (permutation p-values), `ratio_sent_word`, `ratio_sent_phrase`, `ratio_bw_normalized` (bandwidth-normalized sentence/word density ratio), and the peak frequency found near each target (`freq_sentence_hz`, etc.).
+- **`features.npz`** — the full per-channel DFT spectrum (`dft_spectrum_full`, `dft_freqs`, `ch_names`) for re-plotting without recomputation.
+- **`report.html`** (when `--report` is passed) — built by `LanguageTrackingReport` / `src/viz/language_plots.py`, including:
+  - ITPC topomap + TFR with dynamic color scale (vlim = 1.2× the 95th percentile) and target-frequency overlay lines.
+  - Per-channel ITPC bar chart (sentence/phrase/word) with a `1/√N` chance-level reference line.
+  - Focus comparison bar chart (`clinical`/`lh`/`rh`/`optimal`) with p-value annotations.
+- A **combined patient report** (`data/reports/{patient_id}/combined/language_tracking/report.html`) is generated automatically when a patient has more than one session with results.
 
-```python
-from mne.time_frequency import tfr_morlet
+---
 
-# Define frequency range of interest
-# Focus on sentence-level frequency: 0.065 Hz (1 sentence / 15.5s)
-freqs = np.logspace(np.log10(0.05), np.log10(2), num=30)  # 0.05 - 2 Hz
-n_cycles = freqs / 2  # Number of cycles for each frequency
+## Quality Control & Validation
 
-# Compute TFR for each epoch
-tfr_list = []
-for epoch in epochs_list:
-    tfr = tfr_morlet(epoch, freqs=freqs, n_cycles=n_cycles, 
-                     use_fft=True, return_itc=False, picks=picks)
-    tfr_list.append(tfr)
+### Sanity checks
+- **Trial count:** expect ~72 language trials per session (dataset-dependent).
+- **Missing stimulus file:** `lang28.wav` is absent from the audio set — trials referencing it should be flagged upstream during stimulus manifest creation.
+- **Frequency resolution:** the DFT resolution (0.01 Hz) must resolve 0.78/1.56/3.125 Hz distinctly from neighboring bins.
+- **Lateralization:** for right-handed patients, expect left-hemisphere dominance (positive lateralization index).
+
+### Expected results (awake, healthy controls)
+- **ITPC at sentence frequency (~0.78 Hz):** 0.25–0.45 (moderate to strong coherence).
+- **ITPC at phrase frequency (~1.56 Hz):** some entrainment expected from 0.64s acoustic boundaries.
+- **ITPC at word frequency (~3.125 Hz):** weak to moderate.
+- **Topography:** peak ITPC typically at **T7** (left temporal) and **F7** (left frontal).
+
+### Red flags
+- **Uniform ITPC across frequencies** — suggests artifact or improper filtering.
+- **ITPC > 0.7** — unrealistically high; likely insufficient trial averaging or bad channels.
+- **Right-hemisphere dominance in a right-handed patient** — may indicate incorrect channel labeling.
+- **No significant difference from baseline** — poor synchronization or noisy data.
+
+---
+
+## Usage
+
+### CLI
+
+```bash
+awakenai setup CON008                                    # prerequisite: alignment + ICA epochs
+awakenai run CON008 --pipeline language --report          # single patient
+awakenai run CON008 CON009 --pipeline language --session 2025-08-14
+awakenai run --all --pipeline language                    # every patient with language trials
 ```
 
-#### Step 2.2: Calculate ITPC
+### Python API
 
 ```python
-# Extract phase information across trials
-phases = []
+from src.data_loading import UnifiedDataLoader
+from src.pipelines.language_tracking import LanguageTrackingAnalysis
 
-for tfr in tfr_list:
-    # Get complex time-frequency representation
-    tfr_complex = tfr.data  # Shape: (n_channels, n_freqs, n_times)
-    phase = np.angle(tfr_complex)  # Extract phase
-    phases.append(phase)
+loader = UnifiedDataLoader()
+pipeline = LanguageTrackingAnalysis(loader=loader)
 
-phases = np.array(phases)  # Shape: (n_trials, n_channels, n_freqs, n_times)
+results = pipeline.run("CON008")          # DataFrame: one row per focus
+summary = pipeline.generate_summary()     # lateralization indices, ratios
 
-# Compute ITPC: Average of unit vectors
-itpc = np.abs(np.mean(np.exp(1j * phases), axis=0))
-# Shape: (n_channels, n_freqs, n_times)
-
-print(f"ITPC shape: {itpc.shape}")
-```
-
-#### Step 2.3: Extract Sentence-Frequency ITPC
-
-```python
-# Find the frequency bin closest to sentence rate (~0.065 Hz)
-sentence_freq = 0.065  # Hz
-sentence_freq_idx = np.argmin(np.abs(freqs - sentence_freq))
-
-# Extract ITPC at this frequency
-itpc_sentence = itpc[:, sentence_freq_idx, :]  # Shape: (n_channels, n_times)
-
-# Average over time to get a single value per channel
-itpc_sentence_avg = np.mean(itpc_sentence, axis=1)  # Shape: (n_channels,)
+# Restrict to one session:
+pipeline_session = LanguageTrackingAnalysis(loader=loader, session_id="2025-08-14")
+results_session = pipeline_session.run("CON008", session_id="2025-08-14")
 ```
 
 ---
 
-### Phase 3: Statistical Thresholding & Significance
+## References
 
-#### Step 3.1: Trial-Level Random Phase Scrambling (Permutation Testing)
+### Foundational papers
 
-To determine if the ITPC is **significant**, we use a trial-level random phase scrambling permutation test (n=1000). By adding a random phase offset (uniform [0, 2π)) to each trial identically across all channels, we mathematically simulate circular-shifting the trials. This destroys stimulus-locked timing while preserving both the 1/f noise profile and the spatial covariance across electrodes.
+1. **Ding, N., & Simon, J. Z. (2012).** "Neural coding of continuous speech in auditory cortex during monaural and dichotic listening." *Journal of Neurophysiology*, 107(1), 78–89.
+2. **Luo, H., & Poeppel, D. (2007).** "Phase patterns of neuronal responses reliably discriminate speech in human auditory cortex." *Neuron*, 54(6), 1001–1010.
+3. **Zoefel, B., & VanRullen, R. (2015).** "The role of high-level processes for oscillatory phase entrainment to speech sound." *Frontiers in Human Neuroscience*, 9, 651.
 
-For a simple single-channel sanity check, a one-sample t-test against the theoretical chance level `1/sqrt(N)` can also be used:
+### Clinical applications
 
-```python
-from scipy.stats import ttest_1samp
-import numpy as np
+4. **Sokoliuk, R., et al. (2021).** "Covert speech comprehension predicts recovery from acute unresponsive states." *Annals of Neurology*, 89(4), 646–656. — Key methodological reference for this pipeline's DFT ITPC approach and epoch cropping.
+5. **Claassen, J., et al. (2019).** "Detection of brain activation in unresponsive patients with acute brain injury." *NEJM*, 380(26), 2497–2505.
 
-# Theoretical chance level: 1/sqrt(N_trials)
-chance_level = 1 / np.sqrt(len(epochs_list))
-t_stat, p_value = ttest_1samp(itpc_sentence_avg, chance_level)
+### Methodological guides
 
-print(f"T-statistic: {t_stat:.2f}, p-value: {p_value:.4f}")
-
-if p_value < 0.05:
-    print("Significant language tracking detected!")
-else:
-    print("No significant language tracking.")
-```
-
-#### Step 3.2: Spatial Cluster Permutation & Cluster-informed Peak Selection
-
-For channel selection, we use spatial cluster permutation on comprehension-frequency phase coherence (average of sentence and phrase rates). This identifies statistically significant neural regions where phase locking occurs.
-
-To maximize the Signal-to-Noise Ratio (SNR) and ensure a robust focus for sparse clinical arrays, we perform **Cluster-informed Peak Selection**:
-1.  **Vetting:** Identify all electrode clusters significant at α < 0.05.
-2.  **Artifact Shield:** Filter out clusters or electrodes purely associated with frontal pole eye artifacts (`Fp1`, `Fp2`).
-3.  **Peak Pick:** From the vetted neural areas, pick the **Top 3** electrodes with the highest comprehension-rate ITPC.
-
-If no clusters survive vetting, the **Optimal** focus is returned as empty. This data-driven approach ensures that the identified focus is both statistically sound and representative of the strongest neural tracking response.
-
----
-
-## 🔍 Optimization Strategies
-
-### Challenge: Sparse Electrode Array
-
-**Problem:** Prior studies (e.g., Ding & Simon, 2012) used **128-256 electrodes**. We have only **16-20**.
-
-**Our Optimization Approaches:**
-
-### Focus Channel Selection
-
-We evaluate four primary "Focus" channel sets:
-1. **Clinical:** Standard 10-20 system electrodes (20 channels).
-2. **LH (Left Hemisphere):** Channels over left-hemisphere language areas (F7, T7, P3, etc.).
-3. **RH (Right Hemisphere):** Channels over right-hemisphere areas.
-4. **Optimal:** Data-driven selection via spatial cluster permutation (identifies the most entrained cluster).
-
-#### Left-Hemisphere Focus (Code Example)
-
-```python
-# Define left-hemisphere language channels
-left_lang_channels = ['F7', 'T7', 'Fp1', 'F3', 'C3', 'P3']
-
-# Filter ITPC to these channels only
-left_lang_idx = [raw.ch_names.index(ch) for ch in left_lang_channels if ch in raw.ch_names]
-itpc_left = itpc_sentence_avg[left_lang_idx]
-
-# Average over left-hemisphere channels
-itpc_left_mean = np.mean(itpc_left)
-print(f"Left-hemisphere ITPC: {itpc_left_mean:.3f}")
-```
-
-#### Frequency Band Optimization
-
-Test multiple frequency bands to find the optimal window for sentence tracking:
-
-```python
-# Test different frequency ranges
-freq_bands = {
-    'sentence': (0.65, 0.90),   # Sentence-level (~0.78 Hz)
-    'phrase':   (1.40, 1.70),   # Phrase-level (~1.56 Hz)
-    'word':     (2.80, 3.40)    # Word-level (~3.125 Hz)
-}
-
-for band_name, (fmin, fmax) in freq_bands.items():
-    band_idx = (freqs >= fmin) & (freqs <= fmax)
-    itpc_band = np.mean(itpc[:, band_idx, :], axis=1)  # Average over freq band
-    itpc_band_avg = np.mean(itpc_band)
-    print(f"{band_name.capitalize()} ITPC: {itpc_band_avg:.3f}")
-```
-
-#### Artifact Rejection & Preprocessing
-
-Language trials are sensitive to high-frequency noise. Apply strict preprocessing:
-
-```python
-# Bandpass filter: 0.5 - 4 Hz (covers sentence, phrase, and word rates)
-raw_filtered = raw.copy().filter(l_freq=0.5, h_freq=4, method='iir')
-
-# Apply ICA to remove ocular artifacts
-from mne.preprocessing import ICA
-
-ica = ICA(n_components=15, random_state=42)
-ica.fit(raw_filtered, picks=picks)
-
-# Automatically detect eye blinks (if EOG channel available)
-ica.exclude = [0, 1]  # Typically components 0-1 are artifacts
-raw_clean = ica.apply(raw_filtered.copy())
-```
-
-#### Trial Averaging vs. Single-Trial Analysis
-
-Compare **grand average** (across all trials) vs. **single-trial** ITPC:
-
-```python
-# Grand Average: High statistical power, but may miss variability
-itpc_grand_avg = np.mean(itpc_sentence_avg)
-
-# Single-Trial: Lower SNR, but captures individual variability
-itpc_trials = [np.mean(tfr_list[i].data) for i in range(len(tfr_list))]
-
-print(f"Grand Average ITPC: {itpc_grand_avg:.3f}")
-print(f"Single-Trial ITPC (std): {np.std(itpc_trials):.3f}")
-```
-
-### Key Metrics
-
-- **ITPC (Sentence, Phrase, Word):** Absolute coherence at target frequencies.
-- **ITPC Comprehension:** Average of sentence and phrase ITPC.
-- **ratio_sent_phrase:** Ratio of sentence-rate to phrase-rate coherence.
-- **ratio_bw_normalized:** Bandwidth-normalized ratio (Sentence Density / Word Density).
-- **Lateralization Index:** (LH - RH) / (LH + RH) for each frequency band.
-
----
-
-## 📊 Expected Outputs
-
-### 1. ITPC Topographic Map & TFR
-
-**Visualization:** Heatmap showing ITPC values across all electrodes and a Time-Frequency Representation.
-- **Dynamic vlim:** TFR and Topomap color scales are dynamically adjusted based on the 95th percentile of the data (vlim_max = 1.2 * 95th_percentile).
-- **Target Overlays:** White dashed/dotted lines overlayed on TFR at 0.78 Hz (Sentence), 1.56 Hz (Phrase), and 3.125 Hz (Word).
-
-### 2. Per-Channel ITPC Bar Plot
-
-**Visualization:** Bar chart of per-channel ITPC at sentence, phrase, and word bands with a 1/sqrt(N) chance-level reference line.
-
-### 3. Feature Table (Long Format)
-
-| patient_id | n_trials | focus | itpc_word | itpc_phrase | itpc_sentence | itpc_comprehension | dft_p_sentence |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| CON004 | 68 | clinical | 0.24 | 0.21 | 0.20 | 0.20 | 0.002 |
-| CON004 | 68 | lh | 0.34 | 0.21 | 0.24 | 0.22 | 0.001 |
-| CON008 | 68 | clinical | 0.42 | 0.22 | 0.07 | 0.14 | 0.858 |
-| CON008 | 68 | lh | 0.40 | 0.18 | 0.07 | 0.13 | 0.786 |
-
----
-
-## ✅ Quality Control & Validation
-
-### Validation Checklist
-
-- [ ] **Trial Count:** Verify that all language trials are successfully loaded (72 expected).
-- [ ] **Missing Stimuli:** Flag trials that reference `lang28.wav` (missing file).
-- [ ] **Baseline ITPC:** Check that pre-stimulus ITPC is near 0 (no spurious coherence).
-- [ ] **Frequency Resolution:** Ensure that 0.065 Hz is within the analyzed frequency range.
-- [ ] **Lateralization:** For right-handed patients, expect left-hemisphere dominance.
-
-### Expected Results (Control Data)
-
-For **awake, healthy control subjects**:
-- **ITPC at Sentence Frequency (~0.78 Hz):** 0.25 - 0.45 (moderate to strong coherence).
-- **ITPC at Phrase Frequency (~1.56 Hz):** Expect some entrainment due to 0.64s acoustic boundaries.
-- **ITPC at Word Frequency (~3.125 Hz):** Weak to moderate tracking of individual words.
-- **Topography:** Peak ITPC at **T7** (left temporal) and **F7** (left frontal).
-
-### Red Flags (Indicates Pipeline Error)
-
-- **Uniform ITPC Across Frequencies:** Suggests artifact or improper filtering.
-- **ITPC > 0.7:** Unrealistically high; likely due to insufficient trial averaging or bad channels.
-- **Right-Hemisphere Dominance (Right-Handed Patient):** May indicate incorrect channel labeling.
-- **No Significant Difference from Baseline:** Could indicate poor synchronization or noisy data.
-
----
-
-## 🔧 Building on Tricia's Work
-
-### What Tricia Accomplished
-
-**Previous Student:** Tricia (now in industry) implemented an initial language tracking pipeline for this project.
-
-**Her Contributions:**
-1. **Proof-of-Concept:** Successfully detected language tracking in 2-3 control subjects.
-2. **Code Base:** Well-commented Python scripts using MNE.
-3. **Poster Submission:** Results submitted to Society for Neuroscience (Peter will provide).
-
-**Limitations Identified:**
-- **Inconsistent Results:** Signal detection varied significantly across sessions.
-- **Electrode Averaging:** Used **global averaging** (all electrodes), which dilutes the signal.
-- **Limited Optimization:** Did not explore frequency band tuning or electrode selection.
-
-### Our Objectives (Building on Tricia)
-
-1. **Reproduce Her Results:** Validate her pipeline on the same data.
-2. **Optimize Electrode Selection:** Test left-hemisphere-only vs. global averaging.
-3. **Frequency Tuning:** Systematically explore 0.05-0.1 Hz for optimal sentence tracking.
-4. **Scale to Full Dataset:** Apply to all 10 patients (not just 2-3).
-5. **Clinical Validation:** Correlate ITPC with patient outcomes (if outcome data available).
-
-### Accessing Tricia's Code
-
-**Location:** GitHub repository (Peter will provide access).
-
-**Key Files to Review:**
-- `language_tracking.py` - Main pipeline.
-- `itpc_analysis.ipynb` - Jupyter notebook with visualizations.
-- `README.md` - Documentation of her approach.
-
-**Action Item:** Review Tricia's code in **Week 1** (Jan 10-17) to understand baseline methodology.
-
----
-
-## 💻 Usage Examples
-
-### Example 1: Full Pipeline for One Patient
-
-```python
-from language_tracker import LanguageTrackingPipeline
-
-# Initialize pipeline
-pipeline = LanguageTrackingPipeline(
-    edf_path='EEG Project Data/EEG/edf/CON008_clipped.EDF',
-    csv_path='EEG Project Data/EEG/CON008_2025-08-14_stimulus_results.csv',
-    focus_channels=['F7', 'T7', 'P7', 'F3', 'C3', 'P3']  # Left hemisphere
-)
-
-# Run full pipeline
-pipeline.load_data()
-pipeline.segment_trials()
-pipeline.compute_itpc(freq_band=(0.05, 0.08))
-
-# Extract features
-features = pipeline.quantify_itpc()
-print(features)
-
-# Save outputs
-pipeline.save_topomap('outputs/CON008_language_topomap.png')
-pipeline.save_tfr_plot('outputs/CON008_language_tfr.png')
-pipeline.save_features('processed/features/CON008_language.csv')
-```
-
-### Example 2: Compare Left vs. Global Averaging
-
-```python
-# Test 1: Left-hemisphere only
-itpc_left = pipeline.compute_itpc(channels=['F7', 'T7', 'P7'])
-
-# Test 2: Global averaging (all channels)
-itpc_global = pipeline.compute_itpc(channels='all')
-
-# Compare
-print(f"Left-Hemisphere ITPC: {np.mean(itpc_left):.3f}")
-print(f"Global ITPC: {np.mean(itpc_global):.3f}")
-print(f"Improvement: {(np.mean(itpc_left) - np.mean(itpc_global)) / np.mean(itpc_global) * 100:.1f}%")
-```
-
-### Example 3: Batch Processing with Optimization Grid
-
-```python
-# Define hyperparameter grid
-freq_bands = [(0.05, 0.08), (0.06, 0.09), (0.04, 0.10)]
-channel_sets = [
-    ['F7', 'T7', 'P7'],           # Left temporal
-    ['F3', 'C3', 'P3'],           # Left central
-    ['all']                       # Global
-]
-
-results = []
-
-for freq_band in freq_bands:
-    for channels in channel_sets:
-        itpc_val = pipeline.compute_itpc(freq_band=freq_band, channels=channels)
-        results.append({
-            'freq_band': freq_band,
-            'channels': str(channels),
-            'itpc_mean': np.mean(itpc_val),
-            'itpc_max': np.max(itpc_val)
-        })
-
-# Find optimal configuration
-results_df = pd.DataFrame(results)
-best_config = results_df.loc[results_df['itpc_mean'].idxmax()]
-print("Optimal Configuration:")
-print(best_config)
-```
-
----
-
-## 📚 References
-
-### Foundational Papers
-
-1.  **Ding, N., & Simon, J. Z. (2012).** "Neural coding of continuous speech in auditory cortex during monaural and dichotic listening." *Journal of Neurophysiology*, 107(1), 78-89.
-    - Original paper demonstrating neural entrainment to speech structure.
-
-2.  **Luo, H., & Poeppel, D. (2007).** "Phase patterns of neuronal responses reliably discriminate speech in human auditory cortex." *Neuron*, 54(6), 1001-1010.
-    - Phase-locking mechanisms in speech perception.
-
-3.  **Zoefel, B., & VanRullen, R. (2015).** "The role of high-level processes for oscillatory phase entrainment to speech sound." *Frontiers in Human Neuroscience*, 9, 651.
-    - Hierarchical processing and sentence-level tracking.
-
-### Clinical Applications
-
-4.  **Sokoliuk, R., et al. (2021).** "Covert speech comprehension predicts recovery from acute unresponsive states." *Annals of Neurology*, 89(4), 646-656.
-    - **Key paper** showing language tracking as a prognostic marker in brain injury.
-
-5.  **Claassen, J., et al. (2019).** "Detection of brain activation in unresponsive patients with acute brain injury." *NEJM*, 380(26), 2497-2505.
-    - Context for using EEG-based cognitive assessments in ICU.
-
-### Methodological Guides
-
-6.  **Lachaux, J. P., et al. (1999).** "Measuring phase synchrony in brain signals." *Human Brain Mapping*, 8(4), 194-208.
-    - ITPC mathematical foundations.
-
-7.  **MNE Time-Frequency Tutorial:** https://mne.tools/stable/auto_tutorials/time-freq/index.html
-    - Practical guide to implementing TFR and ITPC in Python.
-
----
-
-## 🚀 Next Steps
-
-1.  **Week 3 (Jan 25-31):** Review Tricia's code, reproduce her results on 1-2 subjects.
-2.  **Week 4-5 (Feb 01-13):** Implement electrode selection and frequency optimization.
-3.  **Week 6-7 (Feb 14-28):** **MILESTONE CHECK:** Present optimized ITPC results with topomap and statistics.
-4.  **Week 8-9 (Mar 01-15):** Scale to full dataset, generate final feature tables and publication-quality plots.
-
----
-
-**Last Updated:** December 10, 2025  
-**Author:** AwakenAI Capstone Team  
-**Contact:** [Team Communication Channel]
+6. **Lachaux, J. P., et al. (1999).** "Measuring phase synchrony in brain signals." *Human Brain Mapping*, 8(4), 194–208.
+7. **MNE Time-Frequency Tutorial:** https://mne.tools/stable/auto_tutorials/time-freq/index.html

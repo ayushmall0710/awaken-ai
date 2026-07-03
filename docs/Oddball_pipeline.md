@@ -1,9 +1,14 @@
 # Event-Related Potential (ERP) Pipeline: Oddball Paradigm
 
 **Project:** EEG Prognostic Data Pipeline - AwakenAI Capstone  
-**Priority:** 1 (Critical Path)  
-**Timeline:** Jan 10 - Feb 13, 2026 (Milestone Deliverable)  
-**Lead:** Member C (Signal Processing)
+**Status:** Implemented — `src/pipelines/p300_oddball.py` (`P300OddballPipeline`), wired into the CLI as `awakenai run --pipeline oddball`.
+
+> Sections below describing manual EDF/CSV synchronization (Phase 1 of
+> "Technical Implementation") are historical design notes — the pipeline no
+> longer does this itself. It consumes epochs already aligned and
+> ICA-cleaned by the setup prerequisites (`awakenai setup`). See
+> [Technical Implementation](#-technical-implementation) and
+> [`docs/architecture.md`](architecture.md) for how it actually works today.
 
 ---
 
@@ -14,7 +19,7 @@
 4. [Technical Implementation](#technical-implementation)
 5. [Expected Outputs](#expected-outputs)
 6. [Quality Control & Validation](#quality-control--validation)
-7. [Usage Examples](#usage-examples)
+7. [Usage](#-usage)
 8. [References](#references)
 
 ---
@@ -86,20 +91,22 @@ In the dataset `CON008_2025-08-14_stimulus_results.csv`, we have **4 oddball tri
 
 ## 📂 Data Structures & Inputs
 
-### Input 1: CSV Stimulus Log
+### Input 1: CSV Stimulus Log (raw, pre-alignment)
 
 **Location:** `EEG Project Data/EEG/*_stimulus_results.csv`
 
 **Schema:**
 ```csv
 patient_id,date,trial_type,sentences,start_time,end_time,duration
-CON008,2025-08-14,oddball+p,"['standard','standard',...,'rare']",1755207543.24,1755207575.27,32.02
+CON008,2025-08-14,oddball,"['standard','standard',...,'rare']",1755207543.24,1755207575.27,32.02
 ```
 
 **Relevant Fields:**
-- `trial_type`: Must equal `"oddball+p"` to identify oddball trials.
-- `sentences`: Despite the column name, this contains the stimulus sequence as a list of strings (`'standard'` or `'rare'`).
+- `trial_type`: Normalized to `"oddball"` (see `src/data_processing/normalization.py`). `P300OddballPipeline.load()` matches any `trial_type` starting with `"oddball"`.
+- `sentences`: Despite the column name, this contains the stimulus sequence as a list of dicts with an `event` key (`"rare"`, `"standard"`/`"frequent"`) and an `event_start` Unix timestamp per beep.
 - `start_time` / `end_time`: Unix timestamps (seconds since epoch) marking the trial boundaries.
+
+This raw CSV is compiled into the unified Parquet by `awakenai unify-data` — the oddball pipeline itself never reads it directly.
 
 ### Input 2: EDF File (EEG Recording)
 
@@ -107,21 +114,23 @@ CON008,2025-08-14,oddball+p,"['standard','standard',...,'rare']",1755207543.24,1
 
 **Key Channels:**
 1. **EEG Channels:** 16-64 channels recording brain activity (e.g., `Fp1`, `Fp2`, `C3`, `C4`, `Pz`, etc.).
-2. **DC Audio Channel:** A dedicated channel recording the **audio waveform** played to the patient. This is critical for synchronization.
+2. **DC Audio Channel:** A dedicated channel recording the **audio waveform** played to the patient, used during alignment (see below).
 
 **Technical Details:**
 - **Sampling Rate:** Typically 250-2000 Hz.
 - **Format:** EDF/EDF+ (European Data Format) - standard for clinical neurophysiology.
 - **Software:** Use **MNE-Python** to load and parse EDF files.
 
-### Synchronization Strategy
+The oddball pipeline also never reads the EDF directly — it consumes the outputs described below.
 
-**Challenge:** The CSV log provides stimulus timing in Unix timestamps, but the EDF file uses its own internal clock (starting at 0 or the recording start time).
+### Actual pipeline inputs
 
-**Solution (Peter's Recommendation):**
-1. Use the **DC Audio Channel** in the EDF to identify the exact time of each beep.
-2. Cross-reference the audio waveform peaks with the `'rare'` labels in the CSV.
-3. Align the two time bases to achieve **sub-50ms precision**.
+`P300OddballPipeline` consumes the outputs of `awakenai setup <patient>`, not the raw CSV/EDF:
+
+1. **Aligned events** — `data/processed/aligned_events/{patient_id}_events.parquet`, produced by `TimestampAligner` (ENG-02). For oddball trials, alignment uses peak detection on the DC audio channel (cross-correlation is used for language/command trials instead) to achieve sub-50ms sync between the CSV's Unix timestamps and the EDF's internal clock.
+2. **Clean 35s oddball epochs** — `data/processed/epochs/{patient_id}/{session_id}/oddball-epo.fif`, produced by `ArtifactRejector` (ENG-03): one ICA-cleaned epoch per oddball trial block, with `start_time_unix`/`end_time_unix` metadata that the oddball pipeline uses to map individual rare/standard beep timestamps back into each 35s window (`_map_events_to_trials`).
+
+If these don't exist for a patient/session, `awakenai run` reports the pipeline as blocked and tells you to run `awakenai setup` first.
 
 ---
 
@@ -189,6 +198,12 @@ edf_times_unix = edf_times + edf_recording_start
 ---
 
 ### Phase 2: Epoching & ERP Construction
+
+*The window sizes, electrode choices, and P300 window below still match the
+real implementation (`ERP_CONFIG` in `src/pipelines/p300_oddball.py`); only
+the data source differs — the real pipeline slices these windows out of
+pre-aligned, ICA-cleaned 35s epochs (`_extract_subepochs`) rather than a raw
+`mne.Epochs` call against the full EDF.*
 
 #### Step 2.1: Identify Deviant Stimuli
 
@@ -308,21 +323,19 @@ Amplitude (µV)
        -200    0    200   400   600
 ```
 
-### 2. Feature Table
+### 2. Feature Tables (actual schema)
 
-| patient_id | trial | p300_amplitude_uV | p300_latency_ms | n_epochs |
-| :--- | :--- | :--- | :--- | :--- |
-| CON008 | 1 | 4.32 | 387 | 2 |
-| CON008 | 2 | 3.98 | 412 | 3 |
-| CON009 | 1 | 5.12 | 365 | 2 |
+`P300OddballPipeline` writes three Parquet tables per run, upserted by `(patient_id, session_id)` under `data/processed/features/`:
+
+- **`p300_oddball_clinical.parquet`** — one row per patient/session: composite P300 amplitude/latency (averaged across valid midline electrodes), per-electrode Pz/Cz/Fz amplitude+latency, difference-wave (rare − standard) amplitude/latency and MMN amplitude/latency at each electrode, `p300_subtype` (`P3a`/`P3b`/`mixed`/`absent`, based on which electrode peaks), `qc_pass`, and the Welch t-test significance (`p300_p_value`, `p300_t_stat`) comparing rare vs. standard single-trial means at Pz.
+- **`p300_oddball_electrode_detail.parquet`** — one row per electrode per session, with per-electrode validity flags and `flagged_reason` (`inverted`, `out_of_range`, `missing`, etc.).
+- **`p300_oddball_mapping_qc.parquet`** — event-mapping diagnostics: how many rare/standard beeps were successfully mapped into ENG-03 trial windows vs. unmapped/duplicate/boundary-clipped.
+
+Per-session outputs also include the averaged ERP (`.fif`), the standard-tone ERP, and the difference ERP under `data/processed/erps/`, plus ERP waveform, single-trial image, and (animated) topomap plots under `data/processed/plots/erp/`.
 
 ### 3. QC Dashboard
 
-**Metrics to Include:**
-- Number of deviant stimuli detected per trial.
-- Number of epochs rejected due to artifacts.
-- Signal-to-Noise Ratio (SNR) estimate.
-- Peak-to-peak amplitude consistency across trials.
+`awakenai qc` aggregates setup + pipeline QC metrics (including the oddball mapping/electrode-validity tables above) into a cross-patient HTML dashboard (`src/data_processing/qc_report.py`).
 
 ---
 
@@ -353,64 +366,34 @@ For **awake, healthy control subjects**, the P300 should be:
 
 ---
 
-## 💻 Usage Examples
+## 💻 Usage
 
-### Example 1: Full Pipeline for One Patient
+### CLI
 
-```python
-from erp_pipeline import OddballPipeline
-
-# Initialize pipeline
-pipeline = OddballPipeline(
-    edf_path='EEG Project Data/EEG/edf/CON008_clipped.EDF',
-    csv_path='EEG Project Data/EEG/CON008_2025-08-14_stimulus_results.csv',
-    audio_channel='DC1'
-)
-
-# Run full pipeline
-pipeline.load_data()
-pipeline.synchronize_timestamps()
-pipeline.extract_epochs()
-pipeline.compute_erp()
-
-# Extract P300 features
-features = pipeline.quantify_p300(electrode='Pz')
-print(features)
-
-# Save outputs
-pipeline.save_erp_plot('outputs/CON008_oddball_ERP.png')
-pipeline.save_features('processed/features/CON008_p300.csv')
+```bash
+awakenai setup CON008                                   # prerequisite: alignment + ICA epochs
+awakenai run CON008 --pipeline oddball --report          # single patient
+awakenai run CON008 --pipeline oddball --electrodes Pz,Cz  # custom electrode set
+awakenai run --all --pipeline oddball                     # every patient with oddball trials
 ```
 
-### Example 2: Batch Processing
+### Python API
 
 ```python
-import os
-import pandas as pd
+from src.data_loading import UnifiedDataLoader
+from src.pipelines.p300_oddball import P300OddballPipeline
 
-patients = ['CON008', 'CON009', 'CON010']
-all_features = []
+loader = UnifiedDataLoader()
+pipeline = P300OddballPipeline(loader=loader)
 
-for patient in patients:
-    edf_path = f'EEG Project Data/EEG/edf/{patient}_clipped.EDF'
-    csv_files = [f for f in os.listdir('EEG Project Data/EEG/') 
-                 if f.startswith(patient) and f.endswith('.csv')]
-    
-    for csv_file in csv_files:
-        csv_path = f'EEG Project Data/EEG/{csv_file}'
-        
-        try:
-            pipeline = OddballPipeline(edf_path, csv_path)
-            pipeline.run()
-            features = pipeline.quantify_p300()
-            all_features.append(features)
-        except Exception as e:
-            print(f"Error processing {patient}: {e}")
-
-# Compile all features
-feature_df = pd.concat(all_features, ignore_index=True)
-feature_df.to_csv('processed/features/all_p300_features.csv', index=False)
+features_df = pipeline.run("CON008")        # one row per session
+summary = pipeline.generate_summary()       # {"status": "P300+"/"P300-", "mean_amplitude_uV": ..., ...}
 ```
+
+`pipeline.run()` loads ENG-03 epochs and aligned events for every session with
+oddball trials (or a single session via `session=...`), extracts and
+maps rare/standard sub-epochs, computes ERPs and composite P300 features, and
+writes the feature tables and plots described above as a side effect.
 
 ---
 
@@ -445,14 +428,4 @@ feature_df.to_csv('processed/features/all_p300_features.csv', index=False)
 
 ---
 
-## 🚀 Next Steps
-
-1.  **Week 1-2 (Jan 10-24):** Implement synchronization logic and validate on CON008.
-2.  **Week 3-4 (Jan 25-Feb 08):** Scale to all patients, implement QC dashboard.
-3.  **Week 5 (Feb 09-13):** **MILESTONE DELIVERABLE** - Present Grand Average ERPs and feature table.
-
----
-
-**Last Updated:** December 10, 2025  
-**Author:** AwakenAI Capstone Team  
-**Contact:** [Team Communication Channel]
+**See also:** `docs/architecture.md` for the full pipeline/data-flow picture, `tasks/ENG-02b.md` for the original implementation writeup, and `src/pipelines/p300_oddball.py` for the current source of truth.
